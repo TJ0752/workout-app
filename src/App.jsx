@@ -1,7 +1,4 @@
-import { useState } from 'react';
-import { useEffect } from 'react';
-
-<h1>Workout Planner 🔥</h1>
+import { useRef, useState, useEffect } from 'react'; // Add useRef here too
 
 const say = (text) => {
   const utterance = new SpeechSynthesisUtterance(text);
@@ -18,6 +15,7 @@ const [currentIndex, setCurrentIndex] = useState(0);
 const [countdown, setCountdown] = useState(0);
 const [isResting, setIsResting] = useState(false);
 const [isRunning, setIsRunning] = useState(false);
+const spokenNextUpRef = useRef(false); // ✅ Declare outside useEffect
 
   const handleAddExercise = () => {
     const newStep = {
@@ -35,47 +33,57 @@ useEffect(() => {
   let timer;
 
   if (isRunning && countdown > 0) {
-  timer = setTimeout(() => {
-    const nextCountdown = countdown - 1;
+    timer = setTimeout(() => {
+      const nextCountdown = countdown - 1;
 
-    // 🔊 Say "Next up: ..." 10 seconds before next exercise (during rest)
-    if (isResting && nextCountdown === 10) {
-      const next = workoutPlan[currentIndex + 1];
-      if (next) say(`Next up: ${next.name}`);
-    }
+      // 🔊 Say "Next up: ..." 10 seconds before next exercise (during rest)
+      if (
+        isResting &&
+        countdown === 11 && // We use countdown (not nextCountdown) here
+        !spokenNextUpRef.current
+      ) {
+        const next = workoutPlan[currentIndex + 1];
+        if (next) {
+          say(`Next up: ${next.name}`);
+          spokenNextUpRef.current = true;
+        }
+      }
 
-    // 🔊 Countdown 3, 2, 1
-    if (nextCountdown <= 3 && nextCountdown > 0) {
-      say(nextCountdown.toString());
-    }
+      // 🔊 Countdown 3, 2, 1
+      if (nextCountdown <= 3 && nextCountdown > 0) {
+        say(nextCountdown.toString());
+      }
 
-    setCountdown(nextCountdown);
-  }, 1000);
-} else if (isRunning && countdown === 0) {
-  if (!isResting) {
-    setIsResting(true);
-    setCountdown(workoutPlan[currentIndex]?.rest || 0);
-  } else {
-    setIsResting(false);
-    const nextIndex = currentIndex + 1;
-    if (nextIndex < workoutPlan.length) {
-      setCurrentIndex(nextIndex);
-      setCountdown(workoutPlan[nextIndex].duration);
+      setCountdown(nextCountdown);
+    }, 1000);
+  } else if (isRunning && countdown === 0) {
+    if (!isResting) {
+      setIsResting(true);
+      setCountdown(workoutPlan[currentIndex]?.rest || 0);
     } else {
-      say("Workout complete! Great job!");
-      setIsRunning(false);
-      setCurrentIndex(0);
+      setIsResting(false);
+      spokenNextUpRef.current = false; // ✅ Reset when rest ends
+
+      const nextIndex = currentIndex + 1;
+      if (nextIndex < workoutPlan.length) {
+        setCurrentIndex(nextIndex);
+        setCountdown(workoutPlan[nextIndex].duration);
+      } else {
+        say("Workout complete! Great job!");
+        setIsRunning(false);
+        setCurrentIndex(0);
+      }
     }
   }
-}
 
   return () => clearTimeout(timer);
 }, [isRunning, countdown, isResting, currentIndex, workoutPlan]);
 
 
+
   return (
     <div style={{ padding: '20px', maxWidth: '500px', margin: '0 auto' }}>
-      <h1>Workout Planner</h1>
+      <h1>Workout Planner 🔥</h1>
       <input
         type="text"
         placeholder="Exercise name"
