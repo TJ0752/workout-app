@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useEffect } from 'react';
 
+<h1>Workout Planner 🔥</h1>
+
 const say = (text) => {
   const utterance = new SpeechSynthesisUtterance(text);
   window.speechSynthesis.speak(utterance);
