@@ -2,6 +2,10 @@ import { useRef, useState, useEffect } from 'react'; // Add useRef here too
 
 const say = (text) => {
   const utterance = new SpeechSynthesisUtterance(text);
+  utterance.onend = () => {
+    console.log("Speech finished");
+    // You can put other actions here if needed
+  };
   window.speechSynthesis.speak(utterance);
 };
 
@@ -37,17 +41,19 @@ useEffect(() => {
       const nextCountdown = countdown - 1;
 
       // 🔊 Say "Next up: ..." 10 seconds before next exercise (during rest)
-      if (
-        isResting &&
-        countdown === 11 && // We use countdown (not nextCountdown) here
-        !spokenNextUpRef.current
-      ) {
-        const next = workoutPlan[currentIndex + 1];
-        if (next) {
-          say(`Next up: ${next.name}`);
-          spokenNextUpRef.current = true;
-        }
-      }
+     if (
+  isResting &&
+  countdown <= 11 &&
+  countdown > 10 &&
+  !spokenNextUpRef.current
+) {
+  const next = workoutPlan[currentIndex + 1];
+  if (next) {
+    say(`Next up: ${next.name}`);
+    spokenNextUpRef.current = true;
+  }
+}
+
 
       // 🔊 Countdown 3, 2, 1
       if (nextCountdown <= 3 && nextCountdown > 0) {
@@ -69,10 +75,11 @@ useEffect(() => {
         setCurrentIndex(nextIndex);
         setCountdown(workoutPlan[nextIndex].duration);
       } else {
-        say("Workout complete! Great job!");
-        setIsRunning(false);
-        setCurrentIndex(0);
-      }
+  say("Workout complete! Great job!");
+  setIsRunning(false);
+  setCurrentIndex(0);
+  setCountdown(0); // You could keep a 5-second cooldown if you like
+}
     }
   }
 
