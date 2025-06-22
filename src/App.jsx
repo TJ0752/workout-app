@@ -1,11 +1,7 @@
-import { useRef, useState, useEffect } from 'react'; // Add useRef here too
+import { useRef, useState, useEffect } from 'react';
 
 const say = (text) => {
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.onend = () => {
-    console.log("Speech finished");
-    // You can put other actions here if needed
-  };
   window.speechSynthesis.speak(utterance);
 };
 
@@ -15,11 +11,11 @@ function App() {
   const [rest, setRest] = useState('');
   const [workoutPlan, setWorkoutPlan] = useState([]);
 
-const [currentIndex, setCurrentIndex] = useState(0);
-const [countdown, setCountdown] = useState(0);
-const [isResting, setIsResting] = useState(false);
-const [isRunning, setIsRunning] = useState(false);
-const spokenNextUpRef = useRef(false); // ✅ Declare outside useEffect
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [countdown, setCountdown] = useState(0);
+  const [isResting, setIsResting] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
+  const spokenNextUpRef = useRef(false); // To prevent repeated speech in 1 cycle
 
   const handleAddExercise = () => {
     const newStep = {
@@ -38,35 +34,44 @@ useEffect(() => {
 
   if (isRunning && countdown > 0) {
     timer = setTimeout(() => {
-      setCountdown(countdown - 1);
+      setCountdown((prev) => prev - 1);
     }, 1000);
-  } else if (isRunning && countdown === 0) {
+
+    // 🟡 Start speaking announcement early enough (e.g., 7s left)
+    if (countdown === 7 && !spokenNextUpRef.current) {
+      spokenNextUpRef.current = true;
+
+      const nextIndex = isResting ? currentIndex + 1 : currentIndex;
+      const isNextRest = !isResting;
+      const nextItem = workoutPlan[nextIndex];
+
+      const phrase = isNextRest
+        ? `Rest for ${workoutPlan[currentIndex]?.rest} seconds`
+        : `Exercise: ${nextItem?.name} for ${nextItem?.duration} seconds`;
+
+      say(phrase);
+    }
+
+    // 🔊 Voice countdown synced with timer at 3s, 2s, 1s
+    if ([3, 2, 1].includes(countdown)) {
+      say(countdown.toString());
+    }
+  }
+
+  else if (isRunning && countdown === 0) {
     const nextIndex = currentIndex + 1;
 
     if (!isResting) {
-      // 🔊 Announce upcoming rest phase
-      const restTime = workoutPlan[currentIndex]?.rest || 0;
-      if (restTime > 0) {
-        say(`Rest for ${restTime} seconds`);
-        setTimeout(() => say("3"), 1000);
-        setTimeout(() => say("2"), 2000);
-        setTimeout(() => say("1"), 3000);
-      }
-
       setIsResting(true);
-      setCountdown(restTime);
+      spokenNextUpRef.current = false;
+      setCountdown(workoutPlan[currentIndex]?.rest || 0);
     } else {
-      // 🔊 Announce next exercise phase
-      if (nextIndex < workoutPlan.length) {
-        const next = workoutPlan[nextIndex];
-        say(`Exercise for ${next.duration} seconds`);
-        setTimeout(() => say("3"), 1000);
-        setTimeout(() => say("2"), 2000);
-        setTimeout(() => say("1"), 3000);
+      setIsResting(false);
+      spokenNextUpRef.current = false;
 
-        setIsResting(false);
+      if (nextIndex < workoutPlan.length) {
         setCurrentIndex(nextIndex);
-        setCountdown(next.duration);
+        setCountdown(workoutPlan[nextIndex].duration);
       } else {
         say("Workout complete! Great job!");
         setIsRunning(false);
@@ -77,40 +82,6 @@ useEffect(() => {
 
   return () => clearTimeout(timer);
 }, [isRunning, countdown, isResting, currentIndex, workoutPlan]);
-
-
-
-      // 🔊 Countdown 3, 2, 1
-      if (nextCountdown <= 3 && nextCountdown > 0) {
-        say(nextCountdown.toString());
-      }
-
-      setCountdown(nextCountdown);
-    }, 1000);
-  } else if (isRunning && countdown === 0) {
-    if (!isResting) {
-      setIsResting(true);
-      setCountdown(workoutPlan[currentIndex]?.rest || 0);
-    } else {
-      setIsResting(false);
-      spokenNextUpRef.current = false; // ✅ Reset when rest ends
-
-      const nextIndex = currentIndex + 1;
-      if (nextIndex < workoutPlan.length) {
-        setCurrentIndex(nextIndex);
-        setCountdown(workoutPlan[nextIndex].duration);
-      } else {
-  say("Workout complete! Great job!");
-  setIsRunning(false);
-  setCurrentIndex(0);
-  setCountdown(0); // You could keep a 5-second cooldown if you like
-}
-    }
-  }
-
-  return () => clearTimeout(timer);
-}, [isRunning, countdown, isResting, currentIndex, workoutPlan]);
-
 
 
   return (
@@ -144,28 +115,28 @@ useEffect(() => {
           </li>
         ))}
       </ul>
-{workoutPlan.length > 0 && !isRunning && (
-  <button
-    onClick={() => {
-      say(`Starting workout. First exercise: ${workoutPlan[0].name} for ${workoutPlan[0].duration} seconds`);
-      setIsRunning(true);
-      setCurrentIndex(0);
-      setIsResting(false);
-      setCountdown(workoutPlan[0].duration);
-    }}
-  >
-    Start Workout
-  </button>
-)}
 
-{isRunning && (
-  <div style={{ marginTop: '20px' }}>
-    <h2>{isResting ? 'Rest' : 'Exercise'} Time</h2>
-    <h3>{workoutPlan[currentIndex]?.name || ''}</h3>
-    <h1>{countdown}s</h1>
-  </div>
-)}
+      {workoutPlan.length > 0 && !isRunning && (
+        <button
+          onClick={() => {
+            say(`Starting workout. First exercise: ${workoutPlan[0].name} for ${workoutPlan[0].duration} seconds`);
+            setIsRunning(true);
+            setCurrentIndex(0);
+            setIsResting(false);
+            setCountdown(workoutPlan[0].duration);
+          }}
+        >
+          Start Workout
+        </button>
+      )}
 
+      {isRunning && (
+        <div style={{ marginTop: '20px' }}>
+          <h2>{isResting ? 'Rest' : 'Exercise'} Time</h2>
+          <h3>{workoutPlan[currentIndex]?.name || ''}</h3>
+          <h1>{countdown}s</h1>
+        </div>
+      )}
     </div>
   );
 }
