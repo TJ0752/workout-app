@@ -38,21 +38,46 @@ useEffect(() => {
 
   if (isRunning && countdown > 0) {
     timer = setTimeout(() => {
-      const nextCountdown = countdown - 1;
+      setCountdown(countdown - 1);
+    }, 1000);
+  } else if (isRunning && countdown === 0) {
+    const nextIndex = currentIndex + 1;
 
-      // 🔊 Say "Next up: ..." 10 seconds before next exercise (during rest)
-     if (
-  isResting &&
-  countdown <= 11 &&
-  countdown > 10 &&
-  !spokenNextUpRef.current
-) {
-  const next = workoutPlan[currentIndex + 1];
-  if (next) {
-    say(`Next up: ${next.name}`);
-    spokenNextUpRef.current = true;
+    if (!isResting) {
+      // 🔊 Announce upcoming rest phase
+      const restTime = workoutPlan[currentIndex]?.rest || 0;
+      if (restTime > 0) {
+        say(`Rest for ${restTime} seconds`);
+        setTimeout(() => say("3"), 1000);
+        setTimeout(() => say("2"), 2000);
+        setTimeout(() => say("1"), 3000);
+      }
+
+      setIsResting(true);
+      setCountdown(restTime);
+    } else {
+      // 🔊 Announce next exercise phase
+      if (nextIndex < workoutPlan.length) {
+        const next = workoutPlan[nextIndex];
+        say(`Exercise for ${next.duration} seconds`);
+        setTimeout(() => say("3"), 1000);
+        setTimeout(() => say("2"), 2000);
+        setTimeout(() => say("1"), 3000);
+
+        setIsResting(false);
+        setCurrentIndex(nextIndex);
+        setCountdown(next.duration);
+      } else {
+        say("Workout complete! Great job!");
+        setIsRunning(false);
+        setCurrentIndex(0);
+      }
+    }
   }
-}
+
+  return () => clearTimeout(timer);
+}, [isRunning, countdown, isResting, currentIndex, workoutPlan]);
+
 
 
       // 🔊 Countdown 3, 2, 1
