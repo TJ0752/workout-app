@@ -14,6 +14,7 @@ function rowToRoutine(row) {
     notes: row.notes || '',
     active: Boolean(row.active),
     createdAt: row.created_at,
+    icon: row.icon || null,
   };
 }
 
@@ -29,9 +30,18 @@ async function migrateFromPreferencesOnce(db) {
   if (legacyRoutinesRaw) {
     for (const r of JSON.parse(legacyRoutinesRaw)) {
       await db.run(
-        `INSERT OR REPLACE INTO routines (id, title, time, days, notes, active, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [r.id, r.title, r.time, JSON.stringify(r.days), r.notes || '', r.active ? 1 : 0, r.createdAt]
+        `INSERT OR REPLACE INTO routines (id, title, time, days, notes, active, created_at, icon)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          r.id,
+          r.title,
+          r.time,
+          JSON.stringify(r.days),
+          r.notes || '',
+          r.active ? 1 : 0,
+          r.createdAt,
+          r.icon || null,
+        ]
       );
     }
   }
@@ -72,14 +82,15 @@ export async function getRoutines() {
 export async function upsertRoutine(routine) {
   const db = await ready();
   await db.run(
-    `INSERT INTO routines (id, title, time, days, notes, active, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO routines (id, title, time, days, notes, active, created_at, icon)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        title = excluded.title,
        time = excluded.time,
        days = excluded.days,
        notes = excluded.notes,
-       active = excluded.active`,
+       active = excluded.active,
+       icon = excluded.icon`,
     [
       routine.id,
       routine.title,
@@ -88,6 +99,7 @@ export async function upsertRoutine(routine) {
       routine.notes || '',
       routine.active ? 1 : 0,
       routine.createdAt,
+      routine.icon || null,
     ]
   );
   await persist();

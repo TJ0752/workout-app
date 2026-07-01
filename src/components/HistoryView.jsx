@@ -1,4 +1,6 @@
+import { Flame } from 'lucide-react';
 import { calcStreak, calcCompletionRate, dateToKey, isDueOn, lastNDates, todayKey } from '../utils/date';
+import { getRoutineIcon } from '../utils/icons';
 
 const HISTORY_DAYS = 14;
 
@@ -15,12 +17,18 @@ export default function HistoryView({ routines, completions }) {
         const done = completions[routine.id] || {};
         const streak = calcStreak(routine, completions);
         const rate = calcCompletionRate(routine, completions);
+        const RoutineIcon = getRoutineIcon(routine);
         return (
           <div key={routine.id} className="history-card">
             <div className="history-header">
-              <strong>{routine.title}</strong>
+              <div className="history-header-title">
+                <span className="icon-badge">
+                  <RoutineIcon size={16} />
+                </span>
+                <strong>{routine.title}</strong>
+              </div>
               <span>
-                🔥 {streak} day streak · {rate}% (30d)
+                <Flame size={12} /> {streak}d · {rate}% (30d)
               </span>
             </div>
             <div className="history-grid">

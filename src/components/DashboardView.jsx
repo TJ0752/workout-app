@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
+import { Flame } from 'lucide-react';
 import { getDashboardStats } from '../utils/analytics';
+import { getRoutineIcon } from '../utils/icons';
 
 const RANGES = [
   { id: 'week', label: 'Week' },
@@ -45,7 +47,7 @@ export default function DashboardView({ routines, completions }) {
           <span className="stat-label">COMPLETION RATE</span>
         </div>
         <div className="stat-card">
-          <span className="stat-value">{stats.bestStreak}🔥</span>
+          <span className="stat-value">{stats.bestStreak}</span>
           <span className="stat-label">BEST STREAK</span>
         </div>
         <div className="stat-card">
@@ -95,20 +97,28 @@ export default function DashboardView({ routines, completions }) {
       <div className="section-title">Completion by routine</div>
       {stats.perRoutine.length === 0 && <p className="empty-state">No routines were due in this range yet.</p>}
       <div className="breakdown-list">
-        {stats.perRoutine.map((r) => (
-          <div className="breakdown-row" key={r.routine.id}>
-            <div className="breakdown-top">
-              <span className="breakdown-name">{r.routine.title}</span>
-              <span className="breakdown-pct">{r.pct}%</span>
+        {stats.perRoutine.map((r) => {
+          const RoutineIcon = getRoutineIcon(r.routine);
+          return (
+            <div className="breakdown-row" key={r.routine.id}>
+              <span className="icon-badge">
+                <RoutineIcon size={18} />
+              </span>
+              <div className="breakdown-body">
+                <div className="breakdown-top">
+                  <span className="breakdown-name">{r.routine.title}</span>
+                  <span className="breakdown-pct">{r.pct}%</span>
+                </div>
+                <div className="breakdown-bar-track">
+                  <div className={`breakdown-bar-fill ${barClass(r.pct)}`} style={{ width: `${r.pct}%` }} />
+                </div>
+                <div className="breakdown-meta">
+                  <Flame size={12} /> {r.streak} day streak · {r.completed}/{r.due} days
+                </div>
+              </div>
             </div>
-            <div className="breakdown-bar-track">
-              <div className={`breakdown-bar-fill ${barClass(r.pct)}`} style={{ width: `${r.pct}%` }} />
-            </div>
-            <div className="breakdown-meta">
-              {r.streak} day streak · {r.completed}/{r.due} days
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {stats.dayOfWeek && (
@@ -117,15 +127,17 @@ export default function DashboardView({ routines, completions }) {
           <div className="breakdown-list">
             {stats.dayOfWeek.map((d) => (
               <div className="breakdown-row" key={d.label}>
-                <div className="breakdown-top">
-                  <span className="breakdown-name">{d.label}</span>
-                  <span className="breakdown-pct">{d.pct === null ? '—' : `${d.pct}%`}</span>
-                </div>
-                <div className="breakdown-bar-track">
-                  <div
-                    className={`breakdown-bar-fill ${barClass(d.pct)}`}
-                    style={{ width: `${d.pct ?? 0}%` }}
-                  />
+                <div className="breakdown-body">
+                  <div className="breakdown-top">
+                    <span className="breakdown-name">{d.label}</span>
+                    <span className="breakdown-pct">{d.pct === null ? '—' : `${d.pct}%`}</span>
+                  </div>
+                  <div className="breakdown-bar-track">
+                    <div
+                      className={`breakdown-bar-fill ${barClass(d.pct)}`}
+                      style={{ width: `${d.pct ?? 0}%` }}
+                    />
+                  </div>
                 </div>
               </div>
             ))}

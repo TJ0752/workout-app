@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 
 const DB_NAME = 'routines';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 const sqlite = new SQLiteConnection(CapacitorSQLite);
 let dbInstance = null;
@@ -27,6 +27,10 @@ const MIGRATIONS = [
         PRIMARY KEY (routine_id, date)
       );`,
     ],
+  },
+  {
+    toVersion: 2,
+    statements: [`ALTER TABLE routines ADD COLUMN icon TEXT;`],
   },
 ];
 

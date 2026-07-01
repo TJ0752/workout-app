@@ -1,4 +1,6 @@
+import { Check } from 'lucide-react';
 import { isDueToday, todayKey } from '../utils/date';
+import { getRoutineIcon } from '../utils/icons';
 
 export default function TodayView({ routines, completions, onToggleComplete }) {
   const key = todayKey();
@@ -19,6 +21,7 @@ export default function TodayView({ routines, completions, onToggleComplete }) {
       <ul className="today-list">
         {dueToday.map((routine) => {
           const done = Boolean(completions[routine.id]?.[key]);
+          const RoutineIcon = getRoutineIcon(routine);
           return (
             <li key={routine.id} className={`today-item ${done ? 'done' : ''}`}>
               <label>
@@ -27,8 +30,14 @@ export default function TodayView({ routines, completions, onToggleComplete }) {
                   checked={done}
                   onChange={() => onToggleComplete(routine, !done)}
                 />
+                <span className="icon-badge">
+                  <RoutineIcon size={18} />
+                </span>
                 <span className="today-item-title">{routine.title}</span>
                 <span className="today-item-time">{routine.time}</span>
+                <span className={`check-circle ${done ? 'done' : ''}`}>
+                  {done && <Check size={15} />}
+                </span>
               </label>
             </li>
           );

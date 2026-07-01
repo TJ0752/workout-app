@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { DAY_LABELS } from '../utils/date';
+import { ICON_OPTIONS, suggestIconId } from '../utils/icons';
 
-const emptyForm = { title: '', time: '08:00', days: [1, 2, 3, 4, 5], notes: '' };
+const emptyForm = { title: '', time: '08:00', days: [1, 2, 3, 4, 5], notes: '', icon: null };
 
 export default function RoutineForm({ initial, onSave, onCancel }) {
   const [form, setForm] = useState(initial ? { ...initial } : emptyForm);
@@ -24,8 +25,11 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
       notes: form.notes.trim(),
       active: initial?.active ?? true,
       createdAt: initial?.createdAt ?? new Date().toISOString(),
+      icon: form.icon,
     });
   };
+
+  const autoIconId = suggestIconId(form.title);
 
   return (
     <form className="routine-form" onSubmit={handleSubmit}>
@@ -61,6 +65,34 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
               onClick={() => toggleDay(idx)}
             >
               {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="icon-picker">
+        <span className="field-label">Icon</span>
+        <div className="icon-buttons">
+          <button
+            type="button"
+            className={`icon-chip ${!form.icon ? 'selected' : ''}`}
+            onClick={() => setForm((f) => ({ ...f, icon: null }))}
+            title="Auto"
+          >
+            {(() => {
+              const AutoIcon = ICON_OPTIONS.find((o) => o.id === autoIconId)?.Icon;
+              return AutoIcon ? <AutoIcon size={18} /> : null;
+            })()}
+          </button>
+          {ICON_OPTIONS.map((option) => (
+            <button
+              type="button"
+              key={option.id}
+              className={`icon-chip ${form.icon === option.id ? 'selected' : ''}`}
+              onClick={() => setForm((f) => ({ ...f, icon: option.id }))}
+              title={option.label}
+            >
+              <option.Icon size={18} />
             </button>
           ))}
         </div>

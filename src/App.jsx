@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Sun, ListTodo, BarChart3, Calendar } from 'lucide-react';
 import './App.css';
 import TodayView from './components/TodayView';
 import RoutinesView from './components/RoutinesView';
@@ -9,10 +10,10 @@ import { initNotifications, scheduleRoutineNotifications, cancelRoutineNotificat
 import { todayKey } from './utils/date';
 
 const TABS = [
-  { id: 'today', label: 'Today' },
-  { id: 'routines', label: 'Routines' },
-  { id: 'dashboard', label: 'Dashboard' },
-  { id: 'history', label: 'History' },
+  { id: 'today', label: 'Today', Icon: Sun },
+  { id: 'routines', label: 'Routines', Icon: ListTodo },
+  { id: 'dashboard', label: 'Dashboard', Icon: BarChart3 },
+  { id: 'history', label: 'History', Icon: Calendar },
 ];
 
 function App() {
@@ -97,7 +98,8 @@ function App() {
             className={tab === t.id ? 'active' : ''}
             onClick={() => setTab(t.id)}
           >
-            {t.label}
+            <t.Icon size={20} />
+            <span>{t.label}</span>
           </button>
         ))}
       </nav>
