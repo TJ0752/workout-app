@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import './App.css';
 import TodayView from './components/TodayView';
 import RoutinesView from './components/RoutinesView';
+import DashboardView from './components/DashboardView';
 import HistoryView from './components/HistoryView';
 import { getRoutines, upsertRoutine, deleteRoutine as deleteRoutineFromStore, getCompletions, setCompletion } from './storage';
 import { initNotifications, scheduleRoutineNotifications, cancelRoutineNotifications, syncAllNotifications } from './notifications';
@@ -10,6 +11,7 @@ import { todayKey } from './utils/date';
 const TABS = [
   { id: 'today', label: 'Today' },
   { id: 'routines', label: 'Routines' },
+  { id: 'dashboard', label: 'Dashboard' },
   { id: 'history', label: 'History' },
 ];
 
@@ -84,6 +86,7 @@ function App() {
             onToggleActive={handleToggleActive}
           />
         )}
+        {tab === 'dashboard' && <DashboardView routines={routines} completions={completions} />}
         {tab === 'history' && <HistoryView routines={routines} completions={completions} />}
       </main>
 

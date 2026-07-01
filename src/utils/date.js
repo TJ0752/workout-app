@@ -16,7 +16,11 @@ export function todayWeekday() {
 }
 
 export function isDueOn(routine, date) {
-  return routine.active && routine.days.includes(date.getDay());
+  if (!routine.active || !routine.days.includes(date.getDay())) return false;
+  const created = new Date(routine.createdAt);
+  const createdDay = new Date(created.getFullYear(), created.getMonth(), created.getDate());
+  const checkDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  return checkDay >= createdDay;
 }
 
 export function isDueToday(routine) {
