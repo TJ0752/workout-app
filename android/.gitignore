@@ -52,9 +52,12 @@ captures/
 # Comment next line if keeping position of elements in Navigation Editor is relevant for you
 .idea/navEditor.xml
 
-# Keystore files
+# Keystore files (debug.keystore is intentionally committed for reproducible
+# CI signing so app updates install in place instead of requiring a
+# fresh uninstall; never commit a *release* keystore)
 *.jks
 *.keystore
+!debug.keystore
 
 # External native build folder generated in Android Studio 2.2 and later
 .externalNativeBuild

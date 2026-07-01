@@ -1,63 +1,128 @@
 import { Preferences } from '@capacitor/preferences';
+import { getDb, persist } from './db';
 
-const ROUTINES_KEY = 'routines';
-const COMPLETIONS_KEY = 'completions';
+const LEGACY_ROUTINES_KEY = 'routines';
+const LEGACY_COMPLETIONS_KEY = 'completions';
+const MIGRATION_MARKER_KEY = 'sqlite_migrated';
 
-async function readJson(key, fallback) {
-  const { value } = await Preferences.get({ key });
-  if (!value) return fallback;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return fallback;
-  }
+function rowToRoutine(row) {
+  return {
+    id: row.id,
+    title: row.title,
+    time: row.time,
+    days: JSON.parse(row.days),
+    notes: row.notes || '',
+    active: Boolean(row.active),
+    createdAt: row.created_at,
+  };
 }
 
-async function writeJson(key, value) {
-  await Preferences.set({ key, value: JSON.stringify(value) });
+async function migrateFromPreferencesOnce(db) {
+  const { value: marker } = await Preferences.get({ key: MIGRATION_MARKER_KEY });
+  if (marker) return;
+
+  const [{ value: legacyRoutinesRaw }, { value: legacyCompletionsRaw }] = await Promise.all([
+    Preferences.get({ key: LEGACY_ROUTINES_KEY }),
+    Preferences.get({ key: LEGACY_COMPLETIONS_KEY }),
+  ]);
+
+  if (legacyRoutinesRaw) {
+    for (const r of JSON.parse(legacyRoutinesRaw)) {
+      await db.run(
+        `INSERT OR REPLACE INTO routines (id, title, time, days, notes, active, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [r.id, r.title, r.time, JSON.stringify(r.days), r.notes || '', r.active ? 1 : 0, r.createdAt]
+      );
+    }
+  }
+
+  if (legacyCompletionsRaw) {
+    const legacyCompletions = JSON.parse(legacyCompletionsRaw);
+    for (const routineId of Object.keys(legacyCompletions)) {
+      for (const date of Object.keys(legacyCompletions[routineId])) {
+        await db.run('INSERT OR REPLACE INTO completions (routine_id, date) VALUES (?, ?)', [
+          routineId,
+          date,
+        ]);
+      }
+    }
+  }
+
+  await persist();
+  await Preferences.set({ key: MIGRATION_MARKER_KEY, value: 'true' });
+}
+
+let readyPromise = null;
+async function ready() {
+  if (!readyPromise) {
+    readyPromise = getDb().then(async (db) => {
+      await migrateFromPreferencesOnce(db);
+      return db;
+    });
+  }
+  return readyPromise;
 }
 
 export async function getRoutines() {
-  return readJson(ROUTINES_KEY, []);
-}
-
-export async function saveRoutines(routines) {
-  await writeJson(ROUTINES_KEY, routines);
-  return routines;
+  const db = await ready();
+  const result = await db.query('SELECT * FROM routines ORDER BY created_at ASC');
+  return (result.values || []).map(rowToRoutine);
 }
 
 export async function upsertRoutine(routine) {
-  const routines = await getRoutines();
-  const index = routines.findIndex((r) => r.id === routine.id);
-  if (index === -1) {
-    routines.push(routine);
-  } else {
-    routines[index] = routine;
-  }
-  await saveRoutines(routines);
-  return routines;
+  const db = await ready();
+  await db.run(
+    `INSERT INTO routines (id, title, time, days, notes, active, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       title = excluded.title,
+       time = excluded.time,
+       days = excluded.days,
+       notes = excluded.notes,
+       active = excluded.active`,
+    [
+      routine.id,
+      routine.title,
+      routine.time,
+      JSON.stringify(routine.days),
+      routine.notes || '',
+      routine.active ? 1 : 0,
+      routine.createdAt,
+    ]
+  );
+  await persist();
+  return getRoutines();
 }
 
 export async function deleteRoutine(id) {
-  const routines = await getRoutines();
-  const next = routines.filter((r) => r.id !== id);
-  await saveRoutines(next);
-  return next;
+  const db = await ready();
+  await db.run('DELETE FROM routines WHERE id = ?', [id]);
+  await db.run('DELETE FROM completions WHERE routine_id = ?', [id]);
+  await persist();
+  return getRoutines();
 }
 
 export async function getCompletions() {
-  return readJson(COMPLETIONS_KEY, {});
+  const db = await ready();
+  const result = await db.query('SELECT routine_id, date FROM completions');
+  const completions = {};
+  for (const row of result.values || []) {
+    if (!completions[row.routine_id]) completions[row.routine_id] = {};
+    completions[row.routine_id][row.date] = true;
+  }
+  return completions;
 }
 
 export async function setCompletion(routineId, dateKey, done) {
-  const completions = await getCompletions();
-  const routineDone = { ...(completions[routineId] || {}) };
+  const db = await ready();
   if (done) {
-    routineDone[dateKey] = true;
+    await db.run('INSERT OR REPLACE INTO completions (routine_id, date) VALUES (?, ?)', [
+      routineId,
+      dateKey,
+    ]);
   } else {
-    delete routineDone[dateKey];
+    await db.run('DELETE FROM completions WHERE routine_id = ? AND date = ?', [routineId, dateKey]);
   }
-  const next = { ...completions, [routineId]: routineDone };
-  await writeJson(COMPLETIONS_KEY, next);
-  return next;
+  await persist();
+  return getCompletions();
 }
