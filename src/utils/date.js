@@ -15,16 +15,8 @@ export function todayWeekday() {
   return new Date().getDay();
 }
 
-export function isDueOn(routine, date) {
-  if (!routine.active || !routine.days.includes(date.getDay())) return false;
-  const created = new Date(routine.createdAt);
-  const createdDay = new Date(created.getFullYear(), created.getMonth(), created.getDate());
-  const checkDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  return checkDay >= createdDay;
-}
-
-export function isDueToday(routine) {
-  return isDueOn(routine, new Date());
+export function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
 export function lastNDates(n) {
@@ -37,20 +29,84 @@ export function lastNDates(n) {
   return dates;
 }
 
-export function calcStreak(routine, completions) {
-  const done = completions[routine.id] || {};
+/**
+ * Finds whichever task version was in effect on `date`. Versions must be
+ * sorted ascending by effectiveFrom. Edits take effect starting the calendar
+ * day they're made, so a day already in the past always uses the version
+ * that existed on/before it, never a later edit.
+ */
+export function findEffectiveVersion(versions, date) {
+  const day = startOfDay(date);
+  let effective = null;
+  for (const version of versions) {
+    if (startOfDay(new Date(version.effectiveFrom)) <= day) {
+      effective = version;
+    } else {
+      break;
+    }
+  }
+  return effective;
+}
+
+/**
+ * A task's completion fraction (0-1) for a given date, evaluated against
+ * whichever version was effective that day. Returns null if the task wasn't
+ * due at all that day (didn't exist yet, paused, or not scheduled).
+ */
+export function getTaskFraction(versions, completions, date) {
+  const version = findEffectiveVersion(versions, date);
+  if (!version || !version.active || !version.days.includes(date.getDay())) return null;
+
+  const value = completions?.[dateToKey(date)];
+  if (version.completionType === 'quantity') {
+    const target = version.target || 0;
+    if (!target) return value ? 1 : 0;
+    return Math.min(1, Math.max(0, (value || 0) / target));
+  }
+  return value ? 1 : 0;
+}
+
+/**
+ * A routine's completion fraction for a date = average of its tasks'
+ * fractions that day, ignoring tasks not due that day. Returns null if none
+ * of the routine's tasks were due (so callers can skip the day rather than
+ * treating it as a 0%).
+ */
+export function getRoutineFraction(routine, taskVersionsMap, completions, date) {
+  // Routine-level pause is a simple current-state gate (unlike task-level
+  // pause, which is versioned for historical accuracy) - pausing/resuming a
+  // routine takes effect for all dates immediately, including past ones.
+  if (!routine.active) return null;
+
+  const fractions = [];
+  for (const task of routine.tasks) {
+    const versions = taskVersionsMap[task.id];
+    if (!versions) continue;
+    const fraction = getTaskFraction(versions, completions[task.id] || {}, date);
+    if (fraction !== null) fractions.push(fraction);
+  }
+  if (fractions.length === 0) return null;
+  return fractions.reduce((sum, f) => sum + f, 0) / fractions.length;
+}
+
+export function isRoutineDueToday(routine, taskVersionsMap, completions) {
+  return getRoutineFraction(routine, taskVersionsMap, completions, new Date()) !== null;
+}
+
+export function calcRoutineStreak(routine, taskVersionsMap, completions) {
   let streak = 0;
   const cursor = new Date();
+  const today = todayKey();
   for (let i = 0; i < 365; i++) {
-    if (!isDueOn(routine, cursor)) {
+    const fraction = getRoutineFraction(routine, taskVersionsMap, completions, cursor);
+    if (fraction === null) {
       cursor.setDate(cursor.getDate() - 1);
       continue;
     }
-    const key = dateToKey(cursor);
-    if (done[key]) {
+    if (fraction === 1) {
       streak += 1;
       cursor.setDate(cursor.getDate() - 1);
-    } else if (key === todayKey()) {
+    } else if (dateToKey(cursor) === today) {
       cursor.setDate(cursor.getDate() - 1);
     } else {
       break;
@@ -59,11 +115,11 @@ export function calcStreak(routine, completions) {
   return streak;
 }
 
-export function calcCompletionRate(routine, completions, windowDays = 30) {
-  const done = completions[routine.id] || {};
+export function calcRoutineCompletionRate(routine, taskVersionsMap, completions, windowDays = 30) {
   const dates = lastNDates(windowDays);
-  const dueDates = dates.filter((d) => isDueOn(routine, d));
-  if (dueDates.length === 0) return 0;
-  const completed = dueDates.filter((d) => done[dateToKey(d)]).length;
-  return Math.round((completed / dueDates.length) * 100);
+  const fractions = dates
+    .map((d) => getRoutineFraction(routine, taskVersionsMap, completions, d))
+    .filter((f) => f !== null);
+  if (fractions.length === 0) return 0;
+  return Math.round((fractions.reduce((sum, f) => sum + f, 0) / fractions.length) * 100);
 }

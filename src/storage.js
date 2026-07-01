@@ -5,16 +5,113 @@ const LEGACY_ROUTINES_KEY = 'routines';
 const LEGACY_COMPLETIONS_KEY = 'completions';
 const MIGRATION_MARKER_KEY = 'sqlite_migrated';
 
-function rowToRoutine(row) {
+function rowToTask(row) {
   return {
     id: row.id,
+    routineId: row.routine_id,
     title: row.title,
     time: row.time,
     days: JSON.parse(row.days),
-    notes: row.notes || '',
+    completionType: row.completion_type,
+    target: row.target,
+    unit: row.unit,
+    quickAdd: row.quick_add ? JSON.parse(row.quick_add) : null,
     active: Boolean(row.active),
     createdAt: row.created_at,
+  };
+}
+
+function rowToRoutine(row, tasks) {
+  return {
+    id: row.id,
+    title: row.title,
     icon: row.icon || null,
+    notes: row.notes || '',
+    active: Boolean(row.active),
+    defaultDays: JSON.parse(row.default_days),
+    createdAt: row.created_at,
+    tasks: tasks || [],
+  };
+}
+
+function diffRowFields(existingRow, newFields) {
+  return Object.keys(newFields).filter(
+    (k) => String(existingRow[k] ?? '') !== String(newFields[k] ?? '')
+  );
+}
+
+async function closeCurrentVersion(db, table, idCol, id, now) {
+  await db.run(`UPDATE ${table} SET effective_to = ? WHERE ${idCol} = ? AND effective_to IS NULL`, [
+    now,
+    id,
+  ]);
+}
+
+async function insertRoutineVersion(db, routineId, fields, effectiveFrom, changeType, changedFields) {
+  await db.run(
+    `INSERT INTO routine_versions
+       (id, routine_id, effective_from, effective_to, title, icon, notes, active, default_days, change_type, changed_fields)
+     VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      crypto.randomUUID(),
+      routineId,
+      effectiveFrom,
+      fields.title,
+      fields.icon,
+      fields.notes,
+      fields.active,
+      fields.default_days,
+      changeType,
+      JSON.stringify(changedFields),
+    ]
+  );
+}
+
+async function insertTaskVersion(db, taskId, routineId, fields, effectiveFrom, changeType, changedFields) {
+  await db.run(
+    `INSERT INTO task_versions
+       (id, task_id, routine_id, effective_from, effective_to, title, time, days, completion_type, target, unit, quick_add, active, change_type, changed_fields)
+     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      crypto.randomUUID(),
+      taskId,
+      routineId,
+      effectiveFrom,
+      fields.title,
+      fields.time,
+      fields.days,
+      fields.completion_type,
+      fields.target,
+      fields.unit,
+      fields.quick_add,
+      fields.active,
+      changeType,
+      JSON.stringify(changedFields),
+    ]
+  );
+}
+
+function routineFieldsOf(routine) {
+  return {
+    title: routine.title,
+    icon: routine.icon || null,
+    notes: routine.notes || '',
+    active: routine.active ? 1 : 0,
+    default_days: JSON.stringify(routine.defaultDays || []),
+  };
+}
+
+function taskFieldsOf(task) {
+  const isQuantity = task.completionType === 'quantity';
+  return {
+    title: task.title,
+    time: task.time,
+    days: JSON.stringify(task.days || []),
+    completion_type: task.completionType || 'boolean',
+    target: isQuantity ? task.target ?? null : null,
+    unit: isQuantity ? task.unit || null : null,
+    quick_add: isQuantity && task.quickAdd?.length ? JSON.stringify(task.quickAdd) : null,
+    active: task.active ? 1 : 0,
   };
 }
 
@@ -29,31 +126,46 @@ async function migrateFromPreferencesOnce(db) {
 
   if (legacyRoutinesRaw) {
     for (const r of JSON.parse(legacyRoutinesRaw)) {
+      const routineFields = {
+        title: r.title,
+        icon: r.icon || null,
+        notes: r.notes || '',
+        active: r.active ? 1 : 0,
+        default_days: JSON.stringify(r.days || []),
+      };
       await db.run(
-        `INSERT OR REPLACE INTO routines (id, title, time, days, notes, active, created_at, icon)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          r.id,
-          r.title,
-          r.time,
-          JSON.stringify(r.days),
-          r.notes || '',
-          r.active ? 1 : 0,
-          r.createdAt,
-          r.icon || null,
-        ]
+        `INSERT OR REPLACE INTO routines (id, title, icon, notes, active, deleted, default_days, created_at)
+         VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
+        [r.id, routineFields.title, routineFields.icon, routineFields.notes, routineFields.active, routineFields.default_days, r.createdAt]
       );
-    }
-  }
+      await insertRoutineVersion(db, r.id, routineFields, r.createdAt, 'migrated', []);
 
-  if (legacyCompletionsRaw) {
-    const legacyCompletions = JSON.parse(legacyCompletionsRaw);
-    for (const routineId of Object.keys(legacyCompletions)) {
-      for (const date of Object.keys(legacyCompletions[routineId])) {
-        await db.run('INSERT OR REPLACE INTO completions (routine_id, date) VALUES (?, ?)', [
-          routineId,
-          date,
-        ]);
+      const taskId = `${r.id}-task`;
+      const taskFields = {
+        title: r.title,
+        time: r.time,
+        days: JSON.stringify(r.days || []),
+        completion_type: 'boolean',
+        target: null,
+        unit: null,
+        quick_add: null,
+        active: r.active ? 1 : 0,
+      };
+      await db.run(
+        `INSERT OR REPLACE INTO tasks (id, routine_id, title, time, days, completion_type, target, unit, quick_add, active, deleted, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+        [taskId, r.id, taskFields.title, taskFields.time, taskFields.days, taskFields.completion_type, taskFields.target, taskFields.unit, taskFields.quick_add, taskFields.active, r.createdAt]
+      );
+      await insertTaskVersion(db, taskId, r.id, taskFields, r.createdAt, 'migrated', []);
+
+      const legacyCompletions = legacyCompletionsRaw ? JSON.parse(legacyCompletionsRaw)[r.id] : null;
+      if (legacyCompletions) {
+        for (const date of Object.keys(legacyCompletions)) {
+          await db.run('INSERT OR REPLACE INTO completions (task_id, date, value) VALUES (?, ?, 1)', [
+            taskId,
+            date,
+          ]);
+        }
       }
     }
   }
@@ -75,66 +187,244 @@ async function ready() {
 
 export async function getRoutines() {
   const db = await ready();
-  const result = await db.query('SELECT * FROM routines ORDER BY created_at ASC');
-  return (result.values || []).map(rowToRoutine);
+  const [routineRows, taskRows] = await Promise.all([
+    db.query('SELECT * FROM routines WHERE deleted = 0 ORDER BY created_at ASC'),
+    db.query('SELECT * FROM tasks WHERE deleted = 0 ORDER BY created_at ASC'),
+  ]);
+
+  const tasksByRoutine = {};
+  for (const row of taskRows.values || []) {
+    if (!tasksByRoutine[row.routine_id]) tasksByRoutine[row.routine_id] = [];
+    tasksByRoutine[row.routine_id].push(rowToTask(row));
+  }
+
+  return (routineRows.values || []).map((row) => rowToRoutine(row, tasksByRoutine[row.id]));
 }
 
 export async function upsertRoutine(routine) {
   const db = await ready();
-  await db.run(
-    `INSERT INTO routines (id, title, time, days, notes, active, created_at, icon)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       title = excluded.title,
-       time = excluded.time,
-       days = excluded.days,
-       notes = excluded.notes,
-       active = excluded.active,
-       icon = excluded.icon`,
-    [
-      routine.id,
-      routine.title,
-      routine.time,
-      JSON.stringify(routine.days),
-      routine.notes || '',
-      routine.active ? 1 : 0,
-      routine.createdAt,
-      routine.icon || null,
-    ]
-  );
+  const now = new Date().toISOString();
+  const fields = routineFieldsOf(routine);
+
+  const existingRows = await db.query('SELECT * FROM routines WHERE id = ?', [routine.id]);
+  const existing = (existingRows.values || [])[0];
+
+  if (!existing) {
+    await db.run(
+      `INSERT INTO routines (id, title, icon, notes, active, deleted, default_days, created_at)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
+      [routine.id, fields.title, fields.icon, fields.notes, fields.active, fields.default_days, routine.createdAt || now]
+    );
+    await insertRoutineVersion(db, routine.id, fields, now, 'created', []);
+  } else {
+    const changed = diffRowFields(existing, fields);
+    if (changed.length > 0) {
+      await db.run(`UPDATE routines SET title=?, icon=?, notes=?, active=?, default_days=? WHERE id=?`, [
+        fields.title,
+        fields.icon,
+        fields.notes,
+        fields.active,
+        fields.default_days,
+        routine.id,
+      ]);
+      const changeType =
+        changed.length === 1 && changed[0] === 'active' ? (fields.active ? 'resumed' : 'paused') : 'updated';
+      await closeCurrentVersion(db, 'routine_versions', 'routine_id', routine.id, now);
+      await insertRoutineVersion(db, routine.id, fields, now, changeType, changed);
+    }
+  }
   await persist();
   return getRoutines();
 }
 
-export async function deleteRoutine(id) {
+export async function deleteRoutine(routineId) {
   const db = await ready();
-  await db.run('DELETE FROM routines WHERE id = ?', [id]);
-  await db.run('DELETE FROM completions WHERE routine_id = ?', [id]);
+  const now = new Date().toISOString();
+
+  const routineRows = await db.query('SELECT * FROM routines WHERE id = ?', [routineId]);
+  const routine = (routineRows.values || [])[0];
+  if (routine) {
+    await db.run('UPDATE routines SET deleted = 1, active = 0 WHERE id = ?', [routineId]);
+    await closeCurrentVersion(db, 'routine_versions', 'routine_id', routineId, now);
+    await insertRoutineVersion(db, routineId, { ...routine, active: 0 }, now, 'deleted', ['deleted']);
+  }
+
+  const taskRows = await db.query('SELECT * FROM tasks WHERE routine_id = ? AND deleted = 0', [routineId]);
+  for (const task of taskRows.values || []) {
+    await db.run('UPDATE tasks SET deleted = 1, active = 0 WHERE id = ?', [task.id]);
+    await closeCurrentVersion(db, 'task_versions', 'task_id', task.id, now);
+    await insertTaskVersion(db, task.id, routineId, { ...task, active: 0 }, now, 'deleted', ['deleted']);
+  }
+
+  await persist();
+  return getRoutines();
+}
+
+export async function upsertTask(task) {
+  const db = await ready();
+  const now = new Date().toISOString();
+  const fields = taskFieldsOf(task);
+
+  const existingRows = await db.query('SELECT * FROM tasks WHERE id = ?', [task.id]);
+  const existing = (existingRows.values || [])[0];
+
+  if (!existing) {
+    await db.run(
+      `INSERT INTO tasks (id, routine_id, title, time, days, completion_type, target, unit, quick_add, active, deleted, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+      [
+        task.id,
+        task.routineId,
+        fields.title,
+        fields.time,
+        fields.days,
+        fields.completion_type,
+        fields.target,
+        fields.unit,
+        fields.quick_add,
+        fields.active,
+        task.createdAt || now,
+      ]
+    );
+    await insertTaskVersion(db, task.id, task.routineId, fields, now, 'created', []);
+  } else {
+    const changed = diffRowFields(existing, fields);
+    if (changed.length > 0) {
+      await db.run(
+        `UPDATE tasks SET title=?, time=?, days=?, completion_type=?, target=?, unit=?, quick_add=?, active=? WHERE id=?`,
+        [
+          fields.title,
+          fields.time,
+          fields.days,
+          fields.completion_type,
+          fields.target,
+          fields.unit,
+          fields.quick_add,
+          fields.active,
+          task.id,
+        ]
+      );
+      const changeType =
+        changed.length === 1 && changed[0] === 'active' ? (fields.active ? 'resumed' : 'paused') : 'updated';
+      await closeCurrentVersion(db, 'task_versions', 'task_id', task.id, now);
+      await insertTaskVersion(db, task.id, task.routineId, fields, now, changeType, changed);
+    }
+  }
+  await persist();
+  return getRoutines();
+}
+
+export async function deleteTask(taskId) {
+  const db = await ready();
+  const now = new Date().toISOString();
+  const rows = await db.query('SELECT * FROM tasks WHERE id = ?', [taskId]);
+  const task = (rows.values || [])[0];
+  if (!task) return getRoutines();
+
+  await db.run('UPDATE tasks SET deleted = 1, active = 0 WHERE id = ?', [taskId]);
+  await closeCurrentVersion(db, 'task_versions', 'task_id', taskId, now);
+  await insertTaskVersion(db, taskId, task.routine_id, { ...task, active: 0 }, now, 'deleted', ['deleted']);
+
   await persist();
   return getRoutines();
 }
 
 export async function getCompletions() {
   const db = await ready();
-  const result = await db.query('SELECT routine_id, date FROM completions');
+  const result = await db.query('SELECT task_id, date, value FROM completions');
   const completions = {};
   for (const row of result.values || []) {
-    if (!completions[row.routine_id]) completions[row.routine_id] = {};
-    completions[row.routine_id][row.date] = true;
+    if (!completions[row.task_id]) completions[row.task_id] = {};
+    completions[row.task_id][row.date] = row.value;
   }
   return completions;
 }
 
-export async function setCompletion(routineId, dateKey, done) {
+export async function setCompletion(taskId, dateKey, value) {
   const db = await ready();
-  if (done) {
-    await db.run('INSERT OR REPLACE INTO completions (routine_id, date) VALUES (?, ?)', [
-      routineId,
-      dateKey,
-    ]);
+  const now = new Date().toISOString();
+  if (value === null || value === undefined || value === false || value === 0) {
+    await db.run('DELETE FROM completions WHERE task_id = ? AND date = ?', [taskId, dateKey]);
   } else {
-    await db.run('DELETE FROM completions WHERE routine_id = ? AND date = ?', [routineId, dateKey]);
+    const numericValue = value === true ? 1 : value;
+    await db.run('INSERT OR REPLACE INTO completions (task_id, date, value, updated_at) VALUES (?, ?, ?, ?)', [
+      taskId,
+      dateKey,
+      numericValue,
+      now,
+    ]);
   }
   await persist();
   return getCompletions();
+}
+
+export async function addToCompletion(taskId, dateKey, delta) {
+  const completions = await getCompletions();
+  const current = completions[taskId]?.[dateKey] || 0;
+  return setCompletion(taskId, dateKey, current + delta);
+}
+
+export async function getAllVersions() {
+  const db = await ready();
+  const [routineVersions, taskVersions] = await Promise.all([
+    db.query('SELECT * FROM routine_versions ORDER BY effective_from DESC'),
+    db.query('SELECT * FROM task_versions ORDER BY effective_from DESC'),
+  ]);
+
+  const routineEntries = (routineVersions.values || []).map((v) => ({
+    id: v.id,
+    kind: 'routine',
+    entityId: v.routine_id,
+    routineId: v.routine_id,
+    effectiveFrom: v.effective_from,
+    effectiveTo: v.effective_to,
+    changeType: v.change_type,
+    changedFields: JSON.parse(v.changed_fields || '[]'),
+    title: v.title,
+  }));
+
+  const taskEntries = (taskVersions.values || []).map((v) => ({
+    id: v.id,
+    kind: 'task',
+    entityId: v.task_id,
+    routineId: v.routine_id,
+    effectiveFrom: v.effective_from,
+    effectiveTo: v.effective_to,
+    changeType: v.change_type,
+    changedFields: JSON.parse(v.changed_fields || '[]'),
+    title: v.title,
+  }));
+
+  return [...routineEntries, ...taskEntries].sort((a, b) => (a.effectiveFrom < b.effectiveFrom ? 1 : -1));
+}
+
+export async function getRoutineHistory(routineId) {
+  const all = await getAllVersions();
+  return all.filter((v) => v.routineId === routineId);
+}
+
+export async function getTaskVersionsForAnalytics() {
+  const db = await ready();
+  const result = await db.query(
+    `SELECT tv.* FROM task_versions tv
+     JOIN tasks t ON t.id = tv.task_id
+     WHERE t.deleted = 0
+     ORDER BY tv.task_id, tv.effective_from ASC`
+  );
+  const map = {};
+  for (const row of result.values || []) {
+    if (!map[row.task_id]) map[row.task_id] = [];
+    map[row.task_id].push({
+      effectiveFrom: row.effective_from,
+      effectiveTo: row.effective_to,
+      title: row.title,
+      time: row.time,
+      days: JSON.parse(row.days),
+      completionType: row.completion_type,
+      target: row.target,
+      unit: row.unit,
+      active: Boolean(row.active),
+    });
+  }
+  return map;
 }

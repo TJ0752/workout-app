@@ -5,8 +5,23 @@ import TodayView from './components/TodayView';
 import RoutinesView from './components/RoutinesView';
 import DashboardView from './components/DashboardView';
 import HistoryView from './components/HistoryView';
-import { getRoutines, upsertRoutine, deleteRoutine as deleteRoutineFromStore, getCompletions, setCompletion } from './storage';
-import { initNotifications, scheduleRoutineNotifications, cancelRoutineNotifications, syncAllNotifications } from './notifications';
+import {
+  getRoutines,
+  upsertRoutine,
+  deleteRoutine as deleteRoutineFromStore,
+  upsertTask,
+  deleteTask as deleteTaskFromStore,
+  getCompletions,
+  setCompletion,
+  addToCompletion,
+  getTaskVersionsForAnalytics,
+} from './storage';
+import {
+  initNotifications,
+  scheduleTaskNotifications,
+  cancelTaskNotifications,
+  syncAllNotifications,
+} from './notifications';
 import { todayKey } from './utils/date';
 
 const TABS = [
@@ -20,47 +35,95 @@ function App() {
   const [tab, setTab] = useState('today');
   const [routines, setRoutines] = useState([]);
   const [completions, setCompletions] = useState({});
+  const [taskVersionsMap, setTaskVersionsMap] = useState({});
   const [loading, setLoading] = useState(true);
+
+  const refreshAll = async () => {
+    const [storedRoutines, storedCompletions, versionsMap] = await Promise.all([
+      getRoutines(),
+      getCompletions(),
+      getTaskVersionsForAnalytics(),
+    ]);
+    setRoutines(storedRoutines);
+    setCompletions(storedCompletions);
+    setTaskVersionsMap(versionsMap);
+    return storedRoutines;
+  };
 
   useEffect(() => {
     (async () => {
-      const [storedRoutines, storedCompletions] = await Promise.all([getRoutines(), getCompletions()]);
-      setRoutines(storedRoutines);
-      setCompletions(storedCompletions);
+      const storedRoutines = await refreshAll();
       setLoading(false);
       await initNotifications();
       await syncAllNotifications(storedRoutines);
     })();
   }, []);
 
-  const handleAdd = async (routine) => {
-    const next = await upsertRoutine(routine);
-    setRoutines(next);
-    await scheduleRoutineNotifications(routine);
+  const handleSaveRoutine = async ({ routine, tasks, deletedTaskIds }) => {
+    await upsertRoutine(routine);
+    for (const taskId of deletedTaskIds) {
+      await cancelTaskNotifications({ id: taskId });
+      await deleteTaskFromStore(taskId);
+    }
+    for (const task of tasks) {
+      await upsertTask({ ...task, routineId: routine.id });
+    }
+    const updatedRoutines = await refreshAll();
+    const savedRoutine = updatedRoutines.find((r) => r.id === routine.id);
+    if (savedRoutine) {
+      for (const task of savedRoutine.tasks) {
+        await scheduleTaskNotifications(task, savedRoutine);
+      }
+    }
   };
 
-  const handleUpdate = async (routine) => {
-    const next = await upsertRoutine(routine);
-    setRoutines(next);
-    await scheduleRoutineNotifications(routine);
+  const handleDeleteRoutine = async (routine) => {
+    if (!confirm(`Delete "${routine.title}"? This removes all its tasks too.`)) return;
+    for (const task of routine.tasks) {
+      await cancelTaskNotifications(task);
+    }
+    await deleteRoutineFromStore(routine.id);
+    await refreshAll();
   };
 
-  const handleDelete = async (routine) => {
-    if (!confirm(`Delete "${routine.title}"?`)) return;
-    const next = await deleteRoutineFromStore(routine.id);
-    setRoutines(next);
-    await cancelRoutineNotifications(routine);
-  };
-
-  const handleToggleActive = async (routine) => {
+  const handleToggleRoutineActive = async (routine) => {
     const updated = { ...routine, active: !routine.active };
-    const next = await upsertRoutine(updated);
-    setRoutines(next);
-    await scheduleRoutineNotifications(updated);
+    await upsertRoutine(updated);
+    const updatedRoutines = await refreshAll();
+    const savedRoutine = updatedRoutines.find((r) => r.id === routine.id);
+    for (const task of routine.tasks) {
+      if (savedRoutine && savedRoutine.active) {
+        await scheduleTaskNotifications(task, savedRoutine);
+      } else {
+        await cancelTaskNotifications(task);
+      }
+    }
   };
 
-  const handleToggleComplete = async (routine, done) => {
-    const next = await setCompletion(routine.id, todayKey(), done);
+  const handleToggleTaskActive = async (task) => {
+    await upsertTask({ ...task, active: !task.active });
+    const updatedRoutines = await refreshAll();
+    const savedRoutine = updatedRoutines.find((r) => r.id === task.routineId);
+    const savedTask = savedRoutine?.tasks.find((t) => t.id === task.id);
+    if (savedTask?.active) {
+      await scheduleTaskNotifications(savedTask, savedRoutine);
+    } else {
+      await cancelTaskNotifications(task);
+    }
+  };
+
+  const handleToggleComplete = async (task, done) => {
+    const next = await setCompletion(task.id, todayKey(), done);
+    setCompletions(next);
+  };
+
+  const handleAddQuantity = async (task, delta) => {
+    const next = await addToCompletion(task.id, todayKey(), delta);
+    setCompletions(next);
+  };
+
+  const handleSetQuantity = async (task, value) => {
+    const next = await setCompletion(task.id, todayKey(), value);
     setCompletions(next);
   };
 
@@ -76,28 +139,35 @@ function App() {
 
       <main className="app-main">
         {tab === 'today' && (
-          <TodayView routines={routines} completions={completions} onToggleComplete={handleToggleComplete} />
+          <TodayView
+            routines={routines}
+            completions={completions}
+            taskVersionsMap={taskVersionsMap}
+            onToggleComplete={handleToggleComplete}
+            onAddQuantity={handleAddQuantity}
+            onSetQuantity={handleSetQuantity}
+          />
         )}
         {tab === 'routines' && (
           <RoutinesView
             routines={routines}
-            onAdd={handleAdd}
-            onUpdate={handleUpdate}
-            onDelete={handleDelete}
-            onToggleActive={handleToggleActive}
+            onSaveRoutine={handleSaveRoutine}
+            onDeleteRoutine={handleDeleteRoutine}
+            onToggleRoutineActive={handleToggleRoutineActive}
+            onToggleTaskActive={handleToggleTaskActive}
           />
         )}
-        {tab === 'dashboard' && <DashboardView routines={routines} completions={completions} />}
-        {tab === 'history' && <HistoryView routines={routines} completions={completions} />}
+        {tab === 'dashboard' && (
+          <DashboardView routines={routines} completions={completions} taskVersionsMap={taskVersionsMap} />
+        )}
+        {tab === 'history' && (
+          <HistoryView routines={routines} completions={completions} taskVersionsMap={taskVersionsMap} />
+        )}
       </main>
 
       <nav className="app-tabbar">
         {TABS.map((t) => (
-          <button
-            key={t.id}
-            className={tab === t.id ? 'active' : ''}
-            onClick={() => setTab(t.id)}
-          >
+          <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => setTab(t.id)}>
             <t.Icon size={20} />
             <span>{t.label}</span>
           </button>

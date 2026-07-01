@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Flame } from 'lucide-react';
+import { ChevronDown, Flame } from 'lucide-react';
 import { getDashboardStats } from '../utils/analytics';
 import { getRoutineIcon } from '../utils/icons';
 
@@ -16,11 +16,12 @@ function barClass(pct) {
   return '';
 }
 
-export default function DashboardView({ routines, completions }) {
+export default function DashboardView({ routines, completions, taskVersionsMap }) {
   const [range, setRange] = useState('month');
+  const [expanded, setExpanded] = useState(() => new Set());
   const stats = useMemo(
-    () => getDashboardStats(routines, completions, range),
-    [routines, completions, range]
+    () => getDashboardStats(routines, taskVersionsMap, completions, range),
+    [routines, taskVersionsMap, completions, range]
   );
 
   if (routines.length === 0) {
@@ -30,6 +31,15 @@ export default function DashboardView({ routines, completions }) {
   const maxTrendPct = Math.max(1, ...stats.trend.map((t) => t.pct ?? 0));
   const showCallouts =
     stats.topRoutine && stats.needsAttention && stats.topRoutine.routine.id !== stats.needsAttention.routine.id;
+
+  const toggleExpanded = (routineId) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(routineId)) next.delete(routineId);
+      else next.add(routineId);
+      return next;
+    });
+  };
 
   return (
     <div className="dashboard-view">
@@ -99,23 +109,50 @@ export default function DashboardView({ routines, completions }) {
       <div className="breakdown-list">
         {stats.perRoutine.map((r) => {
           const RoutineIcon = getRoutineIcon(r.routine);
+          const hasMultipleTasks = r.tasks.length > 1;
+          const isOpen = expanded.has(r.routine.id);
           return (
             <div className="breakdown-row" key={r.routine.id}>
-              <span className="icon-badge">
-                <RoutineIcon size={18} />
-              </span>
-              <div className="breakdown-body">
-                <div className="breakdown-top">
-                  <span className="breakdown-name">{r.routine.title}</span>
-                  <span className="breakdown-pct">{r.pct}%</span>
+              <div
+                className="breakdown-head"
+                onClick={hasMultipleTasks ? () => toggleExpanded(r.routine.id) : undefined}
+                style={hasMultipleTasks ? { cursor: 'pointer' } : undefined}
+              >
+                <span className="icon-badge">
+                  <RoutineIcon size={18} />
+                </span>
+                <div className="breakdown-body">
+                  <div className="breakdown-top">
+                    <span className="breakdown-name">{r.routine.title}</span>
+                    <span className="breakdown-pct">{r.pct}%</span>
+                  </div>
+                  <div className="breakdown-bar-track">
+                    <div className={`breakdown-bar-fill ${barClass(r.pct)}`} style={{ width: `${r.pct}%` }} />
+                  </div>
+                  <div className="breakdown-meta">
+                    <Flame size={12} /> {r.streak} day streak · {r.completed}/{r.due} days
+                  </div>
                 </div>
-                <div className="breakdown-bar-track">
-                  <div className={`breakdown-bar-fill ${barClass(r.pct)}`} style={{ width: `${r.pct}%` }} />
-                </div>
-                <div className="breakdown-meta">
-                  <Flame size={12} /> {r.streak} day streak · {r.completed}/{r.due} days
-                </div>
+                {hasMultipleTasks && (
+                  <span className={`chevron ${isOpen ? 'open' : ''}`}>
+                    <ChevronDown size={16} />
+                  </span>
+                )}
               </div>
+
+              {hasMultipleTasks && isOpen && (
+                <div className="breakdown-sub-list">
+                  {r.tasks.map((t) => (
+                    <div className="breakdown-sub-row" key={t.task.id}>
+                      <span className="dot" />
+                      <span className="breakdown-sub-name">{t.task.title}</span>
+                      <span className={`breakdown-sub-pct ${t.pct !== null && t.pct < 50 ? 'partial' : ''}`}>
+                        {t.pct === null ? '—' : `${t.pct}%`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}

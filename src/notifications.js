@@ -11,8 +11,8 @@ function hashToInt(str) {
   return Math.abs(h) % 1000000;
 }
 
-function notificationIdFor(routineId, weekday) {
-  return hashToInt(routineId) * 10 + weekday;
+function notificationIdFor(taskId, weekday) {
+  return hashToInt(taskId) * 10 + weekday;
 }
 
 export async function initNotifications() {
@@ -35,10 +35,10 @@ export async function initNotifications() {
   }
 }
 
-export async function cancelRoutineNotifications(routine) {
+export async function cancelTaskNotifications(task) {
   if (!Capacitor.isNativePlatform()) return;
   const ids = [0, 1, 2, 3, 4, 5, 6].map((day) => ({
-    id: notificationIdFor(routine.id, day),
+    id: notificationIdFor(task.id, day),
   }));
   try {
     await LocalNotifications.cancel({ notifications: ids });
@@ -47,16 +47,19 @@ export async function cancelRoutineNotifications(routine) {
   }
 }
 
-export async function scheduleRoutineNotifications(routine) {
+export async function scheduleTaskNotifications(task, routine) {
   if (!Capacitor.isNativePlatform()) return;
-  await cancelRoutineNotifications(routine);
-  if (!routine.active || routine.days.length === 0) return;
+  await cancelTaskNotifications(task);
+  if (!task.active || task.days.length === 0) return;
 
-  const [hour, minute] = routine.time.split(':').map(Number);
-  const notifications = routine.days.map((day) => ({
-    id: notificationIdFor(routine.id, day),
-    title: routine.title,
-    body: routine.notes || 'Time to complete your routine',
+  const [hour, minute] = task.time.split(':').map(Number);
+  const title = routine && routine.title !== task.title ? `${routine.title} · ${task.title}` : task.title;
+  const body = (routine && routine.notes) || 'Time to complete your task';
+
+  const notifications = task.days.map((day) => ({
+    id: notificationIdFor(task.id, day),
+    title,
+    body,
     channelId: CHANNEL_ID,
     schedule: {
       on: { weekday: day + 1, hour, minute },
@@ -74,6 +77,8 @@ export async function scheduleRoutineNotifications(routine) {
 export async function syncAllNotifications(routines) {
   if (!Capacitor.isNativePlatform()) return;
   for (const routine of routines) {
-    await scheduleRoutineNotifications(routine);
+    for (const task of routine.tasks) {
+      await scheduleTaskNotifications(task, routine);
+    }
   }
 }
