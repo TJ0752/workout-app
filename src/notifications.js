@@ -136,7 +136,7 @@ export async function cancelTaskNotifications(task) {
 export async function scheduleTaskNotifications(task, routine) {
   if (!Capacitor.isNativePlatform()) return;
   await cancelTaskNotifications(task);
-  if (!task.active || task.days.length === 0) return;
+  if (!task.active || task.days.length === 0 || routine?.active === false) return;
 
   const [hour, minute] = task.time.split(':').map(Number);
   const title = routine && routine.title !== task.title ? `${routine.title} · ${task.title}` : task.title;

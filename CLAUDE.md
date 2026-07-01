@@ -165,6 +165,19 @@ web):
   even if the app isn't reopened — just with whatever content was last computed. A
   multi-day gap without opening the app means stale content, not a missed notification.
 
+`scheduleTaskNotifications(task, routine)` is the single choke point that decides whether
+a task's reminders actually get scheduled — it checks `task.active`, `task.days.length`,
+and (routine-level pause is deliberately not versioned, see above) `routine.active`, all
+three. This matters because `syncAllNotifications` re-syncs *every* routine's tasks
+whenever *any* routine is saved (`handleSaveRoutine` in `App.jsx` calls it with the full
+current routine list, not just the one edited) — without the `routine.active` check here,
+saving an unrelated routine would silently reschedule reminders for a routine the user had
+paused. Action-type registration (`registerNotificationActionTypes`) is unaffected by this
+gate and registers types for all tasks regardless of active state — harmless, since an
+unused registered type just sits there (confirmed from the native plugin source: each
+action type is written to its own `SharedPreferences` file keyed by id, so registrations
+are additive/idempotent and never clobber each other or get silently dropped).
+
 **No live-updating countdown/chronometer in the notification itself** — this is a real
 Android `Notification.Builder` capability (`setUsesChronometer`) that
 `@capacitor/local-notifications` doesn't expose (open upstream feature request, unresolved
