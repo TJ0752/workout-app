@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { parseQuickAddText } from '../utils/tasks';
 import { DAY_LABELS } from '../utils/date';
 import { ICON_OPTIONS, suggestIconId } from '../utils/icons';
 import ActivityLogView from './ActivityLogView';
@@ -20,6 +21,29 @@ function makeTask(days) {
     active: true,
     createdAt: new Date().toISOString(),
   };
+}
+
+function QuickAddInput({ task, onChange }) {
+  const [text, setText] = useState(() => task.quickAdd?.join(', ') ?? '');
+
+  const handleChange = (value) => {
+    setText(value);
+    const nums = parseQuickAddText(value);
+    onChange({ ...task, quickAdd: nums.length ? nums : null });
+  };
+
+  return (
+    <label>
+      Quick-add amounts (optional)
+      <input
+        type="text"
+        inputMode="numeric"
+        placeholder="e.g. 10, 25"
+        value={text}
+        onChange={(e) => handleChange(e.target.value)}
+      />
+    </label>
+  );
 }
 
 function DayPicker({ days, onChange }) {
@@ -102,21 +126,7 @@ function TaskFields({ task, onChange, showTitle }) {
               />
             </label>
           </div>
-          <label>
-            Quick-add amounts (optional)
-            <input
-              type="text"
-              placeholder="e.g. 10, 25"
-              value={task.quickAdd?.join(', ') ?? ''}
-              onChange={(e) => {
-                const nums = e.target.value
-                  .split(',')
-                  .map((s) => Number(s.trim()))
-                  .filter((n) => !Number.isNaN(n) && n > 0);
-                onChange({ ...task, quickAdd: nums.length ? nums : null });
-              }}
-            />
-          </label>
+          <QuickAddInput task={task} onChange={onChange} />
         </>
       )}
     </>

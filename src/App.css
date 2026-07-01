@@ -483,6 +483,7 @@
 }
 
 .routine-form input {
+  width: 100%;
   padding: 0.55em 0.7em;
   border-radius: var(--radius-sm);
   border: 1px solid var(--card-border);
@@ -572,6 +573,7 @@
 
 .inline-fields label {
   flex: 1;
+  min-width: 0;
 }
 
 .type-toggle {
