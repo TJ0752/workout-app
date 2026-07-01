@@ -1,142 +1,103 @@
-import { useRef, useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import './App.css';
+import TodayView from './components/TodayView';
+import RoutinesView from './components/RoutinesView';
+import HistoryView from './components/HistoryView';
+import { getRoutines, upsertRoutine, deleteRoutine as deleteRoutineFromStore, getCompletions, setCompletion } from './storage';
+import { initNotifications, scheduleRoutineNotifications, cancelRoutineNotifications, syncAllNotifications } from './notifications';
+import { todayKey } from './utils/date';
 
-const say = (text) => {
-  const utterance = new SpeechSynthesisUtterance(text);
-  window.speechSynthesis.speak(utterance);
-};
+const TABS = [
+  { id: 'today', label: 'Today' },
+  { id: 'routines', label: 'Routines' },
+  { id: 'history', label: 'History' },
+];
 
 function App() {
-  const [exercise, setExercise] = useState('');
-  const [duration, setDuration] = useState('');
-  const [rest, setRest] = useState('');
-  const [workoutPlan, setWorkoutPlan] = useState([]);
+  const [tab, setTab] = useState('today');
+  const [routines, setRoutines] = useState([]);
+  const [completions, setCompletions] = useState({});
+  const [loading, setLoading] = useState(true);
 
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [countdown, setCountdown] = useState(0);
-  const [isResting, setIsResting] = useState(false);
-  const [isRunning, setIsRunning] = useState(false);
-  const spokenNextUpRef = useRef(false); // To prevent repeated speech in 1 cycle
+  useEffect(() => {
+    (async () => {
+      const [storedRoutines, storedCompletions] = await Promise.all([getRoutines(), getCompletions()]);
+      setRoutines(storedRoutines);
+      setCompletions(storedCompletions);
+      setLoading(false);
+      await initNotifications();
+      await syncAllNotifications(storedRoutines);
+    })();
+  }, []);
 
-  const handleAddExercise = () => {
-    const newStep = {
-      name: exercise,
-      duration: parseInt(duration),
-      rest: parseInt(rest),
-    };
-    setWorkoutPlan([...workoutPlan, newStep]);
-    setExercise('');
-    setDuration('');
-    setRest('');
+  const handleAdd = async (routine) => {
+    const next = await upsertRoutine(routine);
+    setRoutines(next);
+    await scheduleRoutineNotifications(routine);
   };
 
-useEffect(() => {
-  let timer;
+  const handleUpdate = async (routine) => {
+    const next = await upsertRoutine(routine);
+    setRoutines(next);
+    await scheduleRoutineNotifications(routine);
+  };
 
-  if (isRunning && countdown > 0) {
-    timer = setTimeout(() => {
-      setCountdown((prev) => prev - 1);
-    }, 1000);
+  const handleDelete = async (routine) => {
+    if (!confirm(`Delete "${routine.title}"?`)) return;
+    const next = await deleteRoutineFromStore(routine.id);
+    setRoutines(next);
+    await cancelRoutineNotifications(routine);
+  };
 
-    // 🟡 Start speaking announcement early enough (e.g., 7s left)
-    if (countdown === 7 && !spokenNextUpRef.current) {
-      spokenNextUpRef.current = true;
+  const handleToggleActive = async (routine) => {
+    const updated = { ...routine, active: !routine.active };
+    const next = await upsertRoutine(updated);
+    setRoutines(next);
+    await scheduleRoutineNotifications(updated);
+  };
 
-      const nextIndex = isResting ? currentIndex + 1 : currentIndex;
-      const isNextRest = !isResting;
-      const nextItem = workoutPlan[nextIndex];
+  const handleToggleComplete = async (routine, done) => {
+    const next = await setCompletion(routine.id, todayKey(), done);
+    setCompletions(next);
+  };
 
-      const phrase = isNextRest
-        ? `Rest for ${workoutPlan[currentIndex]?.rest} seconds`
-        : `Exercise: ${nextItem?.name} for ${nextItem?.duration} seconds`;
-
-      say(phrase);
-    }
-
-    // 🔊 Voice countdown synced with timer at 3s, 2s, 1s
-    if ([3, 2, 1].includes(countdown)) {
-      say(countdown.toString());
-    }
+  if (loading) {
+    return <div className="app-shell loading">Loading…</div>;
   }
-
-  else if (isRunning && countdown === 0) {
-    const nextIndex = currentIndex + 1;
-
-    if (!isResting) {
-      setIsResting(true);
-      spokenNextUpRef.current = false;
-      setCountdown(workoutPlan[currentIndex]?.rest || 0);
-    } else {
-      setIsResting(false);
-      spokenNextUpRef.current = false;
-
-      if (nextIndex < workoutPlan.length) {
-        setCurrentIndex(nextIndex);
-        setCountdown(workoutPlan[nextIndex].duration);
-      } else {
-        say("Workout complete! Great job!");
-        setIsRunning(false);
-        setCurrentIndex(0);
-      }
-    }
-  }
-
-  return () => clearTimeout(timer);
-}, [isRunning, countdown, isResting, currentIndex, workoutPlan]);
-
 
   return (
-    <div style={{ padding: '20px', maxWidth: '500px', margin: '0 auto' }}>
-      <h1>Workout Planner 🔥</h1>
-      <input
-        type="text"
-        placeholder="Exercise name"
-        value={exercise}
-        onChange={(e) => setExercise(e.target.value)}
-      />
-      <input
-        type="number"
-        placeholder="Duration (sec)"
-        value={duration}
-        onChange={(e) => setDuration(e.target.value)}
-      />
-      <input
-        type="number"
-        placeholder="Rest (sec)"
-        value={rest}
-        onChange={(e) => setRest(e.target.value)}
-      />
-      <button onClick={handleAddExercise}>Add</button>
+    <div className="app-shell">
+      <header className="app-header">
+        <h1>Daily Routines</h1>
+      </header>
 
-      <h2>Workout Plan</h2>
-      <ul>
-        {workoutPlan.map((step, index) => (
-          <li key={index}>
-            <strong>{step.name}</strong> – {step.duration}s + {step.rest}s rest
-          </li>
+      <main className="app-main">
+        {tab === 'today' && (
+          <TodayView routines={routines} completions={completions} onToggleComplete={handleToggleComplete} />
+        )}
+        {tab === 'routines' && (
+          <RoutinesView
+            routines={routines}
+            onAdd={handleAdd}
+            onUpdate={handleUpdate}
+            onDelete={handleDelete}
+            onToggleActive={handleToggleActive}
+          />
+        )}
+        {tab === 'history' && <HistoryView routines={routines} completions={completions} />}
+      </main>
+
+      <nav className="app-tabbar">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            className={tab === t.id ? 'active' : ''}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+          </button>
         ))}
-      </ul>
-
-      {workoutPlan.length > 0 && !isRunning && (
-        <button
-          onClick={() => {
-            say(`Starting workout. First exercise: ${workoutPlan[0].name} for ${workoutPlan[0].duration} seconds`);
-            setIsRunning(true);
-            setCurrentIndex(0);
-            setIsResting(false);
-            setCountdown(workoutPlan[0].duration);
-          }}
-        >
-          Start Workout
-        </button>
-      )}
-
-      {isRunning && (
-        <div style={{ marginTop: '20px' }}>
-          <h2>{isResting ? 'Rest' : 'Exercise'} Time</h2>
-          <h3>{workoutPlan[currentIndex]?.name || ''}</h3>
-          <h1>{countdown}s</h1>
-        </div>
-      )}
+      </nav>
     </div>
   );
 }
