@@ -141,6 +141,38 @@ migrating from a different storage system entirely, not a schema version bump).
 / `return getCompletions()`) rather than trusting in-memory state — callers in `App.jsx`
 rely on this.
 
+### Notifications (`src/notifications.js`)
+
+Two categories, both gated behind `Capacitor.isNativePlatform()` (everything no-ops on
+web):
+
+- **Per-task reminders** — one recurring `LocalNotifications` schedule per task per
+  scheduled weekday, with an `actionTypeId` giving it action buttons (Mark done /
+  `+N` quick-add / Snooze) and an `extra: {taskId, routineId}` payload so the shared
+  `localNotificationActionPerformed` listener (wired in `App.jsx`) knows which task a tap
+  applies to. Action *types* are shared/pre-registered (`registerNotificationActionTypes`)
+  — one per distinct quick-add combination in use plus one for boolean tasks — because
+  Android attaches action buttons to a registered type, not to each notification
+  individually. Multi-task routines' notifications share a `group` string so simultaneous
+  pending reminders collapse together in the shade (no separate group-summary
+  notification is created — untested without a device, kept simple deliberately).
+- **Computed notifications** (`syncDynamicNotifications`) — the persistent daily summary
+  (`ongoing: true`, no live countdown — see below), the streak-at-risk nudge, and the
+  morning/evening digests. These have no backend and no background-task runner, so their
+  content can only be recomputed when the app is actually open; they're refreshed on every
+  app load and after every completion change (including from a notification action tap),
+  and rely on `on: {hour, minute}` (no `weekday`) native daily recurrence to keep firing
+  even if the app isn't reopened — just with whatever content was last computed. A
+  multi-day gap without opening the app means stale content, not a missed notification.
+
+**No live-updating countdown/chronometer in the notification itself** — this is a real
+Android `Notification.Builder` capability (`setUsesChronometer`) that
+`@capacitor/local-notifications` doesn't expose (open upstream feature request, unresolved
+as of this writing). The community `capacitor-timer-notification` plugin exists but pins
+`@capacitor/core: ^6.0.0` against our v8 — not worth the compatibility risk. Getting a real
+one requires a custom native Android plugin; the in-app countdown on the Today screen
+(`TodayView.jsx`'s `CountdownLabel`, ticking via a 60s `setInterval`) is the fallback.
+
 ### Android signing (`android/debug.keystore`)
 
 The debug keystore is committed to the repo and wired into

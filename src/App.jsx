@@ -21,6 +21,8 @@ import {
   scheduleTaskNotifications,
   cancelTaskNotifications,
   syncAllNotifications,
+  syncDynamicNotifications,
+  initActionListener,
 } from './notifications';
 import { todayKey } from './utils/date';
 
@@ -47,16 +49,34 @@ function App() {
     setRoutines(storedRoutines);
     setCompletions(storedCompletions);
     setTaskVersionsMap(versionsMap);
-    return storedRoutines;
+    return { routines: storedRoutines, completions: storedCompletions, taskVersionsMap: versionsMap };
   };
 
   useEffect(() => {
     (async () => {
-      const storedRoutines = await refreshAll();
+      const state = await refreshAll();
       setLoading(false);
       await initNotifications();
-      await syncAllNotifications(storedRoutines);
+      await syncAllNotifications(state.routines);
+      await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
     })();
+
+    const listenerPromise = initActionListener({
+      onMarkDone: async (taskId) => {
+        await setCompletion(taskId, todayKey(), true);
+        const state = await refreshAll();
+        await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
+      },
+      onAddQuantity: async (taskId, amount) => {
+        await addToCompletion(taskId, todayKey(), amount);
+        const state = await refreshAll();
+        await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
+      },
+    });
+
+    return () => {
+      listenerPromise?.then((handle) => handle.remove());
+    };
   }, []);
 
   const handleSaveRoutine = async ({ routine, tasks, deletedTaskIds }) => {
@@ -68,13 +88,9 @@ function App() {
     for (const task of tasks) {
       await upsertTask({ ...task, routineId: routine.id });
     }
-    const updatedRoutines = await refreshAll();
-    const savedRoutine = updatedRoutines.find((r) => r.id === routine.id);
-    if (savedRoutine) {
-      for (const task of savedRoutine.tasks) {
-        await scheduleTaskNotifications(task, savedRoutine);
-      }
-    }
+    const state = await refreshAll();
+    await syncAllNotifications(state.routines);
+    await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
   };
 
   const handleDeleteRoutine = async (routine) => {
@@ -83,14 +99,15 @@ function App() {
       await cancelTaskNotifications(task);
     }
     await deleteRoutineFromStore(routine.id);
-    await refreshAll();
+    const state = await refreshAll();
+    await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
   };
 
   const handleToggleRoutineActive = async (routine) => {
     const updated = { ...routine, active: !routine.active };
     await upsertRoutine(updated);
-    const updatedRoutines = await refreshAll();
-    const savedRoutine = updatedRoutines.find((r) => r.id === routine.id);
+    const state = await refreshAll();
+    const savedRoutine = state.routines.find((r) => r.id === routine.id);
     for (const task of routine.tasks) {
       if (savedRoutine && savedRoutine.active) {
         await scheduleTaskNotifications(task, savedRoutine);
@@ -98,33 +115,38 @@ function App() {
         await cancelTaskNotifications(task);
       }
     }
+    await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
   };
 
   const handleToggleTaskActive = async (task) => {
     await upsertTask({ ...task, active: !task.active });
-    const updatedRoutines = await refreshAll();
-    const savedRoutine = updatedRoutines.find((r) => r.id === task.routineId);
+    const state = await refreshAll();
+    const savedRoutine = state.routines.find((r) => r.id === task.routineId);
     const savedTask = savedRoutine?.tasks.find((t) => t.id === task.id);
     if (savedTask?.active) {
       await scheduleTaskNotifications(savedTask, savedRoutine);
     } else {
       await cancelTaskNotifications(task);
     }
+    await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
   };
 
   const handleToggleComplete = async (task, done) => {
     const next = await setCompletion(task.id, todayKey(), done);
     setCompletions(next);
+    await syncDynamicNotifications(routines, taskVersionsMap, next);
   };
 
   const handleAddQuantity = async (task, delta) => {
     const next = await addToCompletion(task.id, todayKey(), delta);
     setCompletions(next);
+    await syncDynamicNotifications(routines, taskVersionsMap, next);
   };
 
   const handleSetQuantity = async (task, value) => {
     const next = await setCompletion(task.id, todayKey(), value);
     setCompletions(next);
+    await syncDynamicNotifications(routines, taskVersionsMap, next);
   };
 
   if (loading) {

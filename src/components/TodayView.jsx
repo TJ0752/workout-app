@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 import { getRoutineFraction, getTaskFraction, todayKey } from '../utils/date';
 import { getRoutineIcon } from '../utils/icons';
+import { quickAddAmountsFor } from '../utils/tasks';
 
 function isTaskDueToday(task, taskVersionsMap) {
   const versions = taskVersionsMap[task.id];
@@ -9,13 +10,41 @@ function isTaskDueToday(task, taskVersionsMap) {
   return getTaskFraction(versions, {}, new Date()) !== null;
 }
 
-function QuantityControl({ task, completions, onAddQuantity, onSetQuantity }) {
+function formatCountdown(timeStr, now) {
+  const [hour, minute] = timeStr.split(':').map(Number);
+  const due = new Date(now);
+  due.setHours(hour, minute, 0, 0);
+  const diffMin = Math.round((due - now) / 60000);
+
+  if (diffMin > 0) {
+    const hrs = Math.floor(diffMin / 60);
+    const mins = diffMin % 60;
+    return { text: hrs > 0 ? `in ${hrs}h ${mins}m` : `in ${mins}m`, overdue: false };
+  }
+  if (diffMin === 0) return { text: 'due now', overdue: false };
+  const overdueMin = -diffMin;
+  const hrs = Math.floor(overdueMin / 60);
+  const mins = overdueMin % 60;
+  return { text: hrs > 0 ? `${hrs}h ${mins}m overdue` : `${mins}m overdue`, overdue: true };
+}
+
+function CountdownLabel({ time, now, done, className = 'today-item-time' }) {
+  if (done) return <span className={className}>{time}</span>;
+  const { text, overdue } = formatCountdown(time, now);
+  return (
+    <span className={`${className} ${overdue ? 'overdue' : ''}`}>
+      {time} · {text}
+    </span>
+  );
+}
+
+function QuantityControl({ task, completions, onAddQuantity, onSetQuantity, now }) {
   const actual = completions[task.id]?.[todayKey()] || 0;
   const target = task.target || 0;
   const pct = target ? Math.min(100, Math.round((actual / target) * 100)) : 0;
   const isComplete = target > 0 && actual >= target;
   const isPartial = actual > 0 && !isComplete;
-  const quickAmounts = task.quickAdd?.length ? task.quickAdd : [5, 10];
+  const quickAmounts = quickAddAmountsFor(task);
 
   return (
     <div className="qty-row">
@@ -25,6 +54,7 @@ function QuantityControl({ task, completions, onAddQuantity, onSetQuantity }) {
           {actual} / {target} {task.unit || ''}
         </span>
       </div>
+      <CountdownLabel time={task.time} now={now} done={isComplete} />
       <div className="qty-track">
         <div className={`qty-fill ${isPartial ? 'partial' : ''}`} style={{ width: `${pct}%` }} />
       </div>
@@ -60,7 +90,13 @@ export default function TodayView({
   onSetQuantity,
 }) {
   const [collapsed, setCollapsed] = useState(() => new Set());
-  const today = new Date();
+  const [now, setNow] = useState(() => new Date());
+  const today = now;
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   const dueRoutines = routines
     .filter((routine) => routine.active)
@@ -112,6 +148,7 @@ export default function TodayView({
                       completions={completions}
                       onAddQuantity={onAddQuantity}
                       onSetQuantity={onSetQuantity}
+                      now={now}
                     />
                   </div>
                 </li>
@@ -126,7 +163,7 @@ export default function TodayView({
                     <RoutineIcon size={18} />
                   </span>
                   <span className="today-item-title">{routine.title}</span>
-                  <span className="today-item-time">{task.time}</span>
+                  <CountdownLabel time={task.time} now={now} done={done} />
                   <span className={`check-circle ${done ? 'done' : ''}`}>{done && <Check size={15} />}</span>
                 </label>
               </li>
@@ -171,6 +208,7 @@ export default function TodayView({
                             completions={completions}
                             onAddQuantity={onAddQuantity}
                             onSetQuantity={onSetQuantity}
+                            now={now}
                           />
                         </li>
                       );
@@ -182,7 +220,7 @@ export default function TodayView({
                         <span className="task-title" style={done ? { textDecoration: 'line-through', opacity: 0.5 } : undefined}>
                           {task.title}
                         </span>
-                        <span className="task-time">{task.time}</span>
+                        <CountdownLabel time={task.time} now={now} done={done} className="task-time" />
                         <button
                           type="button"
                           className={`check-circle sm ${done ? 'done' : ''}`}
