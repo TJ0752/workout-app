@@ -1,0 +1,33 @@
+apply plugin: 'com.android.library'
+apply plugin: 'org.jetbrains.kotlin.multiplatform'
+
+kotlin {
+    androidTarget {
+        compilations.all {
+            kotlinOptions.jvmTarget = "17"
+        }
+    }
+    sourceSets {
+        commonMain {}
+        commonTest {
+            dependencies {
+                implementation kotlin('test')
+            }
+        }
+        androidMain {
+            dependsOn(commonMain)
+        }
+    }
+}
+
+android {
+    namespace = "com.tharuka.routines.shared"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        minSdk = rootProject.ext.minSdkVersion
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
