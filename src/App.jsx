@@ -25,6 +25,8 @@ import {
   initNotifications,
   scheduleTaskNotifications,
   cancelTaskNotifications,
+  cancelRoutineGroupSummary,
+  updateRoutineGroupSummary,
   syncAllNotifications,
   syncDynamicNotifications,
   refreshTaskReminderVisibility,
@@ -126,6 +128,7 @@ function App() {
     for (const task of routine.tasks) {
       await cancelTaskNotifications(task);
     }
+    await cancelRoutineGroupSummary(routine.id);
     await deleteRoutineFromStore(routine.id);
     const state = await refreshAll();
     await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
@@ -143,6 +146,7 @@ function App() {
         await cancelTaskNotifications(task);
       }
     }
+    if (savedRoutine) await updateRoutineGroupSummary(savedRoutine);
     await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
   };
 
@@ -155,6 +159,7 @@ function App() {
       await scheduleTaskNotifications(savedTask, savedRoutine, state.completions);
     } else {
       await cancelTaskNotifications(task);
+      if (savedRoutine) await updateRoutineGroupSummary(savedRoutine);
     }
     await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
   };

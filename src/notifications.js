@@ -48,6 +48,14 @@ function snoozeIdFor(taskId) {
   return hashToInt(`${taskId}-snooze`);
 }
 
+// Offset clear of every other id range (extra reminders top out around
+// EXTRA_REMINDER_ID_BASE + 10_000_000ish) so group-summary ids never collide.
+const GROUP_SUMMARY_ID_BASE = 700000000;
+
+function groupSummaryIdFor(routineId) {
+  return GROUP_SUMMARY_ID_BASE + hashToInt(routineId);
+}
+
 function quantityActionTypeId(amounts) {
   return `task-qty-${amounts.join('-')}`;
 }
@@ -230,10 +238,64 @@ async function catchUpDueReminderIfNeeded(task, routine, completions) {
   }
 }
 
+/**
+ * A genuine Android group-summary notification (`groupSummary: true`,
+ * plugin support confirmed in LocalNotificationManager.java - not just
+ * cosmetic `group` tagging) for a multi-task routine, so its individual due
+ * reminders collapse into one expandable "N tasks" entry in the shade
+ * instead of appearing as separate top-level notifications. Recomputed
+ * every time any of the routine's tasks reschedule (see
+ * scheduleTaskNotifications) - cheap and idempotent, so it's simplest to
+ * just always call it rather than track every place that could change the
+ * routine's active-task count.
+ */
+export async function updateRoutineGroupSummary(routine) {
+  if (!Capacitor.isNativePlatform() || !routine) return;
+  const id = groupSummaryIdFor(routine.id);
+  const activeTaskCount = routine.tasks.filter((t) => t.active && t.days.length > 0).length;
+  // Only worth a group summary once there are 2+ *active* tasks to collapse -
+  // routine.tasks.length alone (used for the `group` tag on individual
+  // reminders) undercounts a routine that's mostly paused down to one task.
+  if (!routine.active || activeTaskCount <= 1) {
+    await cancelRoutineGroupSummary(routine.id);
+    return;
+  }
+  try {
+    await LocalNotifications.schedule({
+      notifications: [
+        {
+          id,
+          title: routine.title,
+          body: `${activeTaskCount} tasks`,
+          channelId: CHANNEL_ID,
+          group: `routine-${routine.id}`,
+          groupSummary: true,
+          autoCancel: true,
+          extra: { routineId: routine.id },
+        },
+      ],
+    });
+  } catch (err) {
+    console.warn('Failed to update routine group summary', err);
+  }
+}
+
+export async function cancelRoutineGroupSummary(routineId) {
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    await LocalNotifications.cancel({ notifications: [{ id: groupSummaryIdFor(routineId) }] });
+  } catch (err) {
+    console.warn('Failed to cancel routine group summary', err);
+  }
+}
+
 export async function scheduleTaskNotifications(task, routine, completions) {
   if (!Capacitor.isNativePlatform()) return;
   await cancelTaskNotifications(task);
-  if (!task.active || task.days.length === 0 || routine?.active === false) return;
+  if (!task.active || task.days.length === 0 || routine?.active === false) {
+    if (routine) await updateRoutineGroupSummary(routine);
+    return;
+  }
 
   const { title, body, actionTypeId, group, extra } = taskNotificationContent(task, routine);
 
@@ -288,6 +350,7 @@ export async function scheduleTaskNotifications(task, routine, completions) {
   }
 
   await catchUpDueReminderIfNeeded(task, routine, completions);
+  if (routine) await updateRoutineGroupSummary(routine);
 }
 
 export async function syncAllNotifications(routines, completions) {
@@ -356,11 +419,23 @@ function formatRoutineList(entries) {
   return entries.map((r) => r.routine.title).join(', ');
 }
 
+/** e.g. "Push-ups 30% · Water 60%" - each still-due routine's actual fraction, not just its name. */
+function formatRoutineProgress(entries) {
+  return entries.map((r) => `${r.routine.title} ${Math.round(r.fraction * 100)}%`).join(' · ');
+}
+
 /**
  * Refreshes the persistent "today at a glance" notification. Uses `ongoing`
  * (non-swipeable) instead of a live-ticking display, since the Android APIs
  * for a real live countdown/chronometer aren't exposed by this plugin - see
  * CLAUDE.md.
+ *
+ * Title shows the actual overall completion (average of every due routine's
+ * own fraction, itself an average of its due tasks' fractions - see
+ * getRoutineFraction), not a coarse done/not-done routine count: a routine
+ * sitting at 90% (e.g. 9/10 reps on a quantity task) reads as real progress
+ * here instead of counting identically to a routine at 0%. The body lists
+ * each still-due routine's own percentage for the same reason.
  */
 export async function updateSummaryNotification(routines, taskVersionsMap, completions) {
   if (!Capacitor.isNativePlatform()) return;
@@ -370,19 +445,17 @@ export async function updateSummaryNotification(routines, taskVersionsMap, compl
     await LocalNotifications.cancel({ notifications: [{ id: SUMMARY_NOTIFICATION_ID }] });
     return;
   }
-  const doneCount = due.filter((r) => r.fraction === 1).length;
+  const overallFraction = due.reduce((sum, r) => sum + r.fraction, 0) / due.length;
+  const overallPct = Math.round(overallFraction * 100);
   const remaining = due.filter((r) => r.fraction < 1);
-  const body =
-    remaining.length === 0
-      ? 'All done for today 🎉'
-      : `Still due: ${formatRoutineList(remaining)}`;
+  const body = remaining.length === 0 ? 'All done for today 🎉' : formatRoutineProgress(remaining);
 
   try {
     await LocalNotifications.schedule({
       notifications: [
         {
           id: SUMMARY_NOTIFICATION_ID,
-          title: `Today: ${doneCount}/${due.length} completed`,
+          title: `Today: ${overallPct}% complete`,
           body,
           channelId: SUMMARY_CHANNEL_ID,
           ongoing: remaining.length > 0,
