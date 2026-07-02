@@ -17,10 +17,17 @@ npm run dev      # Vite dev server — fastest way to iterate on UI (notificatio
                   # works in the browser)
 npm run build     # production web build (outputs to dist/)
 npm run lint      # eslint . — run this after any change, it's fast and catches real issues
+npm test          # vitest run — unit tests for the pure logic layer (src/utils/*.test.js)
+                  # and mocked-Capacitor notification behavior (src/__tests__/notifications.test.js)
 ```
 
-There is no test suite (no `npm test`). Verify changes by running the app in the browser
-with Playwright (see "Testing changes" below) rather than assuming correctness.
+The test suite covers the pure business-logic layer only (fraction math, versioning cutover,
+streaks, workout stats, and notification scheduling decisions via `vi.mock`'d
+`@capacitor/core`/`@capacitor/local-notifications`) — it's a regression safety net for logic
+that used to be verified only by hand. It does not cover React components or real native
+Android behavior (actual notification flags, WebView compatibility gaps like
+`crypto.randomUUID`). For those, still run the app in the browser with Playwright (see
+"Testing changes" below) or use the real-device emulator harness further down.
 
 ### Android build
 
