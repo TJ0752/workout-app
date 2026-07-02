@@ -36,9 +36,6 @@ jobs:
       - name: Install web dependencies
         run: npm ci
 
-      - name: Install CDP client (no browser download - connects to the on-device WebView, not a local one)
-        run: npm install --no-save playwright-core
-
       - name: Build web app
         run: npm run build
 
