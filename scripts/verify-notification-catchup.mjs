@@ -268,23 +268,24 @@ async function main() {
   }
   console.log('PASS: ongoing due reminder present after initial save.');
 
-  console.log('Reloading the WebView to simulate reopening the app (re-triggers syncAllNotifications)...');
-  await page.evaluate(`window.location.reload(); true;`).catch(() => {});
-  page.close();
-  await sleep(1500);
+  // Re-trigger a full syncAllNotifications the same way the real bug actually
+  // happens: saving ANY routine re-syncs every routine's notifications (see
+  // handleSaveRoutine in App.jsx) - not by reloading the WebView. A raw
+  // window.location.reload() doesn't cleanly simulate "reopen the app" for
+  // this Capacitor SQLite plugin anyway (its native-side connection isn't
+  // tied to the WebView's JS lifecycle, so a JS reload while the native
+  // Activity stays alive throws "CreateConnection: Connection routines
+  // already exists" - a real app reopen goes through the native Activity
+  // lifecycle instead). Editing and re-saving the same routine without
+  // changing anything re-runs the exact resync path without touching SQLite
+  // connection state at all.
+  console.log('Re-saving the routine (no changes) to re-trigger syncAllNotifications, as a real routine edit would...');
+  await mustEval(`window.__test.clickByText('button', 'Edit')`, 'click Edit on the saved routine');
+  await sleep(300);
+  await mustEval(`window.__test.clickByText('button[type="submit"]', 'Save changes')`, 'submit Save changes');
+  await sleep(2500); // let handleSaveRoutine's syncAllNotifications finish
 
-  // The reload tears down the old CDP session's page context - reconnect fresh.
-  const listRes2 = await fetch('http://localhost:9222/json');
-  const targets2 = await listRes2.json();
-  const target2 = targets2.find((t) => t.type === 'page') || targets2[0];
-  const page2 = new CdpPage(target2.webSocketDebuggerUrl);
-  await page2.connect();
-  await page2.evaluate(JS_HELPERS);
-  const appReady2 = await waitFor(page2, `window.__test.ready('.app-tabbar')`);
-  if (!appReady2) fail('App did not re-render .app-tabbar after reload.');
-  await sleep(3000); // let the mount effect's syncAllNotifications finish
-
-  console.log('--- dumpsys notification after reload/resync ---');
+  console.log('--- dumpsys notification after re-save/resync ---');
   const dump2 = dumpNotifications();
   const records2 = findAppRecords(dump2);
   console.log(records2.map((r) => ({ flags: r.flags.toString(16), ongoing: r.ongoing, channel: r.channel })));
@@ -298,7 +299,7 @@ async function main() {
   }
   console.log('PASS: ongoing due reminder survived a resync. Catch-up fix confirmed on a real device.');
 
-  page2.close();
+  page.close();
 }
 
 main().catch((err) => {
