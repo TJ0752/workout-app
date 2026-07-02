@@ -16,6 +16,7 @@
 
 .app-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.7rem;
   padding: 1.4rem 1.2rem 1rem;
@@ -25,6 +26,86 @@
   width: 34px;
   height: 34px;
   min-width: 34px;
+}
+
+.update-check-btn {
+  margin-left: auto;
+  position: relative;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--card-border);
+  background: var(--card);
+  color: var(--text-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.update-check-btn .spin {
+  animation: update-spin 1s linear infinite;
+}
+
+@keyframes update-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.update-dot {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--bad);
+  border: 1.5px solid var(--card);
+}
+
+.update-banner {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+  padding: 0.55rem 0.8rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 0.82em;
+}
+
+.update-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.update-banner-actions button {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.85em;
+}
+
+.update-banner-dismiss {
+  background: transparent;
+  border: none;
+  padding: 0.2rem;
+  color: var(--text-soft);
+}
+
+.update-toast {
+  flex-basis: 100%;
+  margin-top: 0.4rem;
+  font-size: 0.75em;
+  color: var(--text-soft);
+}
+
+.update-toast.error {
+  color: var(--bad);
 }
 
 .app-main {

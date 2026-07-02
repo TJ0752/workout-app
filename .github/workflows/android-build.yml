@@ -5,6 +5,9 @@ on:
     branches: ['**']
   workflow_dispatch: {}
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -31,10 +34,28 @@ jobs:
 
       - name: Build debug APK
         working-directory: android
-        run: ./gradlew assembleDebug
+        # versionCode = the Actions run number (always increasing, unique per
+        # build) so the in-app "Check for updates" button (src/utils/updateCheck.js)
+        # can compare the installed build against the latest GitHub Release.
+        run: ./gradlew assembleDebug -PappVersionCode=${{ github.run_number }} -PappVersionName=1.0.${{ github.run_number }}
 
       - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
           name: daily-routines-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Publish latest build as a GitHub Release
+        # Only the main dev branch counts as a "release" - other branches
+        # still build/upload as an artifact above, but shouldn't overwrite
+        # the release the in-app update checker points at.
+        if: github.ref == 'refs/heads/claude/android-routines-app-mvp-gjl4kh'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-android
+          name: "Latest build (run ${{ github.run_number }})"
+          body: |
+            Automatically published debug build from commit ${{ github.sha }}.
+            versionCode: ${{ github.run_number }}
+          prerelease: true
+          files: android/app/build/outputs/apk/debug/app-debug.apk

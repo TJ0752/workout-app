@@ -6,6 +6,7 @@ import RoutinesView from './components/RoutinesView';
 import DashboardView from './components/DashboardView';
 import HistoryView from './components/HistoryView';
 import Logo from './components/Logo';
+import UpdateChecker from './components/UpdateChecker';
 import {
   getRoutines,
   upsertRoutine,
@@ -183,6 +184,7 @@ function App() {
           <Logo size={20} />
         </span>
         <h1>Daily Routines</h1>
+        <UpdateChecker />
       </header>
 
       <main className="app-main">
