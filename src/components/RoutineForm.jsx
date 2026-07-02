@@ -20,8 +20,22 @@ function makeTask(days) {
     target: null,
     unit: null,
     quickAdd: null,
+    exercises: [],
     active: true,
     createdAt: new Date().toISOString(),
+  };
+}
+
+function makeExercise() {
+  return {
+    id: crypto.randomUUID(),
+    name: '',
+    targetSets: 3,
+    targetReps: 10,
+    targetWeight: null,
+    targetDurationSeconds: null,
+    unit: 'reps',
+    restSeconds: null,
   };
 }
 
@@ -86,6 +100,140 @@ function ReminderTimesEditor({ task, onChange }) {
   );
 }
 
+function ExerciseListEditor({ task, onChange }) {
+  const exercises = task.exercises || [];
+
+  const updateExercise = (id, patch) => {
+    onChange({ ...task, exercises: exercises.map((ex) => (ex.id === id ? { ...ex, ...patch } : ex)) });
+  };
+
+  const addExercise = () => {
+    onChange({ ...task, exercises: [...exercises, makeExercise()] });
+  };
+
+  const removeExercise = (id) => {
+    onChange({ ...task, exercises: exercises.filter((ex) => ex.id !== id) });
+  };
+
+  return (
+    <div>
+      <span className="field-label">Exercises</span>
+      <div className="task-edit-list">
+        {exercises.map((ex) => (
+          <div className="form-card" key={ex.id}>
+            <div className="inline-fields">
+              <label>
+                Exercise name
+                <input
+                  type="text"
+                  placeholder="e.g. Push-ups"
+                  value={ex.name}
+                  onChange={(e) => updateExercise(ex.id, { name: e.target.value })}
+                />
+              </label>
+              <button type="button" className="task-edit-icon-btn" onClick={() => removeExercise(ex.id)}>
+                Delete
+              </button>
+            </div>
+            <div className="type-toggle">
+              <button
+                type="button"
+                className={ex.unit !== 'seconds' ? 'active' : ''}
+                onClick={() =>
+                  updateExercise(ex.id, { unit: 'reps', targetDurationSeconds: null, targetReps: ex.targetReps ?? 10 })
+                }
+              >
+                Reps
+              </button>
+              <button
+                type="button"
+                className={ex.unit === 'seconds' ? 'active' : ''}
+                onClick={() =>
+                  updateExercise(ex.id, {
+                    unit: 'seconds',
+                    targetReps: null,
+                    targetDurationSeconds: ex.targetDurationSeconds ?? 30,
+                  })
+                }
+              >
+                Duration
+              </button>
+            </div>
+            <div className="inline-fields">
+              <label>
+                Sets
+                <input
+                  type="number"
+                  min="1"
+                  value={ex.targetSets ?? ''}
+                  onChange={(e) =>
+                    updateExercise(ex.id, { targetSets: e.target.value ? Number(e.target.value) : null })
+                  }
+                />
+              </label>
+              {ex.unit === 'seconds' ? (
+                <label>
+                  Duration/set (sec)
+                  <input
+                    type="number"
+                    min="1"
+                    value={ex.targetDurationSeconds ?? ''}
+                    onChange={(e) =>
+                      updateExercise(ex.id, {
+                        targetDurationSeconds: e.target.value ? Number(e.target.value) : null,
+                      })
+                    }
+                  />
+                </label>
+              ) : (
+                <label>
+                  Reps/set
+                  <input
+                    type="number"
+                    min="1"
+                    value={ex.targetReps ?? ''}
+                    onChange={(e) =>
+                      updateExercise(ex.id, { targetReps: e.target.value ? Number(e.target.value) : null })
+                    }
+                  />
+                </label>
+              )}
+            </div>
+            <div className="inline-fields">
+              <label>
+                Weight (optional)
+                <input
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  value={ex.targetWeight ?? ''}
+                  onChange={(e) =>
+                    updateExercise(ex.id, { targetWeight: e.target.value ? Number(e.target.value) : null })
+                  }
+                />
+              </label>
+              <label>
+                Rest between sets, sec (optional)
+                <input
+                  type="number"
+                  min="0"
+                  value={ex.restSeconds ?? ''}
+                  onChange={(e) =>
+                    updateExercise(ex.id, { restSeconds: e.target.value ? Number(e.target.value) : null })
+                  }
+                />
+              </label>
+            </div>
+          </div>
+        ))}
+      </div>
+      <button type="button" className="add-task-btn" onClick={addExercise}>
+        + Add exercise
+      </button>
+    </div>
+  );
+}
+
 function DayPicker({ days, onChange }) {
   return (
     <div className="day-buttons">
@@ -141,7 +289,7 @@ function TaskFields({ task, onChange, showTitle }) {
         <div className="type-toggle">
           <button
             type="button"
-            className={task.completionType !== 'quantity' ? 'active' : ''}
+            className={task.completionType === 'boolean' ? 'active' : ''}
             onClick={() => onChange({ ...task, completionType: 'boolean', target: null, unit: null, quickAdd: null })}
           >
             Yes / No
@@ -152,6 +300,22 @@ function TaskFields({ task, onChange, showTitle }) {
             onClick={() => onChange({ ...task, completionType: 'quantity', target: task.target ?? 10 })}
           >
             Quantity target
+          </button>
+          <button
+            type="button"
+            className={task.completionType === 'workout' ? 'active' : ''}
+            onClick={() =>
+              onChange({
+                ...task,
+                completionType: 'workout',
+                target: null,
+                unit: null,
+                quickAdd: null,
+                exercises: task.exercises?.length ? task.exercises : [],
+              })
+            }
+          >
+            Workout
           </button>
         </div>
       </div>
@@ -180,6 +344,7 @@ function TaskFields({ task, onChange, showTitle }) {
           <QuickAddInput task={task} onChange={onChange} />
         </>
       )}
+      {task.completionType === 'workout' && <ExerciseListEditor task={task} onChange={onChange} />}
     </>
   );
 }
@@ -241,7 +406,12 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
 
   const hasUnnamedTask = !isSimple && tasks.some((t) => !t.title.trim());
   const hasTaskWithNoDays = tasks.some((t) => t.days.length === 0);
-  const invalidTask = hasUnnamedTask || hasTaskWithNoDays;
+  const hasInvalidWorkout = tasks.some(
+    (t) =>
+      t.completionType === 'workout' &&
+      (!t.exercises?.length || t.exercises.some((ex) => !ex.name.trim()))
+  );
+  const invalidTask = hasUnnamedTask || hasTaskWithNoDays || hasInvalidWorkout;
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -251,6 +421,8 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
       ...t,
       title: isSimple ? routine.title.trim() : t.title.trim(),
       routineId: routine.id,
+      exercises:
+        t.completionType === 'workout' ? t.exercises.map((ex) => ({ ...ex, name: ex.name.trim() })) : [],
     }));
 
     onSave({
@@ -331,9 +503,11 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
                     <div className="name">{task.title || '(untitled task)'}</div>
                     <div className="meta">
                       {task.time} · {task.days.length === 7 ? 'Every day' : `${task.days.length}/week`} ·{' '}
-                      {task.completionType === 'quantity'
-                        ? `Target ${task.target ?? '?'} ${task.unit || ''}`
-                        : 'Yes/No'}
+                      {task.completionType === 'quantity' &&
+                        `Target ${task.target ?? '?'} ${task.unit || ''}`}
+                      {task.completionType === 'workout' &&
+                        `${task.exercises?.length ?? 0} exercise${task.exercises?.length === 1 ? '' : 's'}`}
+                      {task.completionType === 'boolean' && 'Yes/No'}
                       {!task.active ? ' · Paused' : ''}
                     </div>
                   </div>
@@ -362,6 +536,9 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
 
       {hasUnnamedTask && <p className="form-error">Every task needs a name.</p>}
       {hasTaskWithNoDays && <p className="form-error">Every task needs at least one day selected.</p>}
+      {hasInvalidWorkout && (
+        <p className="form-error">Every workout task needs at least one named exercise.</p>
+      )}
 
       <label>
         Notes (optional)
