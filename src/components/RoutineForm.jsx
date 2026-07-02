@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { parseQuickAddText, MAX_EXTRA_REMINDERS } from '../utils/tasks';
 import { DAY_LABELS } from '../utils/date';
 import { ICON_OPTIONS, suggestIconId } from '../utils/icons';
+import { generateId } from '../utils/id';
 import ActivityLogView from './ActivityLogView';
 
 function toggleDay(days, day) {
@@ -10,7 +11,7 @@ function toggleDay(days, day) {
 
 function makeTask(days) {
   return {
-    id: crypto.randomUUID(),
+    id: generateId(),
     title: '',
     time: '08:00',
     windowStart: '00:00',
@@ -28,7 +29,7 @@ function makeTask(days) {
 
 function makeExercise() {
   return {
-    id: crypto.randomUUID(),
+    id: generateId(),
     name: '',
     targetSets: 3,
     targetReps: 10,
@@ -362,7 +363,7 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
           active: initial.active,
         }
       : {
-          id: crypto.randomUUID(),
+          id: generateId(),
           title: '',
           icon: null,
           notes: '',

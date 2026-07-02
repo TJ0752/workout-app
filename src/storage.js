@@ -1,5 +1,6 @@
 import { Preferences } from '@capacitor/preferences';
 import { getDb, persist } from './db';
+import { generateId } from './utils/id';
 
 const LEGACY_ROUTINES_KEY = 'routines';
 const LEGACY_COMPLETIONS_KEY = 'completions';
@@ -56,7 +57,7 @@ async function insertRoutineVersion(db, routineId, fields, effectiveFrom, change
        (id, routine_id, effective_from, effective_to, title, icon, notes, active, default_days, change_type, changed_fields)
      VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      crypto.randomUUID(),
+      generateId(),
       routineId,
       effectiveFrom,
       fields.title,
@@ -76,7 +77,7 @@ async function insertTaskVersion(db, taskId, routineId, fields, effectiveFrom, c
        (id, task_id, routine_id, effective_from, effective_to, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, exercises, active, change_type, changed_fields)
      VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      crypto.randomUUID(),
+      generateId(),
       taskId,
       routineId,
       effectiveFrom,
@@ -469,7 +470,7 @@ export async function logWorkoutSet(taskId, dateKey, exercise, setIndex, values)
     await db.run(
       `INSERT INTO workout_logs (id, task_id, date, exercise_id, exercise_name, set_index, reps, weight, duration_seconds, completed, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [crypto.randomUUID(), taskId, dateKey, exercise.id, exercise.name, setIndex, reps, weight, durationSeconds, completed ? 1 : 0, now]
+      [generateId(), taskId, dateKey, exercise.id, exercise.name, setIndex, reps, weight, durationSeconds, completed ? 1 : 0, now]
     );
   }
 
