@@ -1,19 +1,20 @@
 :root {
-  --bg: #f5f9f8;
+  --bg: #f7ecd2;
   --card: #ffffff;
-  --card-border: rgba(10, 70, 80, 0.1);
-  --text: #122225;
-  --text-soft: #7c8f92;
-  --accent: #0e8f8a;
-  --accent-soft: rgba(14, 143, 138, 0.15);
-  --good: #0e8f8a;
-  --warn: #e8862f;
-  --warn-soft: rgba(232, 134, 47, 0.17);
-  --bad: #e2503f;
-  --bad-soft: rgba(226, 80, 63, 0.15);
+  --card-border: rgba(130, 95, 15, 0.16);
+  --text: #241d10;
+  --text-soft: #8c7f57;
+  --accent: #0a9764;
+  --accent-soft: rgba(10, 151, 100, 0.15);
+  --good: #0a9764;
+  --warn: #e0932a;
+  --warn-soft: rgba(224, 147, 42, 0.17);
+  --bad: #d54b3a;
+  --bad-soft: rgba(213, 75, 58, 0.15);
   --radius: 18px;
   --radius-sm: 12px;
-  --shadow: 0 1px 2px rgba(18, 34, 37, 0.06), 0 1px 8px rgba(18, 34, 37, 0.05);
+  --shadow: 0 2px 10px rgba(130, 95, 15, 0.08);
+  --font: Georgia, 'Iowan Old Style', 'Palatino Linotype', serif;
   --font: Georgia, 'Iowan Old Style', 'Palatino Linotype', serif;
 
   font-family: var(--font);

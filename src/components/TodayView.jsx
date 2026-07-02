@@ -63,9 +63,20 @@ function DateNav({ date, onChange }) {
 
   return (
     <div className="date-nav">
-      <button type="button" className="date-nav-arrow" onClick={() => shiftDay(-1)} aria-label="Previous day">
-        <ChevronLeft size={18} />
-      </button>
+      <div className="date-nav-arrows">
+        <button type="button" className="date-nav-arrow" onClick={() => shiftDay(-1)} aria-label="Previous day">
+          <ChevronLeft size={18} />
+        </button>
+        <button
+          type="button"
+          className="date-nav-arrow"
+          onClick={() => shiftDay(1)}
+          disabled={isToday}
+          aria-label="Next day"
+        >
+          <ChevronRight size={18} />
+        </button>
+      </div>
       <label className="date-nav-label">
         {label}
         <input
@@ -79,15 +90,6 @@ function DateNav({ date, onChange }) {
           }}
         />
       </label>
-      <button
-        type="button"
-        className="date-nav-arrow"
-        onClick={() => shiftDay(1)}
-        disabled={isToday}
-        aria-label="Next day"
-      >
-        <ChevronRight size={18} />
-      </button>
     </div>
   );
 }
