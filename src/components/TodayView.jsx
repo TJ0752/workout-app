@@ -10,10 +10,19 @@ function isTaskDueToday(task, taskVersionsMap) {
   return getTaskFraction(versions, {}, new Date()) !== null;
 }
 
-function formatCountdown(timeStr, now) {
+function atTime(now, timeStr) {
   const [hour, minute] = timeStr.split(':').map(Number);
-  const due = new Date(now);
-  due.setHours(hour, minute, 0, 0);
+  const d = new Date(now);
+  d.setHours(hour, minute, 0, 0);
+  return d;
+}
+
+function formatCountdown(timeStr, now, windowStart) {
+  if (windowStart && windowStart !== '00:00' && now < atTime(now, windowStart)) {
+    return { text: `starts ${windowStart}`, overdue: false, notStarted: true };
+  }
+
+  const due = atTime(now, timeStr);
   const diffMin = Math.round((due - now) / 60000);
 
   if (diffMin > 0) {
@@ -28,9 +37,9 @@ function formatCountdown(timeStr, now) {
   return { text: hrs > 0 ? `${hrs}h ${mins}m overdue` : `${mins}m overdue`, overdue: true };
 }
 
-function CountdownLabel({ time, now, done, className = 'today-item-time' }) {
+function CountdownLabel({ time, windowStart, now, done, className = 'today-item-time' }) {
   if (done) return <span className={className}>{time}</span>;
-  const { text, overdue } = formatCountdown(time, now);
+  const { text, overdue } = formatCountdown(time, now, windowStart);
   return (
     <span className={`${className} ${overdue ? 'overdue' : ''}`}>
       {time} · {text}
@@ -54,7 +63,7 @@ function QuantityControl({ task, completions, onAddQuantity, onSetQuantity, now 
           {actual} / {target} {task.unit || ''}
         </span>
       </div>
-      <CountdownLabel time={task.time} now={now} done={isComplete} />
+      <CountdownLabel time={task.time} windowStart={task.windowStart} now={now} done={isComplete} />
       <div className="qty-track">
         <div className={`qty-fill ${isPartial ? 'partial' : ''}`} style={{ width: `${pct}%` }} />
       </div>
@@ -163,7 +172,7 @@ export default function TodayView({
                     <RoutineIcon size={18} />
                   </span>
                   <span className="today-item-title">{routine.title}</span>
-                  <CountdownLabel time={task.time} now={now} done={done} />
+                  <CountdownLabel time={task.time} windowStart={task.windowStart} now={now} done={done} />
                   <span className={`check-circle ${done ? 'done' : ''}`}>{done && <Check size={15} />}</span>
                 </label>
               </li>
@@ -220,7 +229,7 @@ export default function TodayView({
                         <span className="task-title" style={done ? { textDecoration: 'line-through', opacity: 0.5 } : undefined}>
                           {task.title}
                         </span>
-                        <CountdownLabel time={task.time} now={now} done={done} className="task-time" />
+                        <CountdownLabel time={task.time} windowStart={task.windowStart} now={now} done={done} className="task-time" />
                         <button
                           type="button"
                           className={`check-circle sm ${done ? 'done' : ''}`}

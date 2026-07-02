@@ -576,6 +576,21 @@
   min-width: 0;
 }
 
+.reminder-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+.reminder-row input[type='time'] {
+  flex: 1;
+  min-width: 0;
+}
+
+.reminder-row button {
+  flex-shrink: 0;
+}
+
 .type-toggle {
   display: flex;
   background: var(--bg);

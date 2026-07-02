@@ -11,6 +11,8 @@ function rowToTask(row) {
     routineId: row.routine_id,
     title: row.title,
     time: row.time,
+    windowStart: row.window_start || '00:00',
+    reminderTimes: row.reminder_times ? JSON.parse(row.reminder_times) : [],
     days: JSON.parse(row.days),
     completionType: row.completion_type,
     target: row.target,
@@ -70,8 +72,8 @@ async function insertRoutineVersion(db, routineId, fields, effectiveFrom, change
 async function insertTaskVersion(db, taskId, routineId, fields, effectiveFrom, changeType, changedFields) {
   await db.run(
     `INSERT INTO task_versions
-       (id, task_id, routine_id, effective_from, effective_to, title, time, days, completion_type, target, unit, quick_add, active, change_type, changed_fields)
-     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, task_id, routine_id, effective_from, effective_to, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, active, change_type, changed_fields)
+     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       crypto.randomUUID(),
       taskId,
@@ -79,6 +81,8 @@ async function insertTaskVersion(db, taskId, routineId, fields, effectiveFrom, c
       effectiveFrom,
       fields.title,
       fields.time,
+      fields.window_start,
+      fields.reminder_times,
       fields.days,
       fields.completion_type,
       fields.target,
@@ -106,6 +110,8 @@ function taskFieldsOf(task) {
   return {
     title: task.title,
     time: task.time,
+    window_start: task.windowStart || '00:00',
+    reminder_times: JSON.stringify(task.reminderTimes?.length ? task.reminderTimes : []),
     days: JSON.stringify(task.days || []),
     completion_type: task.completionType || 'boolean',
     target: isQuantity ? task.target ?? null : null,
@@ -144,6 +150,8 @@ async function migrateFromPreferencesOnce(db) {
       const taskFields = {
         title: r.title,
         time: r.time,
+        window_start: '00:00',
+        reminder_times: '[]',
         days: JSON.stringify(r.days || []),
         completion_type: 'boolean',
         target: null,
@@ -152,9 +160,9 @@ async function migrateFromPreferencesOnce(db) {
         active: r.active ? 1 : 0,
       };
       await db.run(
-        `INSERT OR REPLACE INTO tasks (id, routine_id, title, time, days, completion_type, target, unit, quick_add, active, deleted, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-        [taskId, r.id, taskFields.title, taskFields.time, taskFields.days, taskFields.completion_type, taskFields.target, taskFields.unit, taskFields.quick_add, taskFields.active, r.createdAt]
+        `INSERT OR REPLACE INTO tasks (id, routine_id, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, active, deleted, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+        [taskId, r.id, taskFields.title, taskFields.time, taskFields.window_start, taskFields.reminder_times, taskFields.days, taskFields.completion_type, taskFields.target, taskFields.unit, taskFields.quick_add, taskFields.active, r.createdAt]
       );
       await insertTaskVersion(db, taskId, r.id, taskFields, r.createdAt, 'migrated', []);
 
@@ -270,13 +278,15 @@ export async function upsertTask(task) {
 
   if (!existing) {
     await db.run(
-      `INSERT INTO tasks (id, routine_id, title, time, days, completion_type, target, unit, quick_add, active, deleted, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+      `INSERT INTO tasks (id, routine_id, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, active, deleted, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
       [
         task.id,
         task.routineId,
         fields.title,
         fields.time,
+        fields.window_start,
+        fields.reminder_times,
         fields.days,
         fields.completion_type,
         fields.target,
@@ -291,10 +301,12 @@ export async function upsertTask(task) {
     const changed = diffRowFields(existing, fields);
     if (changed.length > 0) {
       await db.run(
-        `UPDATE tasks SET title=?, time=?, days=?, completion_type=?, target=?, unit=?, quick_add=?, active=? WHERE id=?`,
+        `UPDATE tasks SET title=?, time=?, window_start=?, reminder_times=?, days=?, completion_type=?, target=?, unit=?, quick_add=?, active=? WHERE id=?`,
         [
           fields.title,
           fields.time,
+          fields.window_start,
+          fields.reminder_times,
           fields.days,
           fields.completion_type,
           fields.target,

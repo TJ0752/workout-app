@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { parseQuickAddText } from '../utils/tasks';
+import { parseQuickAddText, MAX_EXTRA_REMINDERS } from '../utils/tasks';
 import { DAY_LABELS } from '../utils/date';
 import { ICON_OPTIONS, suggestIconId } from '../utils/icons';
 import ActivityLogView from './ActivityLogView';
@@ -13,6 +13,8 @@ function makeTask(days) {
     id: crypto.randomUUID(),
     title: '',
     time: '08:00',
+    windowStart: '00:00',
+    reminderTimes: [],
     days: [...days],
     completionType: 'boolean',
     target: null,
@@ -43,6 +45,44 @@ function QuickAddInput({ task, onChange }) {
         onChange={(e) => handleChange(e.target.value)}
       />
     </label>
+  );
+}
+
+function ReminderTimesEditor({ task, onChange }) {
+  const [draft, setDraft] = useState('12:00');
+  const times = task.reminderTimes || [];
+  const atLimit = times.length >= MAX_EXTRA_REMINDERS;
+
+  const addTime = () => {
+    if (!draft || atLimit || times.includes(draft) || draft === task.time) return;
+    onChange({ ...task, reminderTimes: [...times, draft].sort() });
+  };
+
+  const removeTime = (t) => {
+    onChange({ ...task, reminderTimes: times.filter((x) => x !== t) });
+  };
+
+  return (
+    <div>
+      <span className="field-label">Extra reminders (optional)</span>
+      {times.length > 0 && (
+        <div className="day-buttons">
+          {times.map((t) => (
+            <button type="button" key={t} className="day-chip selected" onClick={() => removeTime(t)} title="Remove">
+              {t} ×
+            </button>
+          ))}
+        </div>
+      )}
+      {!atLimit && (
+        <div className="reminder-row">
+          <input type="time" value={draft} onChange={(e) => setDraft(e.target.value)} />
+          <button type="button" onClick={addTime}>
+            + Add reminder
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -77,10 +117,21 @@ function TaskFields({ task, onChange, showTitle }) {
           />
         </label>
       )}
-      <label>
-        Time
-        <input type="time" value={task.time} onChange={(e) => onChange({ ...task, time: e.target.value })} />
-      </label>
+      <div className="inline-fields">
+        <label>
+          Starts at
+          <input
+            type="time"
+            value={task.windowStart ?? '00:00'}
+            onChange={(e) => onChange({ ...task, windowStart: e.target.value })}
+          />
+        </label>
+        <label>
+          Due by
+          <input type="time" value={task.time} onChange={(e) => onChange({ ...task, time: e.target.value })} />
+        </label>
+      </div>
+      <ReminderTimesEditor task={task} onChange={onChange} />
       <div>
         <span className="field-label">Repeat on</span>
         <DayPicker days={task.days} onChange={(days) => onChange({ ...task, days })} />

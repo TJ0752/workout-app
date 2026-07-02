@@ -1,7 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { calcRoutineStreak, getRoutineFraction } from './utils/date';
-import { quickAddAmountsFor } from './utils/tasks';
+import { quickAddAmountsFor, isTaskDoneToday, MAX_EXTRA_REMINDERS } from './utils/tasks';
 
 const CHANNEL_ID = 'routine-reminders';
 const DIGEST_CHANNEL_ID = 'daily-digest';
@@ -30,6 +30,18 @@ function hashToInt(str) {
 
 function notificationIdFor(taskId, weekday) {
   return hashToInt(taskId) * 10 + weekday;
+}
+
+// Extra reminder ids are keyed by (task, weekday, slot) rather than the
+// reminder's actual time, so cancelTaskNotifications can always sweep every
+// slot that could ever have been scheduled - even after the user removes or
+// changes a time and we no longer know its old value. Offset well clear of
+// notificationIdFor's range so extra reminders can never collide with a due
+// reminder id.
+const EXTRA_REMINDER_ID_BASE = 500000000;
+
+function extraReminderIdFor(taskId, weekday, slot) {
+  return EXTRA_REMINDER_ID_BASE + notificationIdFor(taskId, weekday) * 10 + slot;
 }
 
 function snoozeIdFor(taskId) {
@@ -123,9 +135,13 @@ export async function registerNotificationActionTypes(routines) {
 
 export async function cancelTaskNotifications(task) {
   if (!Capacitor.isNativePlatform()) return;
-  const ids = [0, 1, 2, 3, 4, 5, 6]
-    .map((day) => ({ id: notificationIdFor(task.id, day) }))
-    .concat([{ id: snoozeIdFor(task.id) }]);
+  const ids = [{ id: snoozeIdFor(task.id) }];
+  for (const day of [0, 1, 2, 3, 4, 5, 6]) {
+    ids.push({ id: notificationIdFor(task.id, day) });
+    for (let slot = 0; slot < MAX_EXTRA_REMINDERS; slot++) {
+      ids.push({ id: extraReminderIdFor(task.id, day, slot) });
+    }
+  }
   try {
     await LocalNotifications.cancel({ notifications: ids });
   } catch (err) {
@@ -133,34 +149,90 @@ export async function cancelTaskNotifications(task) {
   }
 }
 
+/**
+ * Dismisses whatever reminder(s) for this task are currently showing in the
+ * shade, for today only - used once a task is marked done so the "stays open
+ * while pending" notification (see scheduleTaskNotifications) actually goes
+ * away, without touching the underlying recurring schedule for future days.
+ */
+export async function dismissTaskReminders(task) {
+  if (!Capacitor.isNativePlatform()) return;
+  const today = new Date().getDay();
+  const ids = [{ id: notificationIdFor(task.id, today) }];
+  for (let slot = 0; slot < MAX_EXTRA_REMINDERS; slot++) {
+    ids.push({ id: extraReminderIdFor(task.id, today, slot) });
+  }
+  try {
+    await LocalNotifications.removeDeliveredNotifications({ notifications: ids });
+  } catch (err) {
+    console.warn('Failed to dismiss task reminders', err);
+  }
+}
+
+/** Call after any completion change so a just-completed task's pinned reminder clears immediately. */
+export async function refreshTaskReminderVisibility(task, completions) {
+  if (!Capacitor.isNativePlatform() || !isTaskDoneToday(task, completions)) return;
+  await dismissTaskReminders(task);
+}
+
 export async function scheduleTaskNotifications(task, routine) {
   if (!Capacitor.isNativePlatform()) return;
   await cancelTaskNotifications(task);
   if (!task.active || task.days.length === 0 || routine?.active === false) return;
 
-  const [hour, minute] = task.time.split(':').map(Number);
   const title = routine && routine.title !== task.title ? `${routine.title} · ${task.title}` : task.title;
   const body = (routine && routine.notes) || 'Time to complete your task';
   const actionTypeId =
     task.completionType === 'quantity' ? quantityActionTypeId(quickAddAmountsFor(task)) : BOOLEAN_ACTION_TYPE;
   const group = routine && routine.tasks.length > 1 ? `routine-${routine.id}` : undefined;
+  const extra = { taskId: task.id, routineId: routine?.id };
 
-  const notifications = task.days.map((day) => ({
+  // The due-by reminder is the one that stays pinned (`ongoing`) until the
+  // task is marked done - see dismissTaskReminders. Extra reminder times are
+  // normal, dismissible nudges leading up to it; they get their own ids
+  // (extraReminderIdFor) rather than sharing this one, since Android's
+  // AlarmManager treats two alarms scheduled under the same id as the same
+  // alarm and the later one cancels the earlier before it can ever fire.
+  const [hour, minute] = task.time.split(':').map(Number);
+  const dueNotifications = task.days.map((day) => ({
     id: notificationIdFor(task.id, day),
     title,
     body,
     channelId: CHANNEL_ID,
     actionTypeId,
     group,
-    extra: { taskId: task.id, routineId: routine?.id },
+    ongoing: true,
+    autoCancel: false,
+    extra,
     schedule: {
       on: { weekday: day + 1, hour, minute },
       allowWhileIdle: true,
     },
   }));
 
+  const extraTimes = (task.reminderTimes || []).slice(0, MAX_EXTRA_REMINDERS);
+  const extraNotifications = [];
+  for (const day of task.days) {
+    extraTimes.forEach((timeStr, slot) => {
+      const [h, m] = timeStr.split(':').map(Number);
+      extraNotifications.push({
+        id: extraReminderIdFor(task.id, day, slot),
+        title,
+        body,
+        channelId: CHANNEL_ID,
+        actionTypeId,
+        group,
+        extra,
+        schedule: {
+          on: { weekday: day + 1, hour: h, minute: m },
+          allowWhileIdle: true,
+        },
+      });
+    });
+  }
+
   try {
-    await LocalNotifications.schedule({ notifications });
+    await LocalNotifications.schedule({ notifications: [...dueNotifications, ...extraNotifications] });
   } catch (err) {
     console.warn('Failed to schedule notifications', err);
   }

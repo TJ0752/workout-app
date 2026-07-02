@@ -22,9 +22,18 @@ import {
   cancelTaskNotifications,
   syncAllNotifications,
   syncDynamicNotifications,
+  refreshTaskReminderVisibility,
   initActionListener,
 } from './notifications';
 import { todayKey } from './utils/date';
+
+function findTask(routines, taskId) {
+  for (const routine of routines) {
+    const task = routine.tasks.find((t) => t.id === taskId);
+    if (task) return task;
+  }
+  return null;
+}
 
 const TABS = [
   { id: 'today', label: 'Today', Icon: Sun },
@@ -66,11 +75,15 @@ function App() {
         await setCompletion(taskId, todayKey(), true);
         const state = await refreshAll();
         await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
+        const task = findTask(state.routines, taskId);
+        if (task) await refreshTaskReminderVisibility(task, state.completions);
       },
       onAddQuantity: async (taskId, amount) => {
         await addToCompletion(taskId, todayKey(), amount);
         const state = await refreshAll();
         await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
+        const task = findTask(state.routines, taskId);
+        if (task) await refreshTaskReminderVisibility(task, state.completions);
       },
     });
 
@@ -135,18 +148,21 @@ function App() {
     const next = await setCompletion(task.id, todayKey(), done);
     setCompletions(next);
     await syncDynamicNotifications(routines, taskVersionsMap, next);
+    await refreshTaskReminderVisibility(task, next);
   };
 
   const handleAddQuantity = async (task, delta) => {
     const next = await addToCompletion(task.id, todayKey(), delta);
     setCompletions(next);
     await syncDynamicNotifications(routines, taskVersionsMap, next);
+    await refreshTaskReminderVisibility(task, next);
   };
 
   const handleSetQuantity = async (task, value) => {
     const next = await setCompletion(task.id, todayKey(), value);
     setCompletions(next);
     await syncDynamicNotifications(routines, taskVersionsMap, next);
+    await refreshTaskReminderVisibility(task, next);
   };
 
   if (loading) {

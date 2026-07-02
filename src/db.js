@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 
 const DB_NAME = 'routines';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 const sqlite = new SQLiteConnection(CapacitorSQLite);
 let dbInstance = null;
@@ -128,6 +128,19 @@ const MIGRATIONS = [
        FROM routines;`,
       `DROP TABLE routines;`,
       `ALTER TABLE routines_new RENAME TO routines;`,
+    ],
+  },
+  {
+    // `time` stays the task's due-by moment. `window_start` marks when it
+    // becomes "current" (default midnight, i.e. no change from before), and
+    // `reminder_times` holds extra hardcoded nudge times in addition to the
+    // due-by reminder - see notifications.js for how these get scheduled.
+    toVersion: 4,
+    statements: [
+      `ALTER TABLE tasks ADD COLUMN window_start TEXT NOT NULL DEFAULT '00:00';`,
+      `ALTER TABLE tasks ADD COLUMN reminder_times TEXT NOT NULL DEFAULT '[]';`,
+      `ALTER TABLE task_versions ADD COLUMN window_start TEXT NOT NULL DEFAULT '00:00';`,
+      `ALTER TABLE task_versions ADD COLUMN reminder_times TEXT NOT NULL DEFAULT '[]';`,
     ],
   },
 ];

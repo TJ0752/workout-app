@@ -63,6 +63,15 @@ days, active flag, and completion type:
   completion is `actual / target`, clamped to 1, producing a genuine partial-completion
   fraction rather than a boolean.
 
+A task's `time` is its due-by moment — the one used for "was this due/complete on day X"
+analytics (below) and the anchor for its main reminder. `windowStart` (default `'00:00'`,
+i.e. no visible change for tasks that don't set one) marks when a task becomes "current";
+it only affects the Today-screen countdown display and reminder scheduling, not
+analytics/streaks — a task is still due for the whole calendar day regardless of window.
+`reminderTimes` is an array of *extra* hardcoded nudge times in addition to `time` itself
+(capped at `MAX_EXTRA_REMINDERS` in `src/utils/tasks.js`); see the Notifications section
+for why these can't just share one notification id.
+
 Every routine has at least one task. A routine with exactly one task renders as a flat
 item everywhere in the UI (Today, History, Dashboard) so the common case looks identical
 to a simple single-item routine; a routine with multiple tasks renders as an expandable
@@ -156,6 +165,24 @@ web):
   individually. Multi-task routines' notifications share a `group` string so simultaneous
   pending reminders collapse together in the shade (no separate group-summary
   notification is created — untested without a device, kept simple deliberately).
+  - The `task.time` (due-by) reminder is scheduled with `ongoing: true, autoCancel: false`
+    so it stays pinned in the shade until the task is completed; `dismissTaskReminders`
+    (called via `refreshTaskReminderVisibility` from every completion-changing path in
+    `App.jsx`, including notification-action taps) clears it once done, using
+    `removeDeliveredNotifications` rather than `cancel()` — the former just dismisses
+    what's currently shown, the latter would rip out the underlying recurring alarm and
+    stop future weeks from firing at all (confirmed from `TimedNotificationPublisher`'s
+    self-rescheduling in the native plugin source).
+  - `task.reminderTimes` (extra nudges in addition to `time`) get their *own* ids
+    (`extraReminderIdFor`, one fixed slot per array index, not the reminder's clock value)
+    rather than sharing the due notification's id. This is a hard Android constraint, not
+    a style choice: `LocalNotificationManager` schedules every alarm via
+    `PendingIntent.getBroadcast(context, id, ...)` with `FLAG_CANCEL_CURRENT`, so two
+    alarms scheduled under the same id don't coexist — the later `schedule()` call cancels
+    the earlier one before it ever fires. Slot ids are keyed by array index rather than
+    the time value so `cancelTaskNotifications` can always sweep every slot that could
+    ever have been used, even after the user removes a reminder and the old time is gone
+    from the task object.
 - **Computed notifications** (`syncDynamicNotifications`) — the persistent daily summary
   (`ongoing: true`, no live countdown — see below), the streak-at-risk nudge, and the
   morning/evening digests. These have no backend and no background-task runner, so their
