@@ -315,8 +315,20 @@ async function main() {
   );
   await mustEval(`window.__test.clickByText('button', '+ Add another task')`, 'add a second task');
   await sleep(300);
+  // Adding a 2nd task switches the form to multi-task mode, where each task
+  // needs its own name (the routine's own title only auto-fills the FIRST
+  // task's name if that task was still blank at the time) - the newly added
+  // 2nd task starts blank and would otherwise silently block submission.
+  await mustEval(
+    `window.__test.setValue('input[placeholder="e.g. Breakfast"]', 'Second Task')`,
+    'set 2nd task name'
+  );
   await mustEval(`window.__test.clickByText('button[type="submit"]', 'Add routine')`, 'submit multi-task routine');
   await sleep(2500);
+
+  const multiRoutineSaved = await page.evaluate(`document.body.innerText.includes('Group Test Routine')`);
+  console.log('Multi-task routine visible in list after save:', multiRoutineSaved);
+  if (!multiRoutineSaved) fail('Multi-task routine was not created - form submission was likely blocked by validation.');
 
   console.log('--- dumpsys notification after creating multi-task routine ---');
   const dump3 = dumpNotifications();
