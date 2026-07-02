@@ -5,6 +5,7 @@ import TodayView from './components/TodayView';
 import RoutinesView from './components/RoutinesView';
 import DashboardView from './components/DashboardView';
 import HistoryView from './components/HistoryView';
+import Logo from './components/Logo';
 import {
   getRoutines,
   upsertRoutine,
@@ -144,25 +145,31 @@ function App() {
     await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
   };
 
-  const handleToggleComplete = async (task, done) => {
-    const next = await setCompletion(task.id, todayKey(), done);
+  const handleToggleComplete = async (task, done, dateKey = todayKey()) => {
+    const next = await setCompletion(task.id, dateKey, done);
     setCompletions(next);
-    await syncDynamicNotifications(routines, taskVersionsMap, next);
-    await refreshTaskReminderVisibility(task, next);
+    if (dateKey === todayKey()) {
+      await syncDynamicNotifications(routines, taskVersionsMap, next);
+      await refreshTaskReminderVisibility(task, next);
+    }
   };
 
-  const handleAddQuantity = async (task, delta) => {
-    const next = await addToCompletion(task.id, todayKey(), delta);
+  const handleAddQuantity = async (task, delta, dateKey = todayKey()) => {
+    const next = await addToCompletion(task.id, dateKey, delta);
     setCompletions(next);
-    await syncDynamicNotifications(routines, taskVersionsMap, next);
-    await refreshTaskReminderVisibility(task, next);
+    if (dateKey === todayKey()) {
+      await syncDynamicNotifications(routines, taskVersionsMap, next);
+      await refreshTaskReminderVisibility(task, next);
+    }
   };
 
-  const handleSetQuantity = async (task, value) => {
-    const next = await setCompletion(task.id, todayKey(), value);
+  const handleSetQuantity = async (task, value, dateKey = todayKey()) => {
+    const next = await setCompletion(task.id, dateKey, value);
     setCompletions(next);
-    await syncDynamicNotifications(routines, taskVersionsMap, next);
-    await refreshTaskReminderVisibility(task, next);
+    if (dateKey === todayKey()) {
+      await syncDynamicNotifications(routines, taskVersionsMap, next);
+      await refreshTaskReminderVisibility(task, next);
+    }
   };
 
   if (loading) {
@@ -172,6 +179,9 @@ function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
+        <span className="icon-badge app-logo-badge">
+          <Logo size={20} />
+        </span>
         <h1>Daily Routines</h1>
       </header>
 

@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Check, ChevronDown } from 'lucide-react';
-import { getRoutineFraction, getTaskFraction, todayKey } from '../utils/date';
+import { Check, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
+import { getRoutineFraction, getTaskFraction, dateToKey, todayKey, startOfDay } from '../utils/date';
 import { getRoutineIcon } from '../utils/icons';
 import { quickAddAmountsFor } from '../utils/tasks';
 
-function isTaskDueToday(task, taskVersionsMap) {
+function isTaskDueOn(task, taskVersionsMap, date) {
   const versions = taskVersionsMap[task.id];
   if (!versions) return false;
-  return getTaskFraction(versions, {}, new Date()) !== null;
+  return getTaskFraction(versions, {}, date) !== null;
 }
 
 function atTime(now, timeStr) {
@@ -37,8 +37,8 @@ function formatCountdown(timeStr, now, windowStart) {
   return { text: hrs > 0 ? `${hrs}h ${mins}m overdue` : `${mins}m overdue`, overdue: true };
 }
 
-function CountdownLabel({ time, windowStart, now, done, className = 'today-item-time' }) {
-  if (done) return <span className={className}>{time}</span>;
+function CountdownLabel({ time, windowStart, now, done, showCountdown, className = 'today-item-time' }) {
+  if (done || !showCountdown) return <span className={className}>{time}</span>;
   const { text, overdue } = formatCountdown(time, now, windowStart);
   return (
     <span className={`${className} ${overdue ? 'overdue' : ''}`}>
@@ -47,8 +47,53 @@ function CountdownLabel({ time, windowStart, now, done, className = 'today-item-
   );
 }
 
-function QuantityControl({ task, completions, onAddQuantity, onSetQuantity, now }) {
-  const actual = completions[task.id]?.[todayKey()] || 0;
+function DateNav({ date, onChange }) {
+  const key = dateToKey(date);
+  const isToday = key === todayKey();
+  const label = isToday
+    ? 'Today'
+    : date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+
+  const shiftDay = (delta) => {
+    const next = new Date(date);
+    next.setDate(next.getDate() + delta);
+    if (dateToKey(next) > todayKey()) return;
+    onChange(startOfDay(next));
+  };
+
+  return (
+    <div className="date-nav">
+      <button type="button" className="date-nav-arrow" onClick={() => shiftDay(-1)} aria-label="Previous day">
+        <ChevronLeft size={18} />
+      </button>
+      <label className="date-nav-label">
+        {label}
+        <input
+          type="date"
+          value={key}
+          max={todayKey()}
+          onChange={(e) => {
+            if (!e.target.value) return;
+            const [y, m, d] = e.target.value.split('-').map(Number);
+            onChange(new Date(y, m - 1, d));
+          }}
+        />
+      </label>
+      <button
+        type="button"
+        className="date-nav-arrow"
+        onClick={() => shiftDay(1)}
+        disabled={isToday}
+        aria-label="Next day"
+      >
+        <ChevronRight size={18} />
+      </button>
+    </div>
+  );
+}
+
+function QuantityControl({ task, completions, dateKey, onAddQuantity, onSetQuantity, now, showCountdown }) {
+  const actual = completions[task.id]?.[dateKey] || 0;
   const target = task.target || 0;
   const pct = target ? Math.min(100, Math.round((actual / target) * 100)) : 0;
   const isComplete = target > 0 && actual >= target;
@@ -63,23 +108,29 @@ function QuantityControl({ task, completions, onAddQuantity, onSetQuantity, now 
           {actual} / {target} {task.unit || ''}
         </span>
       </div>
-      <CountdownLabel time={task.time} windowStart={task.windowStart} now={now} done={isComplete} />
+      <CountdownLabel
+        time={task.time}
+        windowStart={task.windowStart}
+        now={now}
+        done={isComplete}
+        showCountdown={showCountdown}
+      />
       <div className="qty-track">
         <div className={`qty-fill ${isPartial ? 'partial' : ''}`} style={{ width: `${pct}%` }} />
       </div>
       <div className="qty-actions">
         {quickAmounts.map((amount) => (
-          <button key={amount} className="qty-btn primary" onClick={() => onAddQuantity(task, amount)}>
+          <button key={amount} className="qty-btn primary" onClick={() => onAddQuantity(task, amount, dateKey)}>
             + {amount}
           </button>
         ))}
         <button
           className="qty-btn"
           onClick={() => {
-            const input = window.prompt(`Set ${task.title} total for today:`, String(actual));
+            const input = window.prompt(`Set ${task.title} total for this day:`, String(actual));
             if (input === null) return;
             const parsed = Number(input);
-            if (!Number.isNaN(parsed) && parsed >= 0) onSetQuantity(task, parsed);
+            if (!Number.isNaN(parsed) && parsed >= 0) onSetQuantity(task, parsed, dateKey);
           }}
         >
           Custom…
@@ -100,24 +151,31 @@ export default function TodayView({
 }) {
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [now, setNow] = useState(() => new Date());
-  const today = now;
+  const [selectedDate, setSelectedDate] = useState(() => startOfDay(new Date()));
 
   useEffect(() => {
     const interval = setInterval(() => setNow(new Date()), 60000);
     return () => clearInterval(interval);
   }, []);
 
+  const dateKey = dateToKey(selectedDate);
+  const isToday = dateKey === todayKey();
+  const dayLabel = isToday
+    ? 'Today'
+    : selectedDate.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+
   const dueRoutines = routines
     .filter((routine) => routine.active)
     .map((routine) => ({
       routine,
-      dueTasks: routine.tasks.filter((t) => isTaskDueToday(t, taskVersionsMap)),
+      dueTasks: routine.tasks.filter((t) => isTaskDueOn(t, taskVersionsMap, selectedDate)),
     }))
     .filter((r) => r.dueTasks.length > 0);
 
   const doneCount = dueRoutines.filter(
-    ({ routine }) => getRoutineFraction(routine, taskVersionsMap, completions, today) === 1
+    ({ routine }) => getRoutineFraction(routine, taskVersionsMap, completions, selectedDate) === 1
   ).length;
+  const heroPct = dueRoutines.length ? Math.round((doneCount / dueRoutines.length) * 100) : 0;
 
   const toggleCollapsed = (routineId) => {
     setCollapsed((prev) => {
@@ -130,14 +188,25 @@ export default function TodayView({
 
   return (
     <div className="today-view">
-      <div className="today-summary">
-        <h2>Today</h2>
-        <p>
-          {doneCount} / {dueRoutines.length} completed
-        </p>
+      <div className="today-hero">
+        <div className="today-hero-text">
+          <h2 className="today-hero-date">{dayLabel}</h2>
+          <p className="today-hero-sub">
+            {doneCount} of {dueRoutines.length} routines done
+          </p>
+        </div>
+        <div className="today-hero-ring" style={{ '--pct': `${heroPct}%` }}>
+          <span>{heroPct}%</span>
+        </div>
       </div>
 
-      {dueRoutines.length === 0 && <p className="empty-state">No routines scheduled for today.</p>}
+      <DateNav date={selectedDate} onChange={setSelectedDate} />
+
+      {dueRoutines.length === 0 && (
+        <p className="empty-state">
+          {isToday ? 'No routines scheduled for today.' : `No routines were due on ${dayLabel}.`}
+        </p>
+      )}
 
       <ul className="today-list">
         {dueRoutines.map(({ routine, dueTasks }) => {
@@ -155,34 +224,46 @@ export default function TodayView({
                     <QuantityControl
                       task={task}
                       completions={completions}
+                      dateKey={dateKey}
                       onAddQuantity={onAddQuantity}
                       onSetQuantity={onSetQuantity}
                       now={now}
+                      showCountdown={isToday}
                     />
                   </div>
                 </li>
               );
             }
-            const done = Boolean(completions[task.id]?.[todayKey()]);
+            const done = Boolean(completions[task.id]?.[dateKey]);
             return (
               <li key={routine.id} className={`today-item ${done ? 'done' : ''}`}>
                 <label className="row">
-                  <input type="checkbox" checked={done} onChange={() => onToggleComplete(task, !done)} />
+                  <input
+                    type="checkbox"
+                    checked={done}
+                    onChange={() => onToggleComplete(task, !done, dateKey)}
+                  />
                   <span className="icon-badge">
                     <RoutineIcon size={18} />
                   </span>
                   <span className="today-item-title">{routine.title}</span>
-                  <CountdownLabel time={task.time} windowStart={task.windowStart} now={now} done={done} />
+                  <CountdownLabel
+                    time={task.time}
+                    windowStart={task.windowStart}
+                    now={now}
+                    done={done}
+                    showCountdown={isToday}
+                  />
                   <span className={`check-circle ${done ? 'done' : ''}`}>{done && <Check size={15} />}</span>
                 </label>
               </li>
             );
           }
 
-          const fraction = getRoutineFraction(routine, taskVersionsMap, completions, today) || 0;
+          const fraction = getRoutineFraction(routine, taskVersionsMap, completions, selectedDate) || 0;
           const pct = Math.round(fraction * 100);
           const doneTaskCount = dueTasks.filter(
-            (t) => getTaskFraction(taskVersionsMap[t.id], completions[t.id] || {}, today) === 1
+            (t) => getTaskFraction(taskVersionsMap[t.id], completions[t.id] || {}, selectedDate) === 1
           ).length;
           const isCollapsed = collapsed.has(routine.id);
 
@@ -215,25 +296,37 @@ export default function TodayView({
                           <QuantityControl
                             task={task}
                             completions={completions}
+                            dateKey={dateKey}
                             onAddQuantity={onAddQuantity}
                             onSetQuantity={onSetQuantity}
                             now={now}
+                            showCountdown={isToday}
                           />
                         </li>
                       );
                     }
-                    const done = Boolean(completions[task.id]?.[todayKey()]);
+                    const done = Boolean(completions[task.id]?.[dateKey]);
                     return (
                       <li className="task-row" key={task.id}>
                         <span className="dot" />
-                        <span className="task-title" style={done ? { textDecoration: 'line-through', opacity: 0.5 } : undefined}>
+                        <span
+                          className="task-title"
+                          style={done ? { textDecoration: 'line-through', opacity: 0.5 } : undefined}
+                        >
                           {task.title}
                         </span>
-                        <CountdownLabel time={task.time} windowStart={task.windowStart} now={now} done={done} className="task-time" />
+                        <CountdownLabel
+                          time={task.time}
+                          windowStart={task.windowStart}
+                          now={now}
+                          done={done}
+                          showCountdown={isToday}
+                          className="task-time"
+                        />
                         <button
                           type="button"
                           className={`check-circle sm ${done ? 'done' : ''}`}
-                          onClick={() => onToggleComplete(task, !done)}
+                          onClick={() => onToggleComplete(task, !done, dateKey)}
                         >
                           {done && <Check size={12} />}
                         </button>

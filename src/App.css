@@ -15,7 +15,16 @@
 }
 
 .app-header {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
   padding: 1.4rem 1.2rem 1rem;
+}
+
+.app-logo-badge {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
 }
 
 .app-main {
@@ -82,21 +91,107 @@
 }
 
 /* Today view */
-.today-summary {
+.today-hero {
+  background: var(--accent-soft);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  padding: 1rem 1.1rem;
+  margin-bottom: 0.9rem;
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.today-hero-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.today-hero-date {
+  font-size: 1.15em;
+  font-weight: 600;
+  margin: 0 0 0.15rem;
+}
+
+.today-hero-sub {
+  font-size: 0.8em;
+  color: var(--text-soft);
+  margin: 0;
+}
+
+.today-hero-ring {
+  width: 54px;
+  height: 54px;
+  min-width: 54px;
+  border-radius: 50%;
+  background: conic-gradient(var(--accent) var(--pct, 0%), var(--accent-soft) 0);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.today-hero-ring::before {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  background: var(--bg);
+  border-radius: 50%;
+}
+
+.today-hero-ring span {
+  position: relative;
+  z-index: 1;
+  font-size: 0.7em;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.date-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
   margin-bottom: 1rem;
 }
 
-.today-summary h2 {
-  margin: 0;
+.date-nav-arrow {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--card-border);
+  background: var(--card);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.today-summary p {
-  color: var(--text-soft);
+.date-nav-arrow:disabled {
+  opacity: 0.35;
+}
+
+.date-nav-label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid var(--card-border);
+  background: var(--card);
   font-size: 0.85em;
-  margin: 0;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.date-nav-label input[type='date'] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .today-list {
@@ -459,7 +554,7 @@
 
 .routine-actions .danger {
   color: var(--bad);
-  background: rgba(193, 122, 99, 0.12);
+  background: var(--bad-soft);
 }
 
 /* Routine form */

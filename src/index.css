@@ -1,18 +1,19 @@
 :root {
-  --bg: #faf8f4;
+  --bg: #f5f9f8;
   --card: #ffffff;
-  --card-border: rgba(60, 50, 40, 0.08);
-  --text: #2e2b26;
-  --text-soft: #9a9186;
-  --accent: #6e8f74;
-  --accent-soft: rgba(110, 143, 116, 0.12);
-  --good: #6e8f74;
-  --warn: #c89b4a;
-  --warn-soft: rgba(200, 155, 74, 0.14);
-  --bad: #c17a63;
+  --card-border: rgba(10, 70, 80, 0.1);
+  --text: #122225;
+  --text-soft: #7c8f92;
+  --accent: #0e8f8a;
+  --accent-soft: rgba(14, 143, 138, 0.15);
+  --good: #0e8f8a;
+  --warn: #e8862f;
+  --warn-soft: rgba(232, 134, 47, 0.17);
+  --bad: #e2503f;
+  --bad-soft: rgba(226, 80, 63, 0.15);
   --radius: 18px;
   --radius-sm: 12px;
-  --shadow: 0 1px 2px rgba(60, 50, 40, 0.05), 0 1px 8px rgba(60, 50, 40, 0.04);
+  --shadow: 0 1px 2px rgba(18, 34, 37, 0.06), 0 1px 8px rgba(18, 34, 37, 0.05);
   --font: Georgia, 'Iowan Old Style', 'Palatino Linotype', serif;
 
   font-family: var(--font);
