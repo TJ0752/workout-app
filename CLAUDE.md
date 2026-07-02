@@ -51,6 +51,40 @@ The standard pattern used throughout this project's history: launch a page, seed
 visually — this is the primary way UI changes get validated since there's no test suite
 and no real device available in this environment.
 
+**This only exercises desktop Chromium, not the actual Android WebView** — real gaps only
+show up on-device. `crypto.randomUUID()` is the concrete example: desktop Chrome has
+supported it since 2021, so every browser-based test passed for the entire project history
+even though the emulator's system WebView doesn't support it at all, throwing on every
+routine/task creation (`src/utils/id.js`'s `generateId()` now falls back to
+`crypto.getRandomValues()`, then `Math.random`, so this can't hard-crash regardless of
+WebView vintage). If you're testing anything that touches a native plugin (notifications,
+SQLite connection lifecycle) or a Web API whose support might lag on older WebView builds,
+prefer the emulator harness below over a desktop-browser Playwright script.
+
+### Real-device verification via GitHub Actions emulator
+
+`.github/workflows/android-emulator-verify.yml` (manual `workflow_dispatch` — booting a
+KVM-accelerated emulator adds several minutes over the plain APK build, so it doesn't run
+on every push) installs a real debug APK on a booted Android emulator and drives it via
+`scripts/verify-notification-catchup.mjs`. That script connects to the app's WebView over
+raw Chrome DevTools Protocol using Node's built-in `WebSocket`/`fetch` — **not**
+Playwright's `connectOverCDP`, which fails immediately ("Browser context management is not
+supported") because Android WebView's CDP support only implements page-level domains
+(`Runtime`/`Page`/`DOM`), not the `Browser`-level domain Playwright's connection handshake
+requires. UI interaction goes through `Runtime.evaluate` executing injected JS (native
+setter + `dispatchEvent` for React-controlled inputs, textContent-based click helpers —
+see `JS_HELPERS` in the script), and assertions are checked against real
+`adb shell dumpsys notification` output, not app-level JS state. Forwards
+`Runtime.consoleAPICalled`/`Runtime.exceptionThrown` to CI stdout — this is what surfaced
+the `crypto.randomUUID` crash, which otherwise would have failed silently inside a
+try/catch with no visibility into why. Use this pattern (not `window.location.reload()`)
+when a test needs to simulate "reopen the app": a JS-level reload doesn't tell
+`@capacitor-community/sqlite`'s native connection to release itself, since that connection
+lives outside the WebView's JS lifecycle — it throws "Connection routines already exists"
+instead. Re-triggering the same code path a real action would (e.g. re-saving a routine to
+re-run `syncAllNotifications`) is both more faithful to the bug and avoids the SQLite
+lifecycle mismatch entirely.
+
 ## Architecture
 
 ### Data model: Routine -> Task -> Completion
@@ -192,18 +226,34 @@ web):
   even if the app isn't reopened — just with whatever content was last computed. A
   multi-day gap without opening the app means stale content, not a missed notification.
 
-`scheduleTaskNotifications(task, routine)` is the single choke point that decides whether
-a task's reminders actually get scheduled — it checks `task.active`, `task.days.length`,
-and (routine-level pause is deliberately not versioned, see above) `routine.active`, all
-three. This matters because `syncAllNotifications` re-syncs *every* routine's tasks
-whenever *any* routine is saved (`handleSaveRoutine` in `App.jsx` calls it with the full
-current routine list, not just the one edited) — without the `routine.active` check here,
-saving an unrelated routine would silently reschedule reminders for a routine the user had
-paused. Action-type registration (`registerNotificationActionTypes`) is unaffected by this
-gate and registers types for all tasks regardless of active state — harmless, since an
-unused registered type just sits there (confirmed from the native plugin source: each
-action type is written to its own `SharedPreferences` file keyed by id, so registrations
-are additive/idempotent and never clobber each other or get silently dropped).
+`scheduleTaskNotifications(task, routine, completions)` is the single choke point that
+decides whether a task's reminders actually get scheduled — it checks `task.active`,
+`task.days.length`, and (routine-level pause is deliberately not versioned, see above)
+`routine.active`, all three. This matters because `syncAllNotifications` re-syncs *every*
+routine's tasks whenever *any* routine is saved (`handleSaveRoutine` in `App.jsx` calls it
+with the full current routine list, not just the one edited) — without the `routine.active`
+check here, saving an unrelated routine would silently reschedule reminders for a routine
+the user had paused. Action-type registration (`registerNotificationActionTypes`) is
+unaffected by this gate and registers types for all tasks regardless of active state —
+harmless, since an unused registered type just sits there (confirmed from the native plugin
+source: each action type is written to its own `SharedPreferences` file keyed by id, so
+registrations are additive/idempotent and never clobber each other or get silently dropped).
+
+**`catchUpDueReminderIfNeeded` — why the pinned due-by reminder needs a `completions` param
+at all.** `scheduleTaskNotifications` unconditionally calls `cancelTaskNotifications` before
+rescheduling (needed so a changed `time`/`days` doesn't leave a stale alarm behind), and
+since `syncAllNotifications` runs on every app open and every routine save, that cancel
+fires constantly — including for tasks whose due time already passed today. Confirmed from
+the native plugin source (`LocalNotificationManager.cancel` calls `dismissVisibleNotification`
+*and* `cancelTimerForNotification`, and `DateMatch.postponeTriggerIfNeeded` jumps a full
+`WEEK_OF_MONTH` forward once today's `hour:minute` has passed rather than firing later
+today): the net effect was that simply reopening the app, or saving any unrelated routine,
+silently wiped an already-showing pinned reminder and didn't bring it back until the same
+weekday *next week*. `catchUpDueReminderIfNeeded` re-fires the pinned reminder immediately
+(no `schedule` field, i.e. fires now, same pattern as `updateSummaryNotification`) whenever
+a sync leaves a currently-due, not-yet-done task without one — this is why
+`scheduleTaskNotifications`/`syncAllNotifications` need `completions` threaded through from
+every call site in `App.jsx`.
 
 **No live-updating countdown/chronometer in the notification itself** — this is a real
 Android `Notification.Builder` capability (`setUsesChronometer`) that
