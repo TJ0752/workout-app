@@ -28,6 +28,15 @@ function adb(cmd) {
   return execSync(`adb ${cmd}`, { encoding: 'utf8' });
 }
 
+/** `adb shell pidof`/similar exit non-zero (and execSync throws) when nothing matches yet - treat that as "". */
+function adbAllowFailure(cmd) {
+  try {
+    return execSync(`adb ${cmd}`, { encoding: 'utf8' });
+  } catch {
+    return '';
+  }
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -173,7 +182,7 @@ async function waitFor(page, jsCondition, timeoutMs = 15000) {
 async function main() {
   console.log('Waiting for app to boot...');
   for (let i = 0; i < 30; i++) {
-    const pid = adb(`shell pidof ${PACKAGE}`).trim();
+    const pid = adbAllowFailure(`shell pidof ${PACKAGE}`).trim();
     if (pid) break;
     await sleep(1000);
   }
