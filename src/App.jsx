@@ -7,6 +7,7 @@ import DashboardView from './components/DashboardView';
 import HistoryView from './components/HistoryView';
 import Logo from './components/Logo';
 import UpdateChecker from './components/UpdateChecker';
+import WorkoutSessionView from './components/WorkoutSessionView';
 import {
   getRoutines,
   upsertRoutine,
@@ -17,6 +18,8 @@ import {
   setCompletion,
   addToCompletion,
   getTaskVersionsForAnalytics,
+  logWorkoutSet,
+  getAllWorkoutLogs,
 } from './storage';
 import {
   initNotifications,
@@ -28,6 +31,7 @@ import {
   initActionListener,
 } from './notifications';
 import { todayKey } from './utils/date';
+import { computeSessionFraction } from './utils/workouts';
 
 function findTask(routines, taskId) {
   for (const routine of routines) {
@@ -49,18 +53,27 @@ function App() {
   const [routines, setRoutines] = useState([]);
   const [completions, setCompletions] = useState({});
   const [taskVersionsMap, setTaskVersionsMap] = useState({});
+  const [workoutLogsByTask, setWorkoutLogsByTask] = useState({});
   const [loading, setLoading] = useState(true);
+  const [activeSession, setActiveSession] = useState(null);
 
   const refreshAll = async () => {
-    const [storedRoutines, storedCompletions, versionsMap] = await Promise.all([
+    const [storedRoutines, storedCompletions, versionsMap, workoutLogs] = await Promise.all([
       getRoutines(),
       getCompletions(),
       getTaskVersionsForAnalytics(),
+      getAllWorkoutLogs(),
     ]);
     setRoutines(storedRoutines);
     setCompletions(storedCompletions);
     setTaskVersionsMap(versionsMap);
-    return { routines: storedRoutines, completions: storedCompletions, taskVersionsMap: versionsMap };
+    setWorkoutLogsByTask(workoutLogs);
+    return {
+      routines: storedRoutines,
+      completions: storedCompletions,
+      taskVersionsMap: versionsMap,
+      workoutLogsByTask: workoutLogs,
+    };
   };
 
   useEffect(() => {
@@ -173,8 +186,45 @@ function App() {
     }
   };
 
+  const handleStartWorkout = (task, routine, dateKey) => {
+    setActiveSession({ task, routine, dateKey });
+  };
+
+  const handleCloseSession = () => {
+    setActiveSession(null);
+  };
+
+  const handleLogWorkoutSet = async (task, dateKey, exercise, setIndex, values) => {
+    const nextLogsByTask = await logWorkoutSet(task.id, dateKey, exercise, setIndex, values);
+    setWorkoutLogsByTask(nextLogsByTask);
+    const logsForDate = nextLogsByTask[task.id]?.[dateKey] || {};
+    const fraction = computeSessionFraction(task.exercises, logsForDate);
+    const nextCompletions = await setCompletion(task.id, dateKey, fraction);
+    setCompletions(nextCompletions);
+    if (dateKey === todayKey()) {
+      await syncDynamicNotifications(routines, taskVersionsMap, nextCompletions);
+      await refreshTaskReminderVisibility(task, nextCompletions);
+    }
+  };
+
   if (loading) {
     return <div className="app-shell loading">Loading…</div>;
+  }
+
+  if (activeSession) {
+    const logsForDate = workoutLogsByTask[activeSession.task.id]?.[activeSession.dateKey] || {};
+    return (
+      <div className="app-shell">
+        <WorkoutSessionView
+          task={activeSession.task}
+          logsForDate={logsForDate}
+          onLogSet={(exercise, setIndex, values) =>
+            handleLogWorkoutSet(activeSession.task, activeSession.dateKey, exercise, setIndex, values)
+          }
+          onClose={handleCloseSession}
+        />
+      </div>
+    );
   }
 
   return (
@@ -196,6 +246,7 @@ function App() {
             onToggleComplete={handleToggleComplete}
             onAddQuantity={handleAddQuantity}
             onSetQuantity={handleSetQuantity}
+            onStartWorkout={handleStartWorkout}
           />
         )}
         {tab === 'routines' && (

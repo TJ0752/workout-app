@@ -143,6 +143,39 @@ function QuantityControl({ task, completions, dateKey, onAddQuantity, onSetQuant
   );
 }
 
+function WorkoutTaskCard({ task, routine, completions, dateKey, onStartWorkout, isToday }) {
+  const fraction = completions[task.id]?.[dateKey] || 0;
+  const pct = Math.round(fraction * 100);
+  const isComplete = fraction >= 1;
+  const exerciseCount = task.exercises?.length || 0;
+  const label = isComplete ? 'Workout complete · Review' : fraction > 0 ? 'Resume workout' : 'Start workout';
+
+  return (
+    <div className="qty-row">
+      <div className="qty-top">
+        <span className="today-item-title">{task.title}</span>
+        <span className={`qty-value ${isComplete ? 'complete' : fraction > 0 ? 'partial' : ''}`}>
+          {exerciseCount} exercise{exerciseCount === 1 ? '' : 's'}
+        </span>
+      </div>
+      <div className="qty-track">
+        <div className={`qty-fill ${!isComplete && fraction > 0 ? 'partial' : ''}`} style={{ width: `${pct}%` }} />
+      </div>
+      <div className="qty-actions">
+        <button
+          type="button"
+          className="qty-btn primary"
+          disabled={!isToday}
+          onClick={() => onStartWorkout(task, routine, dateKey)}
+        >
+          {label}
+        </button>
+        {!isToday && <span className="badge-partial">Today only</span>}
+      </div>
+    </div>
+  );
+}
+
 export default function TodayView({
   routines,
   completions,
@@ -150,6 +183,7 @@ export default function TodayView({
   onToggleComplete,
   onAddQuantity,
   onSetQuantity,
+  onStartWorkout,
 }) {
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [now, setNow] = useState(() => new Date());
@@ -236,6 +270,25 @@ export default function TodayView({
                 </li>
               );
             }
+            if (task.completionType === 'workout') {
+              return (
+                <li key={routine.id} className="today-item">
+                  <div className="row" style={{ alignItems: 'flex-start' }}>
+                    <span className="icon-badge">
+                      <RoutineIcon size={18} />
+                    </span>
+                    <WorkoutTaskCard
+                      task={task}
+                      routine={routine}
+                      completions={completions}
+                      dateKey={dateKey}
+                      onStartWorkout={onStartWorkout}
+                      isToday={isToday}
+                    />
+                  </div>
+                </li>
+              );
+            }
             const done = Boolean(completions[task.id]?.[dateKey]);
             return (
               <li key={routine.id} className={`today-item ${done ? 'done' : ''}`}>
@@ -303,6 +356,20 @@ export default function TodayView({
                             onSetQuantity={onSetQuantity}
                             now={now}
                             showCountdown={isToday}
+                          />
+                        </li>
+                      );
+                    }
+                    if (task.completionType === 'workout') {
+                      return (
+                        <li className="task-row" key={task.id} style={{ alignItems: 'flex-start' }}>
+                          <WorkoutTaskCard
+                            task={task}
+                            routine={routine}
+                            completions={completions}
+                            dateKey={dateKey}
+                            onStartWorkout={onStartWorkout}
+                            isToday={isToday}
                           />
                         </li>
                       );
