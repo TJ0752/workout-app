@@ -81,7 +81,7 @@ function App() {
       const state = await refreshAll();
       setLoading(false);
       await initNotifications();
-      await syncAllNotifications(state.routines);
+      await syncAllNotifications(state.routines, state.completions);
       await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
     })();
 
@@ -117,7 +117,7 @@ function App() {
       await upsertTask({ ...task, routineId: routine.id });
     }
     const state = await refreshAll();
-    await syncAllNotifications(state.routines);
+    await syncAllNotifications(state.routines, state.completions);
     await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
   };
 
@@ -138,7 +138,7 @@ function App() {
     const savedRoutine = state.routines.find((r) => r.id === routine.id);
     for (const task of routine.tasks) {
       if (savedRoutine && savedRoutine.active) {
-        await scheduleTaskNotifications(task, savedRoutine);
+        await scheduleTaskNotifications(task, savedRoutine, state.completions);
       } else {
         await cancelTaskNotifications(task);
       }
@@ -152,7 +152,7 @@ function App() {
     const savedRoutine = state.routines.find((r) => r.id === task.routineId);
     const savedTask = savedRoutine?.tasks.find((t) => t.id === task.id);
     if (savedTask?.active) {
-      await scheduleTaskNotifications(savedTask, savedRoutine);
+      await scheduleTaskNotifications(savedTask, savedRoutine, state.completions);
     } else {
       await cancelTaskNotifications(task);
     }

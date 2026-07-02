@@ -175,17 +175,67 @@ export async function refreshTaskReminderVisibility(task, completions) {
   await dismissTaskReminders(task);
 }
 
-export async function scheduleTaskNotifications(task, routine) {
-  if (!Capacitor.isNativePlatform()) return;
-  await cancelTaskNotifications(task);
-  if (!task.active || task.days.length === 0 || routine?.active === false) return;
-
+function taskNotificationContent(task, routine) {
   const title = routine && routine.title !== task.title ? `${routine.title} · ${task.title}` : task.title;
   const body = (routine && routine.notes) || 'Time to complete your task';
   const actionTypeId =
     task.completionType === 'quantity' ? quantityActionTypeId(quickAddAmountsFor(task)) : BOOLEAN_ACTION_TYPE;
   const group = routine && routine.tasks.length > 1 ? `routine-${routine.id}` : undefined;
   const extra = { taskId: task.id, routineId: routine?.id };
+  return { title, body, actionTypeId, group, extra };
+}
+
+/**
+ * Re-fires today's pinned due-by reminder immediately if it should currently
+ * be showing but isn't going to on its own. This exists because
+ * scheduleTaskNotifications unconditionally cancels+reschedules on every
+ * sync (app open, any routine save - see syncAllNotifications), and Android's
+ * recurring `on: {weekday, hour, minute}` trigger does NOT retroactively fire
+ * for a time that's already passed today - confirmed from DateMatch.java's
+ * postponeTriggerIfNeeded, which jumps a full WEEK_OF_MONTH forward once
+ * today's hour:minute has passed, not later today. Without this catch-up, a
+ * reminder that's supposed to stay pinned until the task is done instead
+ * silently vanishes and doesn't return until the same weekday next week, the
+ * moment anyone reopens the app or saves any routine.
+ */
+async function catchUpDueReminderIfNeeded(task, routine, completions) {
+  const now = new Date();
+  const todayWeekday = now.getDay();
+  if (!task.days.includes(todayWeekday) || isTaskDoneToday(task, completions)) return;
+
+  const [hour, minute] = task.time.split(':').map(Number);
+  const due = new Date(now);
+  due.setHours(hour, minute, 0, 0);
+  if (now < due) return;
+
+  const { title, body, actionTypeId, group, extra } = taskNotificationContent(task, routine);
+  try {
+    await LocalNotifications.schedule({
+      notifications: [
+        {
+          id: notificationIdFor(task.id, todayWeekday),
+          title,
+          body,
+          channelId: CHANNEL_ID,
+          actionTypeId,
+          group,
+          ongoing: true,
+          autoCancel: false,
+          extra,
+        },
+      ],
+    });
+  } catch (err) {
+    console.warn('Failed to re-fire overdue task reminder', err);
+  }
+}
+
+export async function scheduleTaskNotifications(task, routine, completions) {
+  if (!Capacitor.isNativePlatform()) return;
+  await cancelTaskNotifications(task);
+  if (!task.active || task.days.length === 0 || routine?.active === false) return;
+
+  const { title, body, actionTypeId, group, extra } = taskNotificationContent(task, routine);
 
   // The due-by reminder is the one that stays pinned (`ongoing`) until the
   // task is marked done - see dismissTaskReminders. Extra reminder times are
@@ -236,14 +286,16 @@ export async function scheduleTaskNotifications(task, routine) {
   } catch (err) {
     console.warn('Failed to schedule notifications', err);
   }
+
+  await catchUpDueReminderIfNeeded(task, routine, completions);
 }
 
-export async function syncAllNotifications(routines) {
+export async function syncAllNotifications(routines, completions) {
   if (!Capacitor.isNativePlatform()) return;
   await registerNotificationActionTypes(routines);
   for (const routine of routines) {
     for (const task of routine.tasks) {
-      await scheduleTaskNotifications(task, routine);
+      await scheduleTaskNotifications(task, routine, completions);
     }
   }
 }
