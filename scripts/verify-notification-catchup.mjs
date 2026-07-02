@@ -97,6 +97,13 @@ class CdpPage {
         this.pending.delete(msg.id);
         if (msg.error) reject(new Error(JSON.stringify(msg.error)));
         else resolve(msg.result);
+        return;
+      }
+      if (msg.method === 'Runtime.consoleAPICalled') {
+        const args = (msg.params.args || []).map((a) => a.value ?? a.description ?? '').join(' ');
+        console.log(`[app console.${msg.params.type}]`, args);
+      } else if (msg.method === 'Runtime.exceptionThrown') {
+        console.log('[app exception]', JSON.stringify(msg.params.exceptionDetails));
       }
     });
   }
@@ -211,33 +218,51 @@ async function main() {
   const dueTime = minutesAgo(nowHHMM, 2);
   console.log(`Device time is ${nowHHMM}, weekday ${weekday}. Creating a task due at ${dueTime} (2 min ago).`);
 
-  await page.evaluate(`window.__test.clickByText('.app-tabbar button', 'Routines')`);
+  async function mustEval(expression, description) {
+    const ok = await page.evaluate(expression);
+    if (!ok) fail(`UI step failed: ${description} (expression returned ${JSON.stringify(ok)})`);
+    return ok;
+  }
+
+  await mustEval(`window.__test.clickByText('.app-tabbar button', 'Routines')`, 'click Routines tab');
   await sleep(300);
-  await page.evaluate(`window.__test.clickByText('button', '+ Add routine')`);
+  await mustEval(`window.__test.clickByText('button', '+ Add routine')`, 'click + Add routine');
   await sleep(300);
-  await page.evaluate(
-    `window.__test.setValue('.routine-form input[placeholder="e.g. Morning stretch"]', 'Emulator Catchup Test')`
+  await mustEval(
+    `window.__test.setValue('.routine-form input[placeholder="e.g. Morning stretch"]', 'Emulator Catchup Test')`,
+    'set routine title'
   );
   // "Starts at" is the 1st time input, "Due by" is the 2nd
-  await page.evaluate(`window.__test.setValue('.routine-form input[type="time"]', ${JSON.stringify(dueTime)}, 1)`);
+  await mustEval(
+    `window.__test.setValue('.routine-form input[type="time"]', ${JSON.stringify(dueTime)}, 1)`,
+    'set due time'
+  );
 
   const labelOrder = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const targetLabel = labelOrder[weekday];
   const selected = await page.evaluate(`window.__test.dayChipSelected(${JSON.stringify(targetLabel)})`);
+  if (selected === null) fail(`Could not find day chip for ${targetLabel}`);
   if (!selected) {
-    await page.evaluate(`window.__test.clickDayChip(${JSON.stringify(targetLabel)})`);
+    await mustEval(`window.__test.clickDayChip(${JSON.stringify(targetLabel)})`, `select ${targetLabel} day chip`);
   }
+  console.log(`Day chip ${targetLabel} selected:`, true);
 
-  await page.evaluate(`window.__test.clickByText('button[type="submit"]', 'Add routine')`);
+  await mustEval(`window.__test.clickByText('button[type="submit"]', 'Add routine')`, 'submit Add routine');
   await sleep(2500); // let handleSaveRoutine's syncAllNotifications finish
+
+  const routineSaved = await page.evaluate(`document.body.innerText.includes('Emulator Catchup Test')`);
+  console.log('Routine visible in list after save:', routineSaved);
 
   console.log('--- dumpsys notification after initial save ---');
   const dump1 = dumpNotifications();
+  console.log(`dumpsys notification: ${dump1.length} chars, mentions our package: ${dump1.includes(PACKAGE)}`);
+  const pkgLines1 = dump1.split('\n').filter((l) => l.includes(PACKAGE));
+  console.log(`Lines mentioning ${PACKAGE} (${pkgLines1.length}):`);
+  console.log(pkgLines1.join('\n'));
   const records1 = findAppRecords(dump1);
   console.log(records1.map((r) => ({ flags: r.flags.toString(16), ongoing: r.ongoing, channel: r.channel })));
   const reminder1 = records1.find((r) => r.channel === CHANNEL_ID && r.ongoing);
   if (!reminder1) {
-    console.log(dump1);
     fail('No ongoing routine-reminders notification found after initial save.');
   }
   console.log('PASS: ongoing due reminder present after initial save.');
