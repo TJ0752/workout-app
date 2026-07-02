@@ -13,10 +13,6 @@ on:
   # that first run is confirmed working.
   push:
     branches: [claude/android-routines-app-mvp-gjl4kh]
-    paths:
-      - '.github/workflows/android-emulator-verify.yml'
-      - 'scripts/verify-notification-catchup.mjs'
-      - 'src/notifications.js'
 
 jobs:
   verify:
