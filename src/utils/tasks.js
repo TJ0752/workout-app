@@ -23,5 +23,8 @@ export function isTaskDoneToday(task, completions) {
   if (task.completionType === 'quantity') {
     return Boolean(task.target) && (value || 0) >= task.target;
   }
+  if (task.completionType === 'workout') {
+    return (value || 0) >= 1;
+  }
   return Boolean(value);
 }

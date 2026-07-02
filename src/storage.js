@@ -18,6 +18,7 @@ function rowToTask(row) {
     target: row.target,
     unit: row.unit,
     quickAdd: row.quick_add ? JSON.parse(row.quick_add) : null,
+    exercises: row.exercises ? JSON.parse(row.exercises) : [],
     active: Boolean(row.active),
     createdAt: row.created_at,
   };
@@ -72,8 +73,8 @@ async function insertRoutineVersion(db, routineId, fields, effectiveFrom, change
 async function insertTaskVersion(db, taskId, routineId, fields, effectiveFrom, changeType, changedFields) {
   await db.run(
     `INSERT INTO task_versions
-       (id, task_id, routine_id, effective_from, effective_to, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, active, change_type, changed_fields)
-     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, task_id, routine_id, effective_from, effective_to, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, exercises, active, change_type, changed_fields)
+     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       crypto.randomUUID(),
       taskId,
@@ -88,6 +89,7 @@ async function insertTaskVersion(db, taskId, routineId, fields, effectiveFrom, c
       fields.target,
       fields.unit,
       fields.quick_add,
+      fields.exercises,
       fields.active,
       changeType,
       JSON.stringify(changedFields),
@@ -107,6 +109,7 @@ function routineFieldsOf(routine) {
 
 function taskFieldsOf(task) {
   const isQuantity = task.completionType === 'quantity';
+  const isWorkout = task.completionType === 'workout';
   return {
     title: task.title,
     time: task.time,
@@ -117,6 +120,7 @@ function taskFieldsOf(task) {
     target: isQuantity ? task.target ?? null : null,
     unit: isQuantity ? task.unit || null : null,
     quick_add: isQuantity && task.quickAdd?.length ? JSON.stringify(task.quickAdd) : null,
+    exercises: JSON.stringify(isWorkout ? task.exercises || [] : []),
     active: task.active ? 1 : 0,
   };
 }
@@ -157,12 +161,13 @@ async function migrateFromPreferencesOnce(db) {
         target: null,
         unit: null,
         quick_add: null,
+        exercises: '[]',
         active: r.active ? 1 : 0,
       };
       await db.run(
-        `INSERT OR REPLACE INTO tasks (id, routine_id, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, active, deleted, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-        [taskId, r.id, taskFields.title, taskFields.time, taskFields.window_start, taskFields.reminder_times, taskFields.days, taskFields.completion_type, taskFields.target, taskFields.unit, taskFields.quick_add, taskFields.active, r.createdAt]
+        `INSERT OR REPLACE INTO tasks (id, routine_id, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, exercises, active, deleted, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+        [taskId, r.id, taskFields.title, taskFields.time, taskFields.window_start, taskFields.reminder_times, taskFields.days, taskFields.completion_type, taskFields.target, taskFields.unit, taskFields.quick_add, taskFields.exercises, taskFields.active, r.createdAt]
       );
       await insertTaskVersion(db, taskId, r.id, taskFields, r.createdAt, 'migrated', []);
 
@@ -278,8 +283,8 @@ export async function upsertTask(task) {
 
   if (!existing) {
     await db.run(
-      `INSERT INTO tasks (id, routine_id, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, active, deleted, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+      `INSERT INTO tasks (id, routine_id, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, exercises, active, deleted, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
       [
         task.id,
         task.routineId,
@@ -292,6 +297,7 @@ export async function upsertTask(task) {
         fields.target,
         fields.unit,
         fields.quick_add,
+        fields.exercises,
         fields.active,
         task.createdAt || now,
       ]
@@ -301,7 +307,7 @@ export async function upsertTask(task) {
     const changed = diffRowFields(existing, fields);
     if (changed.length > 0) {
       await db.run(
-        `UPDATE tasks SET title=?, time=?, window_start=?, reminder_times=?, days=?, completion_type=?, target=?, unit=?, quick_add=?, active=? WHERE id=?`,
+        `UPDATE tasks SET title=?, time=?, window_start=?, reminder_times=?, days=?, completion_type=?, target=?, unit=?, quick_add=?, exercises=?, active=? WHERE id=?`,
         [
           fields.title,
           fields.time,
@@ -312,6 +318,7 @@ export async function upsertTask(task) {
           fields.target,
           fields.unit,
           fields.quick_add,
+          fields.exercises,
           fields.active,
           task.id,
         ]
@@ -435,8 +442,60 @@ export async function getTaskVersionsForAnalytics() {
       completionType: row.completion_type,
       target: row.target,
       unit: row.unit,
+      exercises: row.exercises ? JSON.parse(row.exercises) : [],
       active: Boolean(row.active),
     });
   }
   return map;
+}
+
+export async function logWorkoutSet(taskId, dateKey, exercise, setIndex, values) {
+  const db = await ready();
+  const now = new Date().toISOString();
+  const { reps = null, weight = null, durationSeconds = null, completed = true } = values;
+
+  const existingRows = await db.query(
+    'SELECT id FROM workout_logs WHERE task_id = ? AND date = ? AND exercise_id = ? AND set_index = ?',
+    [taskId, dateKey, exercise.id, setIndex]
+  );
+  const existing = (existingRows.values || [])[0];
+
+  if (existing) {
+    await db.run(
+      `UPDATE workout_logs SET reps=?, weight=?, duration_seconds=?, completed=?, updated_at=?, exercise_name=? WHERE id=?`,
+      [reps, weight, durationSeconds, completed ? 1 : 0, now, exercise.name, existing.id]
+    );
+  } else {
+    await db.run(
+      `INSERT INTO workout_logs (id, task_id, date, exercise_id, exercise_name, set_index, reps, weight, duration_seconds, completed, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [crypto.randomUUID(), taskId, dateKey, exercise.id, exercise.name, setIndex, reps, weight, durationSeconds, completed ? 1 : 0, now]
+    );
+  }
+
+  await persist();
+  return getAllWorkoutLogs();
+}
+
+export async function getAllWorkoutLogs() {
+  const db = await ready();
+  const result = await db.query(
+    'SELECT * FROM workout_logs ORDER BY task_id, date, exercise_id, set_index ASC'
+  );
+  const byTask = {};
+  for (const row of result.values || []) {
+    if (!byTask[row.task_id]) byTask[row.task_id] = {};
+    if (!byTask[row.task_id][row.date]) byTask[row.task_id][row.date] = {};
+    if (!byTask[row.task_id][row.date][row.exercise_id]) byTask[row.task_id][row.date][row.exercise_id] = [];
+    byTask[row.task_id][row.date][row.exercise_id].push({
+      setIndex: row.set_index,
+      reps: row.reps,
+      weight: row.weight,
+      durationSeconds: row.duration_seconds,
+      completed: Boolean(row.completed),
+      exerciseName: row.exercise_name,
+      updatedAt: row.updated_at,
+    });
+  }
+  return byTask;
 }

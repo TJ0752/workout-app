@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 
 const DB_NAME = 'routines';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 const sqlite = new SQLiteConnection(CapacitorSQLite);
 let dbInstance = null;
@@ -141,6 +141,37 @@ const MIGRATIONS = [
       `ALTER TABLE tasks ADD COLUMN reminder_times TEXT NOT NULL DEFAULT '[]';`,
       `ALTER TABLE task_versions ADD COLUMN window_start TEXT NOT NULL DEFAULT '00:00';`,
       `ALTER TABLE task_versions ADD COLUMN reminder_times TEXT NOT NULL DEFAULT '[]';`,
+    ],
+  },
+  {
+    // Adds a third completionType, 'workout' - a task made of exercises
+    // (sets/reps/weight or duration targets), versioned exactly like
+    // quick_add/reminder_times so editing a workout's exercises produces a
+    // new task_versions snapshot. completions.value still holds a single
+    // 0-1 fraction (sets logged / sets planned) so the existing
+    // fraction-based analytics pipeline needs no schema changes - the
+    // per-set actual performance (reps/weight actually done) lives in the
+    // new workout_logs table instead, keyed by a stable exercise id that
+    // survives template edits/renames.
+    toVersion: 5,
+    statements: [
+      `ALTER TABLE tasks ADD COLUMN exercises TEXT NOT NULL DEFAULT '[]';`,
+      `ALTER TABLE task_versions ADD COLUMN exercises TEXT NOT NULL DEFAULT '[]';`,
+      `CREATE TABLE IF NOT EXISTS workout_logs (
+        id TEXT PRIMARY KEY NOT NULL,
+        task_id TEXT NOT NULL,
+        date TEXT NOT NULL,
+        exercise_id TEXT NOT NULL,
+        exercise_name TEXT NOT NULL,
+        set_index INTEGER NOT NULL,
+        reps INTEGER,
+        weight REAL,
+        duration_seconds INTEGER,
+        completed INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL
+      );`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_workout_logs_natural_key
+        ON workout_logs(task_id, date, exercise_id, set_index);`,
     ],
   },
 ];

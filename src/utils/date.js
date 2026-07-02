@@ -63,6 +63,9 @@ export function getTaskFraction(versions, completions, date) {
     if (!target) return value ? 1 : 0;
     return Math.min(1, Math.max(0, (value || 0) / target));
   }
+  if (version.completionType === 'workout') {
+    return Math.min(1, Math.max(0, value || 0));
+  }
   return value ? 1 : 0;
 }
 
