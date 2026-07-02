@@ -78,7 +78,8 @@ function findAppRecords(dump) {
     .filter((b) => b.includes(`pkg=${PACKAGE}`))
     .map((b) => {
       const flagsMatch = b.match(/flags=0x([0-9a-fA-F]+)/);
-      const channelMatch = b.match(/channelId=([^\s,)]+)/) || b.match(/mChannelId=([^\s,)]+)/);
+      const channelMatch =
+        b.match(/\bchannel=([^\s,)]+)/) || b.match(/channelId=([^\s,)]+)/) || b.match(/mChannelId=([^\s,)]+)/);
       const flags = flagsMatch ? parseInt(flagsMatch[1], 16) : 0;
       return { raw: b.slice(0, 200), flags, ongoing: Boolean(flags & 0x2), channel: channelMatch?.[1] };
     });
