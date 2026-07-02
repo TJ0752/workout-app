@@ -299,6 +299,38 @@ async function main() {
   }
   console.log('PASS: ongoing due reminder survived a resync. Catch-up fix confirmed on a real device.');
 
+  // --- Group-summary check: create a multi-task routine and confirm a real
+  // groupSummary:true notification is posted alongside its due reminders,
+  // not just cosmetic `group` tagging on each one (see
+  // updateRoutineGroupSummary). This is genuinely new native behavior the
+  // plugin source supports but the app never exercised before, so it needs
+  // its own real-device check rather than assuming the JS-level logic tests
+  // are sufficient.
+  console.log('Creating a multi-task routine to verify a real group-summary notification is posted...');
+  await mustEval(`window.__test.clickByText('button', '+ Add routine')`, 'click + Add routine (multi-task)');
+  await sleep(300);
+  await mustEval(
+    `window.__test.setValue('.routine-form input[placeholder="e.g. Morning stretch"]', 'Group Test Routine')`,
+    'set multi-task routine title'
+  );
+  await mustEval(`window.__test.clickByText('button', '+ Add another task')`, 'add a second task');
+  await sleep(300);
+  await mustEval(`window.__test.clickByText('button[type="submit"]', 'Add routine')`, 'submit multi-task routine');
+  await sleep(2500);
+
+  console.log('--- dumpsys notification after creating multi-task routine ---');
+  const dump3 = dumpNotifications();
+  const pkgLines3 = dump3.split('\n').filter((l) => l.includes(PACKAGE));
+  console.log(`Lines mentioning ${PACKAGE} (${pkgLines3.length}):`);
+  console.log(pkgLines3.join('\n'));
+  const mentionsGroupBody = dump3.includes('2 tasks');
+  const mentionsGroupTitle = dump3.includes('Group Test Routine');
+  console.log('Mentions "2 tasks" body:', mentionsGroupBody, '| mentions routine title:', mentionsGroupTitle);
+  if (!mentionsGroupBody || !mentionsGroupTitle) {
+    fail('Could not find the expected group-summary notification content ("Group Test Routine" / "2 tasks").');
+  }
+  console.log('PASS: group-summary notification content found for the multi-task routine on a real device.');
+
   page.close();
 }
 

@@ -7,6 +7,11 @@ name: Verify Android Notifications (Emulator)
 # tests or the plain APK build in android-build.yml.
 on:
   workflow_dispatch: {}
+  # TEMPORARY: workflow_dispatch only works once this workflow exists on the
+  # default branch, which it doesn't yet - branch-scoped push trigger to
+  # fire a verification run before merge. Revert once confirmed.
+  push:
+    branches: [claude/android-routines-app-mvp-gjl4kh]
 
 jobs:
   verify:
