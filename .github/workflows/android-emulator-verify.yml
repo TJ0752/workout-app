@@ -7,6 +7,16 @@ name: Verify Android Notifications (Emulator)
 # tests or the plain APK build in android-build.yml.
 on:
   workflow_dispatch: {}
+  # TEMPORARY: GitHub only allows workflow_dispatch on workflows that already
+  # exist on the default branch, so this branch-scoped push trigger is here
+  # just to fire the first run before this branch is merged - remove once
+  # that first run is confirmed working.
+  push:
+    branches: [claude/android-routines-app-mvp-gjl4kh]
+    paths:
+      - '.github/workflows/android-emulator-verify.yml'
+      - 'scripts/verify-notification-catchup.mjs'
+      - 'src/notifications.js'
 
 jobs:
   verify:
