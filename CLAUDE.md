@@ -197,8 +197,18 @@ web):
   — one per distinct quick-add combination in use plus one for boolean tasks — because
   Android attaches action buttons to a registered type, not to each notification
   individually. Multi-task routines' notifications share a `group` string so simultaneous
-  pending reminders collapse together in the shade (no separate group-summary
-  notification is created — untested without a device, kept simple deliberately).
+  pending reminders collapse together in the shade. `updateRoutineGroupSummary(routine)`
+  additionally posts a real `groupSummary: true` notification (id from `groupSummaryIdFor`,
+  a hash of the routine id offset by `GROUP_SUMMARY_ID_BASE`) whenever a routine has more
+  than one active/scheduled task — confirmed via `dumpsys notification` on a real device
+  that `group`/`groupSummary` map straight to `NotificationCompat.Builder.setGroup()` /
+  `.setGroupSummary()`, not cosmetic. It's cancelled (`cancelRoutineGroupSummary`) the
+  moment a routine drops back to ≤1 active task, and is deliberately NOT `ongoing` — only
+  the per-task due reminders it groups are pinned; the summary itself is swipeable. Kept
+  in sync from every place a routine's active-task count can change:
+  `scheduleTaskNotifications` (per-task schedule/cancel), `handleToggleRoutineActive`, and
+  `handleToggleTaskActive`'s deactivation branch, plus cancelled outright in
+  `handleDeleteRoutine`.
   - The `task.time` (due-by) reminder is scheduled with `ongoing: true, autoCancel: false`
     so it stays pinned in the shade until the task is completed; `dismissTaskReminders`
     (called via `refreshTaskReminderVisibility` from every completion-changing path in
@@ -206,7 +216,11 @@ web):
     `removeDeliveredNotifications` rather than `cancel()` — the former just dismisses
     what's currently shown, the latter would rip out the underlying recurring alarm and
     stop future weeks from firing at all (confirmed from `TimedNotificationPublisher`'s
-    self-rescheduling in the native plugin source).
+    self-rescheduling in the native plugin source). `ongoing: true` maps to Android's real
+    `FLAG_ONGOING_EVENT`, which genuinely blocks swipe-dismiss and "Clear all" while the
+    task is pending — this is not cosmetic. It does not, and cannot, survive the user
+    disabling notifications for the app/channel at the OS settings level; that's outside
+    what any app-level flag can override.
   - `task.reminderTimes` (extra nudges in addition to `time`) get their *own* ids
     (`extraReminderIdFor`, one fixed slot per array index, not the reminder's clock value)
     rather than sharing the due notification's id. This is a hard Android constraint, not
@@ -218,13 +232,18 @@ web):
     ever have been used, even after the user removes a reminder and the old time is gone
     from the task object.
 - **Computed notifications** (`syncDynamicNotifications`) — the persistent daily summary
-  (`ongoing: true`, no live countdown — see below), the streak-at-risk nudge, and the
-  morning/evening digests. These have no backend and no background-task runner, so their
-  content can only be recomputed when the app is actually open; they're refreshed on every
-  app load and after every completion change (including from a notification action tap),
-  and rely on `on: {hour, minute}` (no `weekday`) native daily recurrence to keep firing
-  even if the app isn't reopened — just with whatever content was last computed. A
-  multi-day gap without opening the app means stale content, not a missed notification.
+  (`ongoing: true` only while something's still due — see below), the streak-at-risk
+  nudge, and the morning/evening digests. These have no backend and no background-task
+  runner, so their content can only be recomputed when the app is actually open; they're
+  refreshed on every app load and after every completion change (including from a
+  notification action tap), and rely on `on: {hour, minute}` (no `weekday`) native daily
+  recurrence to keep firing even if the app isn't reopened — just with whatever content was
+  last computed. A multi-day gap without opening the app means stale content, not a missed
+  notification. `updateSummaryNotification`'s title is a real overall percentage
+  (`Math.round` of the average fraction across today's due routines, reusing the existing
+  `getRoutineFraction` pipeline — no separate math), and its body lists each not-yet-100%
+  routine as `Title NN%` (`formatRoutineProgress`) rather than a plain done/not-done count;
+  it drops `ongoing` once every due routine hits 100%, since there's nothing left to pin.
 
 `scheduleTaskNotifications(task, routine, completions)` is the single choke point that
 decides whether a task's reminders actually get scheduled — it checks `task.active`,
