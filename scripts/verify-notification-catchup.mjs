@@ -383,19 +383,27 @@ async function main() {
   // gesture) is deterministic and still exercises the real registered receiver + persisted
   // store - this is proving app-owned receiver logic, not an OS-level flag like the workout
   // timer's swipe-resistance test was.
-  console.log('Checking for the native summary notification before dismissing it...');
-  let dump4 = '';
+  // The routines created above each trigger their own independent syncDynamicNotifications
+  // call, so the summary's content can still be catching up (e.g. not yet mentioning "Group
+  // Test Routine") for a moment after the group-summary check above already passed. Wait for
+  // two consecutive checks to agree before treating it as settled - otherwise a legitimate
+  // app-driven content update landing in the same window as the dismiss broadcast below would
+  // look exactly like a content-mismatch bug.
+  console.log('Waiting for the native summary notification to settle before dismissing it...');
   let summary1 = null;
+  let previous = null;
   const summaryStart = Date.now();
   while (Date.now() - summaryStart < 10000) {
-    dump4 = dumpNotifications();
-    summary1 = findAppRecords(dump4).find((r) => r.channel === SUMMARY_CHANNEL_ID);
-    if (summary1) break;
+    const current = findAppRecords(dumpNotifications()).find((r) => r.channel === SUMMARY_CHANNEL_ID);
+    if (current && previous && current.title === previous.title && current.text === previous.text) {
+      summary1 = current;
+      break;
+    }
+    previous = current;
     await sleep(500);
   }
   if (!summary1) {
-    console.log(dump4);
-    fail(`No notification found on the ${SUMMARY_CHANNEL_ID} channel before the dismiss check.`);
+    fail(`Summary notification on the ${SUMMARY_CHANNEL_ID} channel never settled before the dismiss check.`);
   }
   console.log('Summary notification before dismiss:', { title: summary1.title, text: summary1.text });
 
