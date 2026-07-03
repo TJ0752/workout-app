@@ -21,7 +21,18 @@ class WorkoutTimerService : Service() {
 
     companion object {
         private const val CHANNEL_ID = "workout-session-timer"
-        private const val NOTIFICATION_ID = 800000001
+        // Was 800000001 - an exact collision with notify.SummaryNotificationBuilder's
+        // SUMMARY_NOTIFICATION_ID (also 800_000_001), picked independently during the native
+        // notifications migration with no cross-reference to this already-hardcoded id. Since
+        // updateSummaryNotification fires on every completion change - including every set
+        // logged during a workout - the two notifications fought over one raw id for the entire
+        // duration of any session (this service's startForeground() vs. the summary's plain
+        // notify()/cancel() on the same id), which is exactly the kind of foreground-service
+        // notification-identity mismatch Android can crash on. See CLAUDE.md's notification-id
+        // range table - 850,000,001 sits clear of every other range (JS's up to ~900,000,004,
+        // native due-reminder's ~600,000,000-600,999,999, group-summary's
+        // ~700,000,000-700,999,999, and the summary's exact 800,000,001).
+        private const val NOTIFICATION_ID = 850_000_001
         private const val ACTION_START = "com.tharuka.routines.workout.action.START"
         private const val ACTION_UPDATE_REST = "com.tharuka.routines.workout.action.UPDATE_REST"
         private const val ACTION_CLEAR_REST = "com.tharuka.routines.workout.action.CLEAR_REST"

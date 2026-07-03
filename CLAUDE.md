@@ -335,14 +335,26 @@ the app's SQLite file directly, so all persisted state for this plugin lives in
 SharedPreferences (`SummaryNotificationStore`, `DueReminderStore`), never the DB —
 `storage.js` remains the sole DB reader/writer.
 
-**Notification-id ranges are split across JS and Kotlin and must stay disjoint** — nothing
-else enforces this invariant. JS owns `notificationIdFor`/`snoozeIdFor` (roughly
-0–9,999,999), `EXTRA_REMINDER_ID_BASE = 500,000,000`, `GROUP_SUMMARY_ID_BASE =
-700,000,000`, and digests at `900,000,002`–`900,000,004`. Kotlin owns
-`DUE_REMINDER_ID_BASE = 600,000,000` (one id per task via `DUE_REMINDER_ID_BASE +
-hashToInt(taskId)`, a Kotlin port of the id-hashing scheme that doesn't need bit-for-bit
-parity with the JS version since the two live in disjoint ranges) and
-`SUMMARY_NOTIFICATION_ID = 800,000,001`.
+**Notification-id ranges are split across JS and Kotlin (and across two separate Kotlin
+packages) and must stay disjoint** — nothing enforces this invariant automatically, so any
+new hardcoded id needs to be checked against this whole list by hand. JS owns
+`notificationIdFor`/`snoozeIdFor` (roughly 0–9,999,999), `EXTRA_REMINDER_ID_BASE =
+500,000,000`, `GROUP_SUMMARY_ID_BASE = 700,000,000`, and digests at
+`900,000,002`–`900,000,004`. `notify/` (this package) owns `DUE_REMINDER_ID_BASE =
+600,000,000` (one id per task via `DUE_REMINDER_ID_BASE + hashToInt(taskId)`, a Kotlin port
+of the id-hashing scheme that doesn't need bit-for-bit parity with the JS version since the
+two live in disjoint ranges) and `SUMMARY_NOTIFICATION_ID = 800,000,001`. `workout/`'s
+`WorkoutTimerService.NOTIFICATION_ID = 850,000,001` (see below) is a *third*, independently
+maintained id in yet another package — **this is exactly the gap that caused a real
+collision**: `WorkoutTimerService` originally hardcoded `800000001` before this native
+notifications migration existed, and when this migration picked `800,000,001` for the daily
+summary, nothing cross-referenced the already-existing workout package. Since
+`updateSummaryNotification` fires on every completion change — including every set logged
+during a workout — the two notifications fought over one raw id for the entire duration of
+any workout session (`startForeground(800000001, ...)` vs. plain `notify(800000001,
+...)`/`cancel(800000001)`), which crashed/froze the app. Fixed by moving the workout timer
+to `850,000,001`. **Any future new native notification id must be checked against every
+range in this paragraph, not just the ones in its own package.**
 
 **Part A — summary.** `showSummary`/`cancelSummary` write the `{title, body, ongoing}`
 content to `SummaryNotificationStore` *before* posting/cancelling, in that order — this
