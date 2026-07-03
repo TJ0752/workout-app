@@ -50,6 +50,17 @@
             android:name=".notify.DueReminderActionReceiver"
             android:exported="false" />
 
+        <receiver
+            android:name=".notify.DueReminderBootReceiver"
+            android:directBootAware="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -66,4 +77,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
+    <!-- For DueReminderBootReceiver - declared explicitly rather than relying on the merge from
+         @capacitor/local-notifications' own manifest, since that plugin's contract shouldn't be
+         load-bearing for a different notification type's boot survival. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 </manifest>
