@@ -332,15 +332,30 @@ async function main() {
   const multiRoutineSaved = await waitFor(page, `document.body.innerText.includes('Group Test Routine')`, 10000);
   console.log('Multi-task routine visible in list after save:', multiRoutineSaved);
   if (!multiRoutineSaved) fail('Multi-task routine was not created - form submission was likely blocked by validation.');
-  await sleep(500); // let the notification-sync side-effects that follow the DOM update settle
+
+  // handleSaveRoutine's setRoutines() (which makes the routine visible in the DOM, above) runs
+  // BEFORE its own syncAllNotifications() await resolves - the two are independent async chains
+  // kicked off from the same handler. For a multi-task routine, syncAllNotifications has to
+  // schedule reminders for every task *and* post the real group-summary notification
+  // (updateRoutineGroupSummary), which is slower than the single-task path above - so poll
+  // dumpsys itself instead of assuming a fixed settle delay is enough.
+  console.log('Waiting for the group-summary notification to appear...');
+  let dump3 = '';
+  let mentionsGroupBody = false;
+  let mentionsGroupTitle = false;
+  const groupStart = Date.now();
+  while (Date.now() - groupStart < 10000) {
+    dump3 = dumpNotifications();
+    mentionsGroupBody = dump3.includes('2 tasks');
+    mentionsGroupTitle = dump3.includes('Group Test Routine');
+    if (mentionsGroupBody && mentionsGroupTitle) break;
+    await sleep(500);
+  }
 
   console.log('--- dumpsys notification after creating multi-task routine ---');
-  const dump3 = dumpNotifications();
   const pkgLines3 = dump3.split('\n').filter((l) => l.includes(PACKAGE));
   console.log(`Lines mentioning ${PACKAGE} (${pkgLines3.length}):`);
   console.log(pkgLines3.join('\n'));
-  const mentionsGroupBody = dump3.includes('2 tasks');
-  const mentionsGroupTitle = dump3.includes('Group Test Routine');
   console.log('Mentions "2 tasks" body:', mentionsGroupBody, '| mentions routine title:', mentionsGroupTitle);
   if (!mentionsGroupBody || !mentionsGroupTitle) {
     fail('Could not find the expected group-summary notification content ("Group Test Routine" / "2 tasks").');
