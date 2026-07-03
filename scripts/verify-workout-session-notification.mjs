@@ -98,31 +98,36 @@ function uiDump() {
   return '';
 }
 
-/** Robust to attribute order within a <node .../> - matches text and bounds independently rather
- * than assuming one regex spanning both attributes in a fixed order. */
-function findNodeBoundsByText(xml, text) {
+/** Compose can merge a clickable's descendant semantics into one node, so the literal glyph may
+ * surface via content-desc rather than text (or not at all) - search both loosely
+ * (String.includes, not equality) and return every match with enough context to diagnose which
+ * one is real when more than one shows up. */
+function findAllNodesByLooseText(xml, text) {
   const nodes = xml.match(/<node\b[^>]*\/>/g) || [];
+  const matches = [];
   for (const node of nodes) {
     const textMatch = node.match(/\btext="([^"]*)"/);
-    if (textMatch && textMatch[1] === text) {
+    const descMatch = node.match(/\bcontent-desc="([^"]*)"/);
+    if ((textMatch && textMatch[1].includes(text)) || (descMatch && descMatch[1].includes(text))) {
       const boundsMatch = node.match(/\bbounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
+      const classMatch = node.match(/\bclass="([^"]*)"/);
       if (boundsMatch) {
         const [, x1, y1, x2, y2] = boundsMatch.slice(1).map(Number);
-        return { x1, y1, x2, y2, centerX: Math.floor((x1 + x2) / 2), centerY: Math.floor((y1 + y2) / 2) };
+        matches.push({
+          x1,
+          y1,
+          x2,
+          y2,
+          centerX: Math.floor((x1 + x2) / 2),
+          centerY: Math.floor((y1 + y2) / 2),
+          text: textMatch?.[1],
+          contentDesc: descMatch?.[1],
+          className: classMatch?.[1],
+        });
       }
     }
   }
-  return null;
-}
-
-async function waitForNode(text, timeoutMs = 15000, validate = () => true) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const bounds = findNodeBoundsByText(uiDump(), text);
-    if (bounds && validate(bounds)) return bounds;
-    await sleep(500);
-  }
-  return null;
+  return matches;
 }
 
 function tap(bounds) {
@@ -350,18 +355,32 @@ async function main() {
   console.log('PASS: workout timer notification survived a swipe attempt - genuinely swipe-resistant.');
 
   console.log('Closing the workout session...');
-  // Restrict to the top band of the screen (the TopAppBar's actual position) - a bare text match
-  // on "✕" alone previously landed a tap that didn't reach the real close button at all (its
-  // finish() -> onDestroy() -> WorkoutTimerService.stop() teardown never happened), most likely a
-  // stray match from UI still settling right after the shade-collapse animation.
-  const isNearTop = (bounds) => bounds.y1 < screen.height * 0.2;
+  // A bare exact text match on "✕" previously found and tapped *something*, but it didn't reach
+  // the real close button - Compose can merge a clickable's descendant semantics into one node,
+  // so the glyph may only surface via content-desc, or the match may have been an unrelated
+  // node entirely. Search loosely (text OR content-desc, substring) and log every candidate with
+  // its class/position so a wrong pick is diagnosable from the CI log rather than guessed at
+  // again; among multiple candidates, prefer the top-most (closest to the TopAppBar).
+  async function findCloseButton() {
+    const start = Date.now();
+    while (Date.now() - start < 20000) {
+      const xml = uiDump();
+      const matches = findAllNodesByLooseText(xml, '✕');
+      if (matches.length > 0) {
+        console.log('Candidate close-button nodes:', JSON.stringify(matches));
+        return matches.sort((a, b) => a.y1 - b.y1)[0];
+      }
+      await sleep(500);
+    }
+    return null;
+  }
 
   let dump3 = '';
   let timerNotif3 = { present: true };
   for (let attempt = 0; attempt < 3 && timerNotif3; attempt++) {
     if (attempt > 0) console.log(`Retrying session close (attempt ${attempt + 1})...`);
-    const closeNode = await waitForNode('✕', 20000, isNearTop);
-    if (!closeNode) fail('Could not find the session close ("✕") button near the top of the screen via UI Automator.');
+    const closeNode = await findCloseButton();
+    if (!closeNode) fail('Could not find any node matching "✕" (text or content-desc) via UI Automator.');
     tap(closeNode);
 
     // finish() -> onDestroy() -> WorkoutTimerService.stop() is a real Activity teardown, not
