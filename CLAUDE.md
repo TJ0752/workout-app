@@ -92,6 +92,36 @@ instead. Re-triggering the same code path a real action would (e.g. re-saving a 
 re-run `syncAllNotifications`) is both more faithful to the bug and avoids the SQLite
 lifecycle mismatch entirely.
 
+`scripts/verify-workout-session-notification.mjs` drives the native Compose workout session
+Activity (see "Native Android workout session" below) the same way, but with an added
+wrinkle: once `WorkoutSessionActivity` launches on top of `MainActivity`, it's *invisible to
+CDP* (CDP only sees the WebView's DOM) — interacting with it requires `adb shell
+uiautomator dump` (parsed for `<node text="..." bounds="[x1,y1][x2,y2]">`) + `adb shell
+input tap/swipe` at computed coordinates. Three non-obvious, real-device-only lessons from
+getting this working:
+- `uiautomator dump` cannot succeed while the workout timer notification's chronometer text
+  is visible on screen — its idle-wait can only complete once nothing is changing, and a
+  chronometer updates once a second for as long as it's shown. Confirmed with 70+ retries
+  over several minutes at a 0% success rate; this is a hard incompatibility, not a race
+  worth retrying through. The swipe-resistance check locates its target by screen geometry
+  (`adb shell wm size` + a sweep of plausible row Y-positions) instead of a UI dump, and
+  clears every *other* plugin-originated notification first
+  (`LocalNotifications.removeAllDeliveredNotifications()`) so a blind sweep can't
+  accidentally tap a leftover notification from an earlier test routine and tear down the
+  session as a side effect — this happened: a stray tap on a re-synced group-summary
+  notification brought the app to the foreground and looked exactly like a swipe-resistance
+  failure until the actual event log was inspected.
+- Compose can merge a clickable's descendant semantics into a single accessibility node, so
+  a button's visible glyph may only surface via `content-desc`, not `text` — match both,
+  loosely (substring, not equality), and log every candidate node's position/class when a
+  lookup might be ambiguous, rather than assuming the first match is correct.
+- `boundsMatch.slice(1)` already strips the whole-match element from a regex match array;
+  destructuring the result with a leading empty slot (`const [, x1, y1, x2, y2] = ...`)
+  skips the real `x1` and silently shifts every field over by one, leaving `y2` undefined.
+  This produced coordinates that looked plausible enough not to immediately fail, but never
+  actually landed on the intended element — caught only once diagnostic logging of every
+  candidate node's parsed bounds made the missing field visible.
+
 ## Architecture
 
 ### Data model: Routine -> Task -> Completion
@@ -281,13 +311,92 @@ a sync leaves a currently-due, not-yet-done task without one — this is why
 `scheduleTaskNotifications`/`syncAllNotifications` need `completions` threaded through from
 every call site in `App.jsx`.
 
-**No live-updating countdown/chronometer in the notification itself** — this is a real
-Android `Notification.Builder` capability (`setUsesChronometer`) that
-`@capacitor/local-notifications` doesn't expose (open upstream feature request, unresolved
-as of this writing). The community `capacitor-timer-notification` plugin exists but pins
-`@capacitor/core: ^6.0.0` against our v8 — not worth the compatibility risk. Getting a real
-one requires a custom native Android plugin; the in-app countdown on the Today screen
-(`TodayView.jsx`'s `CountdownLabel`, ticking via a 60s `setInterval`) is the fallback.
+**No live-updating countdown/chronometer in the notification itself, for anything routed
+through `@capacitor/local-notifications`** — this is a real Android `Notification.Builder`
+capability (`setUsesChronometer`) the plugin doesn't expose (open upstream feature request,
+unresolved as of this writing), and separately, every notification it posts goes through
+plain `NotificationManagerCompat.notify()`, never `startForeground()` — so its `ongoing`
+flag does not actually block swipe-dismiss on Android 8+ despite setting
+`FLAG_ONGOING_EVENT` (confirmed on-device). The community `capacitor-timer-notification`
+plugin exists but pins `@capacitor/core: ^6.0.0` against our v8 — not worth the
+compatibility risk. Both gaps are inherent to the plugin, not fixable from JS; getting a
+real fix requires a custom native Android plugin — which is exactly what the workout
+session screen below does, for that one screen. The in-app countdown on the Today screen
+(`TodayView.jsx`'s `CountdownLabel`, ticking via a 60s `setInterval`) remains the fallback
+everywhere else in the app.
+
+### Native Android workout session (`android/shared/`, `android/app/.../workout/`)
+
+The live workout session screen is the one part of the app rebuilt as genuine native
+Android (Kotlin + Jetpack Compose), specifically to get a real foreground-`Service`-backed
+notification — the two gaps called out just above (no swipe-resistant `ongoing`, no
+chronometer) have no JS-side fix. Everything else (Routines, Dashboard, History, all
+storage/versioning/analytics) stays untouched in React/JS. `WorkoutSessionView.jsx` is kept
+as the **web/dev-loop path** — `src/nativeWorkoutSession.js`'s
+`isNativeWorkoutSessionAvailable()` gates on `Capacitor.isNativePlatform()` (same pattern as
+every other native-only feature), so `npm run dev` still exercises the full workout UI
+in-browser.
+
+**Critical constraint driving the whole bridge design:** native Kotlin code must never open
+the app's SQLite database file directly. `@capacitor-community/sqlite` always loads
+`net.zetetic:sqlcipher-android`'s `libsqlcipher.so` (confirmed by reading its native
+source), never Android's own `libsqlite.so`, even in this app's `'no-encryption'` mode. A
+second, independently-linked SQLite library opening the same file in the same process is
+the "two copies of SQLite in one process" corruption/deadlock scenario SQLite's own docs
+warn about (each library keeps private, non-cooperating POSIX advisory-lock bookkeeping).
+**All data exchange between native code and JS goes through the Capacitor plugin bridge
+only** — `storage.js` remains the sole DB reader/writer.
+
+- **`:shared` (Kotlin Multiplatform module, `androidTarget()` only for now)** — pure-Kotlin
+  ports of `src/utils/workouts.js`'s `computeSessionFraction`/`getExerciseVolume`/
+  `getExercisePR` and `WorkoutSessionView.jsx`'s `findNextPosition`, verified against the
+  same edge cases as `workouts.test.js`. `commonMain` stays platform-free (no Android/JSON
+  imports) so real iOS targets can be added later without touching this logic — iOS itself
+  is deferred, not blocked, since it needs a Mac/Xcode toolchain unavailable both locally
+  and on `ubuntu-latest` CI runners.
+- **`WorkoutSessionPlugin` (`@CapacitorPlugin(name = "WorkoutSession")`)** — `start(payload)`
+  launches `WorkoutSessionActivity` via `startActivityForResult` + `@ActivityCallback`,
+  passing `taskId`/`taskTitle`/`dateKey`/`exercises`/`logsForDate` as one JSON Intent extra
+  (shape matches `task.exercises`/`workoutLogsByTask[taskId][dateKey]` exactly — no JS-side
+  translation needed). Since `@ActivityCallback` only fires once (on Activity finish),
+  per-set progress during the session needs a separate channel: `WorkoutSessionBridge` is a
+  same-process singleton (`var onSetLogged: ((JSObject) -> Unit)?`) the Activity calls
+  directly and the Plugin wires in `load()` to `notifyListeners("workoutSetLogged", ...,
+  true)` — an unofficial but standard Capacitor pattern for mid-flight Activity-to-Plugin
+  events. Bounded risk: full process death mid-session loses at most one in-progress
+  (not-yet-marked-done) set, since every prior set already went through the normal
+  `handleLogWorkoutSet` SQLite write. `App.jsx`'s `handleStartWorkout` branches on
+  `isNativeWorkoutSessionAvailable()` but reuses `handleLogWorkoutSet`/`handleCloseSession`
+  **unmodified** on both the web and native paths — the payload shapes above were designed
+  specifically so no translation layer is needed.
+- **`WorkoutSessionActivity` + `WorkoutSessionScreen`** — a full-screen `ComponentActivity`
+  (not a Fragment, to avoid entangling Compose with `BridgeActivity`'s WebView hierarchy)
+  whose Compose UI is a direct port of `WorkoutSessionView.jsx`'s render tree (exercise nav
+  chips, set-input panel, rest screen, finished screen).
+- **`WorkoutTimerService`** — a genuine foreground `Service`, started from
+  `WorkoutSessionActivity.onCreate()` and stopped from `onDestroy()`. This is the actual fix
+  for both gaps described above:
+  - `ServiceCompat.startForeground(..., ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH)` —
+    `health` (not `specialUse`) is Android's documented recommendation for fitness/exercise
+    trackers and avoids `specialUse`'s Play Store justification-review friction. Confirmed
+    on a real emulator: the resulting notification carries genuine
+    `FLAG_FOREGROUND_SERVICE` and survives a real swipe gesture, unlike
+    `@capacitor/local-notifications`' `ongoing` flag alone.
+  - `setUsesChronometer(true)` (+ `setChronometerCountDown` while resting) gives a real live
+    elapsed/rest-countdown display — solved for this one screen; every other screen still
+    only has the `setInterval`-based fallback described above.
+  - **Stopping a foreground service's notification is not as simple as `stopSelf()`** —
+    confirmed on a real device: calling `stopSelf()` alone left the notification and service
+    visibly running after the session closed. The fix is calling
+    `ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)` first,
+    explicitly detaching and removing the notification before stopping the service, rather
+    than relying on implicit cleanup via `onDestroy()`.
+  - Runs on its own notification channel (`workout-session-timer`), fully separate from
+    `notifications.js`'s three JS-created channels.
+
+See "Real-device verification via GitHub Actions emulator" above for how this is actually
+proven to work (not just compile) on a real emulator, and for hard-won lessons about
+driving a native Compose screen that has nothing to do with the WebView.
 
 ### Android signing (`android/debug.keystore`)
 
