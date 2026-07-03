@@ -32,6 +32,8 @@ class WorkoutSessionActivity : ComponentActivity() {
         val exercises = parseExercises(payload?.optJSONArray("exercises"))
         val logsForDate = parseLogsForDate(payload?.optJSONObject("logsForDate"))
 
+        WorkoutTimerService.start(this, taskTitle)
+
         setContent {
             MaterialTheme {
                 Surface {
@@ -56,8 +58,8 @@ class WorkoutSessionActivity : ComponentActivity() {
                             event.put("values", valuesJson)
                             WorkoutSessionBridge.onSetLogged?.invoke(event)
                         },
-                        onRestStart = {},
-                        onRestEnd = {},
+                        onRestStart = { restSeconds -> WorkoutTimerService.updateRest(this, restSeconds) },
+                        onRestEnd = { WorkoutTimerService.clearRest(this) },
                         onClose = { finishWithResult() },
                     )
                 }
@@ -72,6 +74,11 @@ class WorkoutSessionActivity : ComponentActivity() {
         val data = Intent().putExtra(EXTRA_RESULT, result.toString())
         setResult(RESULT_OK, data)
         finish()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        WorkoutTimerService.stop(this)
     }
 
     private fun parseExercises(array: JSONArray?): List<Exercise> {
