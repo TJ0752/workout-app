@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 
@@ -21,6 +22,7 @@ import androidx.core.app.ServiceCompat
 class WorkoutTimerService : Service() {
 
     companion object {
+        private const val LOG_TAG = "WorkoutTimerService"
         private const val CHANNEL_ID = "workout-session-timer"
         // Was 800000001 - an exact collision with notify.SummaryNotificationBuilder's
         // SUMMARY_NOTIFICATION_ID (also 800_000_001), picked independently during the native
@@ -52,6 +54,21 @@ class WorkoutTimerService : Service() {
         // reached), used to color Notification.ProgressStyle's per-exercise segments on API 36+.
         private const val ACCENT_COLOR = 0xFF0A9764.toInt()
         private const val NEUTRAL_COLOR = 0xFF9E9689.toInt()
+
+        // TEMPORARILY DISABLED - a user on a real Android 16 (API 36) device reported the app
+        // still crashing/freezing during a workout session after this notification style shipped.
+        // buildProgressStyleNotification() compiled cleanly in CI, but CI's test emulator only
+        // runs API 30 and could never actually execute this branch - compiling clean does not
+        // prove Android's notification system accepts it at runtime, and the exact ProgressStyle
+        // API surface was pieced together from documentation that already turned out to be wrong
+        // once (see the dropped "promoted" attempt below). A try/catch around
+        // buildProgressStyleNotification() itself is still in place as defense-in-depth, but a
+        // "successfully built" Notification object can still be rejected by the system server at
+        // startForeground()/notify() time in ways that bypass a try/catch scoped to the builder
+        // call alone - so this flag forces the known-good plain notification unconditionally
+        // until real logcat/diagnostic output from an actual Android 16 device confirms what's
+        // actually happening. Flip back to true once that's understood and fixed.
+        private const val ENABLE_PROGRESS_STYLE_NOTIFICATION = false
 
         fun start(context: Context, taskTitle: String) {
             val intent = Intent(context, WorkoutTimerService::class.java).apply {
@@ -176,8 +193,20 @@ class WorkoutTimerService : Service() {
         // The rich progress bar only applies while actively logging sets - during rest the plain
         // chronometer-countdown notification below already covers that concern well, and rest
         // naturally pauses "current exercise progress" conceptually anyway.
-        if (Build.VERSION.SDK_INT >= 36 && !resting) {
-            return buildProgressStyleNotification()
+        if (ENABLE_PROGRESS_STYLE_NOTIFICATION && Build.VERSION.SDK_INT >= 36 && !resting) {
+            // buildProgressStyleNotification() compiles cleanly (confirmed in CI) but has never
+            // actually run on a real Android 16 device - Android's notification system is known
+            // to enforce runtime validation on newer styles beyond what the compiler can check,
+            // and the exact ProgressStyle API surface was pieced together from documentation
+            // that already turned out to be wrong once (see the dropped "promoted" attempt
+            // below). Never let a presentation bug here crash the whole app or kill the
+            // foreground service - fall back to the plain notification and log the real
+            // exception so it's diagnosable from logcat instead of guessed at again.
+            try {
+                return buildProgressStyleNotification()
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "buildProgressStyleNotification() failed - falling back to plain notification", e)
+            }
         }
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
