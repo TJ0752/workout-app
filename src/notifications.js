@@ -2,7 +2,13 @@ import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { calcRoutineStreak, getRoutineFraction } from './utils/date';
 import { quickAddAmountsFor, isTaskDoneToday, MAX_EXTRA_REMINDERS } from './utils/tasks';
-import { showSummaryNotification, cancelSummaryNotification } from './nativeNotifications';
+import {
+  showSummaryNotification,
+  cancelSummaryNotification,
+  nativeScheduleDueReminder,
+  nativeCancelDueReminder,
+  nativeDismissDueReminderToday,
+} from './nativeNotifications';
 
 const CHANNEL_ID = 'routine-reminders';
 const DIGEST_CHANNEL_ID = 'daily-digest';
@@ -149,6 +155,9 @@ export async function cancelTaskNotifications(task) {
   if (!Capacitor.isNativePlatform()) return;
   const ids = [{ id: snoozeIdFor(task.id) }];
   for (const day of [0, 1, 2, 3, 4, 5, 6]) {
+    // Per-day due-by ids are no longer scheduled here (see scheduleTaskNotifications) - kept in
+    // this cancel list only to clean up any alarm still scheduled the old way for installs
+    // upgrading mid-migration; a no-op for anything created after the cutover.
     ids.push({ id: notificationIdFor(task.id, day) });
     for (let slot = 0; slot < MAX_EXTRA_REMINDERS; slot++) {
       ids.push({ id: extraReminderIdFor(task.id, day, slot) });
@@ -159,6 +168,7 @@ export async function cancelTaskNotifications(task) {
   } catch (err) {
     console.warn('Failed to cancel notifications', err);
   }
+  await nativeCancelDueReminder(task.id);
 }
 
 /**
@@ -170,6 +180,8 @@ export async function cancelTaskNotifications(task) {
 export async function dismissTaskReminders(task) {
   if (!Capacitor.isNativePlatform()) return;
   const today = new Date().getDay();
+  // Kept to clean up any pre-migration stock-scheduled due notification still shown; a no-op
+  // once nothing's posted that way anymore.
   const ids = [{ id: notificationIdFor(task.id, today) }];
   for (let slot = 0; slot < MAX_EXTRA_REMINDERS; slot++) {
     ids.push({ id: extraReminderIdFor(task.id, today, slot) });
@@ -179,6 +191,7 @@ export async function dismissTaskReminders(task) {
   } catch (err) {
     console.warn('Failed to dismiss task reminders', err);
   }
+  await nativeDismissDueReminderToday(task.id);
 }
 
 /** Call after any completion change so a just-completed task's pinned reminder clears immediately. */
@@ -195,51 +208,6 @@ function taskNotificationContent(task, routine) {
   const group = routine && routine.tasks.length > 1 ? `routine-${routine.id}` : undefined;
   const extra = { taskId: task.id, routineId: routine?.id };
   return { title, body, actionTypeId, group, extra };
-}
-
-/**
- * Re-fires today's pinned due-by reminder immediately if it should currently
- * be showing but isn't going to on its own. This exists because
- * scheduleTaskNotifications unconditionally cancels+reschedules on every
- * sync (app open, any routine save - see syncAllNotifications), and Android's
- * recurring `on: {weekday, hour, minute}` trigger does NOT retroactively fire
- * for a time that's already passed today - confirmed from DateMatch.java's
- * postponeTriggerIfNeeded, which jumps a full WEEK_OF_MONTH forward once
- * today's hour:minute has passed, not later today. Without this catch-up, a
- * reminder that's supposed to stay pinned until the task is done instead
- * silently vanishes and doesn't return until the same weekday next week, the
- * moment anyone reopens the app or saves any routine.
- */
-async function catchUpDueReminderIfNeeded(task, routine, completions) {
-  const now = new Date();
-  const todayWeekday = now.getDay();
-  if (!task.days.includes(todayWeekday) || isTaskDoneToday(task, completions)) return;
-
-  const [hour, minute] = task.time.split(':').map(Number);
-  const due = new Date(now);
-  due.setHours(hour, minute, 0, 0);
-  if (now < due) return;
-
-  const { title, body, actionTypeId, group, extra } = taskNotificationContent(task, routine);
-  try {
-    await LocalNotifications.schedule({
-      notifications: [
-        {
-          id: notificationIdFor(task.id, todayWeekday),
-          title,
-          body,
-          channelId: CHANNEL_ID,
-          actionTypeId,
-          group,
-          ongoing: true,
-          autoCancel: false,
-          extra,
-        },
-      ],
-    });
-  } catch (err) {
-    console.warn('Failed to re-fire overdue task reminder', err);
-  }
 }
 
 /**
@@ -293,7 +261,7 @@ export async function cancelRoutineGroupSummary(routineId) {
   }
 }
 
-export async function scheduleTaskNotifications(task, routine, completions) {
+export async function scheduleTaskNotifications(task, routine) {
   if (!Capacitor.isNativePlatform()) return;
   await cancelTaskNotifications(task);
   if (!task.active || task.days.length === 0 || routine?.active === false) {
@@ -302,30 +270,15 @@ export async function scheduleTaskNotifications(task, routine, completions) {
   }
 
   const { title, body, actionTypeId, group, extra } = taskNotificationContent(task, routine);
-
-  // The due-by reminder is the one that stays pinned (`ongoing`) until the
-  // task is marked done - see dismissTaskReminders. Extra reminder times are
-  // normal, dismissible nudges leading up to it; they get their own ids
-  // (extraReminderIdFor) rather than sharing this one, since Android's
-  // AlarmManager treats two alarms scheduled under the same id as the same
-  // alarm and the later one cancels the earlier before it can ever fire.
   const [hour, minute] = task.time.split(':').map(Number);
-  const dueNotifications = task.days.map((day) => ({
-    id: notificationIdFor(task.id, day),
-    title,
-    body,
-    channelId: CHANNEL_ID,
-    actionTypeId,
-    group,
-    ongoing: true,
-    autoCancel: false,
-    extra,
-    schedule: {
-      on: { weekday: day + 1, hour, minute },
-      allowWhileIdle: true,
-    },
-  }));
 
+  // The due-by reminder itself is scheduled natively (see nativeScheduleDueReminder) so it can
+  // reappear immediately if swiped away before the task is done - @capacitor/local-notifications
+  // has no exposed hook for a custom setDeleteIntent() at all (see CLAUDE.md). Extra reminder
+  // times are normal, dismissible nudges leading up to it and stay on the stock plugin
+  // unchanged; they get their own ids (extraReminderIdFor) since Android's AlarmManager treats
+  // two alarms scheduled under the same id as the same alarm and the later one cancels the
+  // earlier before it can ever fire.
   const extraTimes = (task.reminderTimes || []).slice(0, MAX_EXTRA_REMINDERS);
   const extraNotifications = [];
   for (const day of task.days) {
@@ -347,22 +300,35 @@ export async function scheduleTaskNotifications(task, routine, completions) {
     });
   }
 
-  try {
-    await LocalNotifications.schedule({ notifications: [...dueNotifications, ...extraNotifications] });
-  } catch (err) {
-    console.warn('Failed to schedule notifications', err);
+  if (extraNotifications.length > 0) {
+    try {
+      await LocalNotifications.schedule({ notifications: extraNotifications });
+    } catch (err) {
+      console.warn('Failed to schedule notifications', err);
+    }
   }
 
-  await catchUpDueReminderIfNeeded(task, routine, completions);
+  await nativeScheduleDueReminder({
+    taskId: task.id,
+    routineId: routine?.id,
+    title,
+    body,
+    days: task.days,
+    hour,
+    minute,
+    group,
+    completionType: task.completionType,
+    quickAddAmounts: task.completionType === 'quantity' ? quickAddAmountsFor(task) : [],
+  });
   if (routine) await updateRoutineGroupSummary(routine);
 }
 
-export async function syncAllNotifications(routines, completions) {
+export async function syncAllNotifications(routines) {
   if (!Capacitor.isNativePlatform()) return;
   await registerNotificationActionTypes(routines);
   for (const routine of routines) {
     for (const task of routine.tasks) {
-      await scheduleTaskNotifications(task, routine, completions);
+      await scheduleTaskNotifications(task, routine);
     }
   }
 }

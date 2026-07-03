@@ -102,4 +102,21 @@ class NativeNotificationsPlugin : Plugin() {
         DueReminderScheduler.cancel(context, taskId)
         call.resolve()
     }
+
+    /**
+     * Called once a task is marked done, so its due-by reminder actually goes away instead of
+     * reappearing on the next swipe - clears awaitingCompletion (the flag
+     * DueReminderDismissReceiver checks) and cancels whatever's currently shown.
+     */
+    @PluginMethod
+    fun dismissDueReminderToday(call: PluginCall) {
+        val taskId = call.getString("taskId")
+        if (taskId == null) {
+            call.reject("taskId is required")
+            return
+        }
+        DueReminderStore.setAwaitingCompletion(context, taskId, false)
+        NotificationManagerCompat.from(context).cancel(dueReminderNotificationId(taskId))
+        call.resolve()
+    }
 }

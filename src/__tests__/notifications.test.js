@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const calls = { scheduled: [], cancelled: [], removed: [], registered: [], summaryShown: [], summaryCancelled: 0 };
+const calls = {
+  scheduled: [],
+  cancelled: [],
+  removed: [],
+  registered: [],
+  summaryShown: [],
+  summaryCancelled: 0,
+  dueReminderScheduled: [],
+  dueReminderCancelled: [],
+  dueReminderDismissed: [],
+};
 
 // Mock the two Capacitor packages notifications.js talks to. `isNativePlatform`
 // must return true, or every exported function in notifications.js short-
@@ -16,6 +26,15 @@ vi.mock('@capacitor/core', () => ({
     }),
     cancelSummary: vi.fn(async () => {
       calls.summaryCancelled += 1;
+    }),
+    scheduleDueReminder: vi.fn(async (entry) => {
+      calls.dueReminderScheduled.push(entry);
+    }),
+    cancelDueReminder: vi.fn(async ({ taskId }) => {
+      calls.dueReminderCancelled.push(taskId);
+    }),
+    dismissDueReminderToday: vi.fn(async ({ taskId }) => {
+      calls.dueReminderDismissed.push(taskId);
     }),
   })),
 }));
@@ -41,7 +60,13 @@ vi.mock('@capacitor/local-notifications', () => ({
   },
 }));
 
-import { scheduleTaskNotifications, updateRoutineGroupSummary, updateSummaryNotification } from '../notifications.js';
+import {
+  scheduleTaskNotifications,
+  cancelTaskNotifications,
+  dismissTaskReminders,
+  updateRoutineGroupSummary,
+  updateSummaryNotification,
+} from '../notifications.js';
 
 // Fixed "now" = Tuesday, 2026-07-07, 10:00 - same fixture used in
 // utils/date.test.js, so due-time-passed / weekday logic is deterministic.
@@ -56,6 +81,9 @@ function resetCalls() {
   calls.registered.length = 0;
   calls.summaryShown.length = 0;
   calls.summaryCancelled = 0;
+  calls.dueReminderScheduled.length = 0;
+  calls.dueReminderCancelled.length = 0;
+  calls.dueReminderDismissed.length = 0;
 }
 
 beforeEach(() => {
@@ -88,8 +116,8 @@ describe('routine group summary', () => {
     const taskB = task({ id: 'b', title: 'Water' });
     const routine = { id: 'routine-1', title: 'Morning', tasks: [taskA, taskB], active: true, notes: '' };
 
-    await scheduleTaskNotifications(taskA, routine, {});
-    await scheduleTaskNotifications(taskB, routine, {});
+    await scheduleTaskNotifications(taskA, routine);
+    await scheduleTaskNotifications(taskB, routine);
 
     const summary = calls.scheduled.find((n) => n.groupSummary === true);
     expect(summary).toBeDefined();
@@ -117,64 +145,90 @@ describe('routine group summary', () => {
     const soloTask = task({ id: 'solo' });
     const routine = { id: 'routine-solo', title: 'Solo', tasks: [soloTask], active: true, notes: '' };
 
-    await scheduleTaskNotifications(soloTask, routine, {});
+    await scheduleTaskNotifications(soloTask, routine);
 
     expect(calls.scheduled.find((n) => n.groupSummary === true)).toBeUndefined();
   });
 });
 
-describe('catch-up due reminder (catchUpDueReminderIfNeeded)', () => {
-  it('re-fires an overdue, not-yet-done task immediately (no schedule field) whenever synced', async () => {
-    const overdueTask = task({ id: 'brand-new', title: 'Evening walk', time: '08:00' }); // 08:00 < now (10:00)
-    const routine = { id: 'routine-2', title: 'Evening walk', tasks: [overdueTask], active: true, notes: '' };
+describe('native due-by reminder', () => {
+  it('schedules the due-by reminder natively with the right payload shape for a boolean task', async () => {
+    const boolTask = task({ id: 'brand-new', title: 'Evening walk', time: '08:00' });
+    const routine = { id: 'routine-2', title: 'Evening walk', tasks: [boolTask], active: true, notes: '' };
 
-    await scheduleTaskNotifications(overdueTask, routine, {});
+    await scheduleTaskNotifications(boolTask, routine);
 
-    // The normal recurring due entry (with a `schedule` field) should also
-    // have been (re)scheduled by the same call...
-    const recurring = calls.scheduled.find((n) => n.extra?.taskId === 'brand-new' && n.schedule);
-    expect(recurring).toBeDefined();
-    // ...plus a separate immediate catch-up fire, since cancelTaskNotifications
-    // unconditionally wipes the already-showing pinned reminder first and
-    // Android's recurring trigger won't retroactively fire for a passed time.
-    const catchUp = calls.scheduled.find((n) => n.extra?.taskId === 'brand-new' && n.ongoing && !n.schedule);
-    expect(catchUp).toBeDefined();
+    expect(calls.dueReminderScheduled).toHaveLength(1);
+    const entry = calls.dueReminderScheduled[0];
+    expect(entry).toMatchObject({
+      taskId: 'brand-new',
+      routineId: 'routine-2',
+      title: 'Evening walk',
+      days: [TUESDAY],
+      hour: 8,
+      minute: 0,
+      completionType: 'boolean',
+      quickAddAmounts: [],
+    });
+    // Single-task routine - no group tag needed.
+    expect(entry.group).toBeUndefined();
   });
 
-  it('does not catch-up-fire a task scheduled for a different day, but still sweeps its stale ids', async () => {
-    const yesterday = (TUESDAY + 6) % 7; // Monday
-    const mondayOnly = task({ id: 'monday-task', days: [yesterday] });
-    const routine = { id: 'routine-3', title: 'Monday routine', tasks: [mondayOnly], active: true, notes: '' };
+  it('schedules the due-by reminder natively with quickAddAmounts for a quantity task', async () => {
+    const qtyTask = task({
+      id: 'qty-task',
+      completionType: 'quantity',
+      target: 8,
+      quickAdd: [1, 2],
+    });
+    const routine = { id: 'routine-6', title: 'Hydrate', tasks: [qtyTask], active: true, notes: '' };
 
-    await scheduleTaskNotifications(mondayOnly, routine, {});
+    await scheduleTaskNotifications(qtyTask, routine);
 
-    // cancelTaskNotifications unconditionally sweeps every weekday id
-    // (including Monday's) - this is what clears a stale pinned reminder
-    // once the day has moved past it.
-    expect(calls.cancelled.length).toBeGreaterThan(0);
-    const immediateFire = calls.scheduled.find((n) => n.extra?.taskId === 'monday-task' && !n.schedule);
-    expect(immediateFire).toBeUndefined();
+    expect(calls.dueReminderScheduled).toHaveLength(1);
+    expect(calls.dueReminderScheduled[0]).toMatchObject({
+      taskId: 'qty-task',
+      completionType: 'quantity',
+      quickAddAmounts: [1, 2],
+    });
   });
 
-  it('does not catch-up-fire a task that is already done today', async () => {
-    const doneTask = task({ id: 'done-task', time: '08:00' });
-    const routine = { id: 'routine-4', title: 'Done routine', tasks: [doneTask], active: true, notes: '' };
-    const completions = { 'done-task': { [TODAY_KEY]: 1 } };
+  it('tags the due reminder with the routine group when the routine has multiple tasks', async () => {
+    const taskA = task({ id: 'a', title: 'Stretch' });
+    const taskB = task({ id: 'b', title: 'Water' });
+    const routine = { id: 'routine-1', title: 'Morning', tasks: [taskA, taskB], active: true, notes: '' };
 
-    await scheduleTaskNotifications(doneTask, routine, completions);
+    await scheduleTaskNotifications(taskA, routine);
 
-    const immediateFire = calls.scheduled.find((n) => n.extra?.taskId === 'done-task' && !n.schedule);
-    expect(immediateFire).toBeUndefined();
+    const entry = calls.dueReminderScheduled.find((e) => e.taskId === 'a');
+    expect(entry.group).toBe('routine-routine-1');
   });
 
-  it('does not catch-up-fire a task whose due time has not passed yet today', async () => {
-    const notYetDueTask = task({ id: 'later-task', time: '23:00' }); // now is 10:00
-    const routine = { id: 'routine-5', title: 'Late routine', tasks: [notYetDueTask], active: true, notes: '' };
+  it('does not schedule a due reminder for an inactive task, a task with no active days, or a paused routine', async () => {
+    const inactiveTask = task({ id: 'inactive', active: false });
+    const noDaysTask = task({ id: 'no-days', days: [] });
+    const pausedRoutineTask = task({ id: 'paused-routine-task' });
+    const routine1 = { id: 'r1', title: 'R1', tasks: [inactiveTask], active: true, notes: '' };
+    const routine2 = { id: 'r2', title: 'R2', tasks: [noDaysTask], active: true, notes: '' };
+    const routine3 = { id: 'r3', title: 'R3', tasks: [pausedRoutineTask], active: false, notes: '' };
 
-    await scheduleTaskNotifications(notYetDueTask, routine, {});
+    await scheduleTaskNotifications(inactiveTask, routine1);
+    await scheduleTaskNotifications(noDaysTask, routine2);
+    await scheduleTaskNotifications(pausedRoutineTask, routine3);
 
-    const immediateFire = calls.scheduled.find((n) => n.extra?.taskId === 'later-task' && !n.schedule);
-    expect(immediateFire).toBeUndefined();
+    expect(calls.dueReminderScheduled).toHaveLength(0);
+  });
+
+  it('cancels the native due reminder as part of cancelTaskNotifications', async () => {
+    await cancelTaskNotifications(task({ id: 'to-cancel' }));
+
+    expect(calls.dueReminderCancelled).toEqual(['to-cancel']);
+  });
+
+  it('dismisses today\'s native due reminder as part of dismissTaskReminders', async () => {
+    await dismissTaskReminders(task({ id: 'to-dismiss' }));
+
+    expect(calls.dueReminderDismissed).toEqual(['to-dismiss']);
   });
 });
 

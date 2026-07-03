@@ -35,3 +35,26 @@ export function initDueReminderActionListener(onMarkDone, onAddQuantity) {
     }
   });
 }
+
+/**
+ * Schedules the per-task due-by reminder natively (see DueReminderScheduler.kt) - the
+ * "reappear on dismiss" replacement for the ongoing pinned reminder @capacitor/local-notifications
+ * used to own, which can't support a real setDeleteIntent(). Content (title/body/group) is
+ * computed by the caller via notifications.js's existing taskNotificationContent, not
+ * recomputed here, so there's exactly one place that logic lives.
+ */
+export async function nativeScheduleDueReminder(entry) {
+  if (!NativeNotifications) return;
+  await NativeNotifications.scheduleDueReminder(entry);
+}
+
+export async function nativeCancelDueReminder(taskId) {
+  if (!NativeNotifications) return;
+  await NativeNotifications.cancelDueReminder({ taskId });
+}
+
+/** Clears awaitingCompletion and cancels today's notification - called once a task is marked done. */
+export async function nativeDismissDueReminderToday(taskId) {
+  if (!NativeNotifications) return;
+  await NativeNotifications.dismissDueReminderToday({ taskId });
+}
