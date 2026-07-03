@@ -32,6 +32,13 @@ jobs:
       - name: Sync Capacitor Android project
         run: npx cap sync android
 
+      - name: Run :shared unit tests
+        working-directory: android
+        # assembleDebug only compiles :shared (as a dependency of :app) - it never executes
+        # its commonTest suite, so a broken WorkoutLogicTest/ReminderScheduleTest could pass
+        # CI indefinitely without this running explicitly.
+        run: ./gradlew :shared:testDebugUnitTest
+
       - name: Build debug APK
         working-directory: android
         # versionCode = the Actions run number (always increasing, unique per
