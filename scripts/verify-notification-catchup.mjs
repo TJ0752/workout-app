@@ -249,10 +249,13 @@ async function main() {
   console.log(`Day chip ${targetLabel} selected:`, true);
 
   await mustEval(`window.__test.clickByText('button[type="submit"]', 'Add routine')`, 'submit Add routine');
-  await sleep(2500); // let handleSaveRoutine's syncAllNotifications finish
-
-  const routineSaved = await page.evaluate(`document.body.innerText.includes('Emulator Catchup Test')`);
+  // Poll rather than a fixed sleep - handleSaveRoutine's native SQLite round-trip through
+  // syncAllNotifications has been observed to occasionally take several seconds on a
+  // freshly-booted emulator, well past what a short fixed sleep assumes.
+  const routineSaved = await waitFor(page, `document.body.innerText.includes('Emulator Catchup Test')`, 10000);
   console.log('Routine visible in list after save:', routineSaved);
+  if (!routineSaved) fail('Routine was not created within 10s of submitting - form submission likely failed.');
+  await sleep(500); // let the notification-sync side-effects that follow the DOM update settle
 
   console.log('--- dumpsys notification after initial save ---');
   const dump1 = dumpNotifications();
@@ -283,7 +286,8 @@ async function main() {
   await mustEval(`window.__test.clickByText('button', 'Edit')`, 'click Edit on the saved routine');
   await sleep(300);
   await mustEval(`window.__test.clickByText('button[type="submit"]', 'Save changes')`, 'submit Save changes');
-  await sleep(2500); // let handleSaveRoutine's syncAllNotifications finish
+  await sleep(4500); // let handleSaveRoutine's syncAllNotifications finish - native SQLite round-trips
+                      // have been observed to occasionally take several seconds on a cold emulator
 
   console.log('--- dumpsys notification after re-save/resync ---');
   const dump2 = dumpNotifications();
@@ -324,11 +328,11 @@ async function main() {
     'set 2nd task name'
   );
   await mustEval(`window.__test.clickByText('button[type="submit"]', 'Add routine')`, 'submit multi-task routine');
-  await sleep(2500);
 
-  const multiRoutineSaved = await page.evaluate(`document.body.innerText.includes('Group Test Routine')`);
+  const multiRoutineSaved = await waitFor(page, `document.body.innerText.includes('Group Test Routine')`, 10000);
   console.log('Multi-task routine visible in list after save:', multiRoutineSaved);
   if (!multiRoutineSaved) fail('Multi-task routine was not created - form submission was likely blocked by validation.');
+  await sleep(500); // let the notification-sync side-effects that follow the DOM update settle
 
   console.log('--- dumpsys notification after creating multi-task routine ---');
   const dump3 = dumpNotifications();

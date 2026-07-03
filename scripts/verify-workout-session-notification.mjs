@@ -248,26 +248,36 @@ async function main() {
     'set exercise name'
   );
   await mustEval(`window.__test.clickByText('button[type="submit"]', 'Add routine')`, 'submit Add routine');
-  await sleep(2500);
 
-  const routineSaved = await page.evaluate(`document.body.innerText.includes('Emulator Workout Test')`);
+  const routineSaved = await waitFor(page, `document.body.innerText.includes('Emulator Workout Test')`, 10000);
   console.log('Workout routine visible in list after save:', routineSaved);
-  if (!routineSaved) fail('Workout routine was not created.');
+  if (!routineSaved) fail('Workout routine was not created within 10s of submitting - form submission likely failed.');
+  await sleep(500);
 
   await mustEval(`window.__test.clickByText('.app-tabbar button', 'Today')`, 'click Today tab');
   await sleep(500);
 
   console.log('Starting the native workout session...');
   await mustEval(`window.__test.clickByText('button.qty-btn.primary', 'Start workout')`, 'click Start workout');
-  await sleep(2500); // let WorkoutSession.start()'s Intent launch WorkoutSessionActivity + WorkoutTimerService.onCreate
 
+  // WorkoutSession.start()'s Intent launches WorkoutSessionActivity + WorkoutTimerService.onCreate
+  // natively - there's no WebView DOM signal to poll for this, so poll dumpsys itself instead of a
+  // fixed sleep (native SQLite/Activity-launch timing is variable on a cold emulator, same issue
+  // fixed in verify-notification-catchup.mjs).
+  console.log('Waiting for the workout timer notification to appear...');
+  let records1 = [];
+  let timerNotif1 = null;
+  const notifStart = Date.now();
+  while (Date.now() - notifStart < 15000) {
+    records1 = findAppRecords(dumpNotifications());
+    timerNotif1 = records1.find((r) => r.channel === TIMER_CHANNEL_ID);
+    if (timerNotif1) break;
+    await sleep(500);
+  }
   console.log('--- dumpsys notification right after starting the session ---');
-  const dump1 = dumpNotifications();
-  const records1 = findAppRecords(dump1);
   console.log(records1.map((r) => ({ flags: r.flags.toString(16), channel: r.channel })));
-  const timerNotif1 = records1.find((r) => r.channel === TIMER_CHANNEL_ID);
   if (!timerNotif1) {
-    console.log(dump1);
+    console.log(dumpNotifications());
     fail(`No notification found on the ${TIMER_CHANNEL_ID} channel after starting a workout session.`);
   }
   if (!(timerNotif1.flags & FLAG_FOREGROUND_SERVICE)) {
