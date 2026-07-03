@@ -123,6 +123,13 @@ getting this working:
   actually landed on the intended element — caught only once diagnostic logging of every
   candidate node's parsed bounds made the missing field visible.
 
+The script also taps "Mark set done" (via the same `uiautomator` approach as the close
+button) to log a real set mid-session — this is the regression check for the
+`WorkoutTimerService`/daily-summary notification-id collision (see "Native Android workout
+session" below): logging a set triggers `updateSummaryNotification`, and the workout timer
+notification must survive that with `FLAG_FOREGROUND_SERVICE` intact rather than being
+overwritten by the summary's plain `notify()` sharing the same raw id.
+
 ## Architecture
 
 ### Data model: Routine -> Task -> Completion
@@ -515,10 +522,60 @@ only** — `storage.js` remains the sole DB reader/writer.
     than relying on implicit cleanup via `onDestroy()`.
   - Runs on its own notification channel (`workout-session-timer`), fully separate from
     `notifications.js`'s three JS-created channels.
+  - **Its notification id (`NOTIFICATION_ID`) collided with `notify.SUMMARY_NOTIFICATION_ID`
+    for a while** — both were `800_000_001`, since this package predates the native
+    notifications migration and nothing cross-referenced it when that migration picked the
+    same value (see the "Notification-id ranges" paragraph above, which now covers all three
+    packages). `updateSummaryNotification` fires on every completion change — including every
+    set logged during a workout, via `handleLogWorkoutSet` — so the two notifications fought
+    over one raw id for the entire duration of any session, crashing/freezing the app. Now
+    `850_000_001`, clear of every other range.
+  - **Live in-app stats bar** — the active set-logging screen shows the current exercise's PR
+    and running session volume via `getExercisePR`/`getExerciseVolume` (logic that already
+    existed in both `:shared` and `utils/workouts.js` but was never surfaced anywhere). The
+    PR line is omitted when null (bodyweight/duration exercise, or nothing logged for it
+    yet); the volume line is omitted at exactly 0 so an all-bodyweight session never shows a
+    meaningless "0". Implemented in both `WorkoutSessionScreen.kt` and
+    `WorkoutSessionView.jsx` for parity.
+  - **Rich live notification on Android 16+ (API 36)** — `buildNotification()` branches to
+    `buildProgressStyleNotification()` when `Build.VERSION.SDK_INT >= 36` and not resting: a
+    real `Notification.ProgressStyle` with one `Segment` per exercise (sized by its planned
+    set count, current exercise highlighted in the app's accent color vs. a neutral gray for
+    the rest), overall `setProgress` = total sets completed so far, plus the existing
+    chronometer, the current exercise name, its last logged set, and a "🏆 New PR!" subtext
+    when `isNewPR` (a pure function in `:shared`, comparing the exercise's PR before vs. after
+    the just-logged set) says so. `WorkoutSessionScreen`'s `onProgressUpdate` callback feeds
+    this — fired on every navigation (`jumpTo`/manual `‹`/`›`) and every logged set, the same
+    pattern as the existing `onRestStart`/`onRestEnd` — through `WorkoutSessionActivity` to a
+    new `WorkoutTimerService.updateProgress(...)` entry point. The PR/last-set attribution is
+    deliberately careful: it's attached to the exercise that was *just* logged, not wherever
+    auto-advance lands next, and only clears once navigation actually moves to a *different*
+    exercise (see the comments in `WorkoutSessionScreen.markDone()`) — so it stays visible for
+    a moment rather than being immediately overwritten by the auto-advance that follows.
+    Below API 36, or during rest, this is skipped entirely in favor of the exact original
+    plain chronometer notification — zero behavior change for any pre-Android-16 device.
+    - **Not attempted: "promoted"/Live-Update prominence.** Android 16 has a separate concept
+      (`setRequestPromotedOngoing`/`EXTRA_REQUEST_PROMOTED_ONGOING`) that gives a notification
+      higher shelf/lock-screen prominence — confirmed via Android's own docs to be a
+      prominence upgrade only, *not* a dismiss-blocker (this notification's actual
+      swipe-resistance already comes from being a real foreground service, same as every
+      other Android version). A first attempt at wiring this up
+      (`notification.putExtra(Notification.EXTRA_REQUEST_PROMOTED_ONGOING, true)`, based on a
+      documentation summary that turned out to be paraphrased/inaccurate rather than a literal
+      quote) failed to compile — `Unresolved reference` for both the method and the constant
+      against this project's compileSdk 36 — while the `ProgressStyle` API used right next to
+      it compiled cleanly on the first try. Rather than guess again, this is left as a
+      documented follow-up: the exact real API needs to be confirmed against the actual
+      `android.jar` or a real device before attempting it a second time. The
+      `POST_PROMOTED_NOTIFICATIONS` manifest permission is left declared (harmless, no runtime
+      dialog) for whenever that lands.
 
 See "Real-device verification via GitHub Actions emulator" above for how this is actually
 proven to work (not just compile) on a real emulator, and for hard-won lessons about
-driving a native Compose screen that has nothing to do with the WebView.
+driving a native Compose screen that has nothing to do with the WebView. The
+`Notification.ProgressStyle` branch above can only be exercised on a real Android 16 device
+or a future API-36 CI emulator image — `android-emulator-verify.yml` currently runs API 30,
+which exercises the unchanged plain-notification fallback path, not the new one.
 
 ### Android signing (`android/debug.keystore`)
 

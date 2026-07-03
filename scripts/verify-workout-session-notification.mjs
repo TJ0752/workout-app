@@ -19,6 +19,7 @@ import { execSync } from 'node:child_process';
 
 const PACKAGE = 'com.tharuka.routines';
 const TIMER_CHANNEL_ID = 'workout-session-timer';
+const SUMMARY_CHANNEL_ID = 'daily-summary';
 const FLAG_FOREGROUND_SERVICE = 0x40;
 
 function adb(cmd) {
@@ -307,6 +308,56 @@ async function main() {
     );
   }
   console.log('PASS: workout timer notification is present with FLAG_FOREGROUND_SERVICE set.');
+
+  // --- Id-collision regression check: WorkoutTimerService.NOTIFICATION_ID used to be
+  // byte-for-byte identical to notify.SUMMARY_NOTIFICATION_ID (both 800_000_001, picked
+  // independently since the two packages were built in separate migrations with no
+  // cross-reference). updateSummaryNotification fires on every completion change - including
+  // handleLogWorkoutSet, called after every logged set - so logging a set while the workout
+  // timer's foreground notification is alive is exactly the scenario that used to crash/corrupt
+  // it (two subsystems fighting over one raw id). Tapping "Mark set done" is native Compose UI,
+  // not WebView DOM, so this goes through uiautomator like the close-button step below, not CDP.
+  console.log('Logging a set to trigger updateSummaryNotification while the workout timer notification is active...');
+  async function findMarkSetDoneButton() {
+    const start = Date.now();
+    while (Date.now() - start < 15000) {
+      const xml = uiDump();
+      const matches = findAllNodesByLooseText(xml, 'Mark set done');
+      if (matches.length > 0) return matches[0];
+      await sleep(500);
+    }
+    return null;
+  }
+  const markDoneNode = await findMarkSetDoneButton();
+  if (!markDoneNode) fail('Could not find the "Mark set done" button via UI Automator.');
+  tap(markDoneNode);
+  await sleep(2000); // let handleLogWorkoutSet's SQLite write + syncDynamicNotifications settle
+
+  console.log('--- dumpsys notification after logging a set (timer + summary should coexist) ---');
+  const dumpAfterLog = dumpNotifications();
+  const recordsAfterLog = findAppRecords(dumpAfterLog);
+  console.log(recordsAfterLog.map((r) => ({ flags: r.flags.toString(16), channel: r.channel })));
+  const timerAfterLog = recordsAfterLog.find((r) => r.channel === TIMER_CHANNEL_ID);
+  if (!timerAfterLog) {
+    console.log(dumpAfterLog);
+    fail(
+      'The workout timer notification disappeared after logging a set - this is exactly the id-collision ' +
+        'regression (WorkoutTimerService vs. the daily summary fighting over one raw notification id).'
+    );
+  }
+  if (!(timerAfterLog.flags & FLAG_FOREGROUND_SERVICE)) {
+    fail(
+      `Workout timer notification lost FLAG_FOREGROUND_SERVICE after logging a set (flags were 0x${timerAfterLog.flags.toString(16)}) - ` +
+        'it was likely overwritten by a plain (non-foreground) notify() call sharing the same id.'
+    );
+  }
+  const summaryAfterLog = recordsAfterLog.find((r) => r.channel === SUMMARY_CHANNEL_ID);
+  if (!summaryAfterLog) {
+    fail('The daily summary notification never appeared after logging a set - updateSummaryNotification may not have run at all.');
+  }
+  console.log(
+    'PASS: workout timer notification survived logging a set, and coexists with the daily summary notification (id-collision regression check).'
+  );
 
   // The blind sweep below can't tell notifications apart by content, so a leftover
   // plugin-originated notification (e.g. the "Group Test Routine" group-summary from the
