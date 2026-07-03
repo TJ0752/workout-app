@@ -1,11 +1,16 @@
 package com.tharuka.routines.workout
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.getcapacitor.JSObject
 import com.tharuka.routines.shared.workout.Exercise
 import com.tharuka.routines.shared.workout.LoggedSet
@@ -16,10 +21,12 @@ class WorkoutSessionActivity : ComponentActivity() {
     companion object {
         const val EXTRA_PAYLOAD = "com.tharuka.routines.workout.PAYLOAD"
         const val EXTRA_RESULT = "com.tharuka.routines.workout.RESULT"
+        private const val REQUEST_CODE_ACTIVITY_RECOGNITION = 4201
     }
 
     private var taskId: String? = null
     private var dateKey: String? = null
+    private var pendingTimerStartTaskTitle: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,7 +39,7 @@ class WorkoutSessionActivity : ComponentActivity() {
         val exercises = parseExercises(payload?.optJSONArray("exercises"))
         val logsForDate = parseLogsForDate(payload?.optJSONObject("logsForDate"))
 
-        WorkoutTimerService.start(this, taskTitle)
+        startTimerServiceOncePermitted(taskTitle)
 
         setContent {
             MaterialTheme {
@@ -85,6 +92,53 @@ class WorkoutSessionActivity : ComponentActivity() {
         val data = Intent().putExtra(EXTRA_RESULT, result.toString())
         setResult(RESULT_OK, data)
         finish()
+    }
+
+    /**
+     * Android 16 (API 36) requires a `health`-typed foreground service to hold at least one of
+     * ACTIVITY_RECOGNITION/HIGH_SAMPLING_RATE_SENSORS/a Health Connect read permission *in
+     * addition to* FOREGROUND_SERVICE_HEALTH itself - confirmed from a real device's crash log
+     * (`SecurityException: Starting FGS with type health ... requires permissions: all of
+     * [FOREGROUND_SERVICE_HEALTH] any of [ACTIVITY_RECOGNITION, ...]`), which is what was
+     * actually crashing every workout session on a real Android 16 device - unrelated to the
+     * notification-id collision or the (now-disabled) ProgressStyle notification found earlier.
+     * CI's test emulator only runs API 30, where this extra requirement doesn't exist, so nothing
+     * caught it before a real device did. ACTIVITY_RECOGNITION is the fitting choice here (an
+     * activity/workout tracker is its documented use case) over the health-metric-reading
+     * permissions this app has no other use for.
+     *
+     * Never calls `startForegroundService()` without the permission already confirmed granted -
+     * once that call is made, the service is contractually required to call `startForeground()`
+     * within a few seconds or Android kills it with a *different* crash
+     * (`ForegroundServiceDidNotStartInTimeException`), so simply catching the SecurityException
+     * inside the service after the fact isn't sufficient on its own.
+     */
+    private fun startTimerServiceOncePermitted(taskTitle: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED
+        ) {
+            WorkoutTimerService.start(this, taskTitle)
+            return
+        }
+        pendingTimerStartTaskTitle = taskTitle
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.ACTIVITY_RECOGNITION),
+            REQUEST_CODE_ACTIVITY_RECOGNITION,
+        )
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_CODE_ACTIVITY_RECOGNITION) return
+        val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+        val taskTitle = pendingTimerStartTaskTitle
+        pendingTimerStartTaskTitle = null
+        // If denied, the session still works fully without the live notification - it was always
+        // an enhancement on top of the core set-logging flow, never a requirement for it.
+        if (granted && taskTitle != null) {
+            WorkoutTimerService.start(this, taskTitle)
+        }
     }
 
     override fun onDestroy() {
