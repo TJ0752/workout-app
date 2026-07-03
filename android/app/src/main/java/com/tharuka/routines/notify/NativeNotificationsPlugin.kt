@@ -10,8 +10,8 @@ import com.getcapacitor.annotation.CapacitorPlugin
  * Owns presentation for notifications that need to "reappear if swiped away before they're
  * supposed to be dismissed" - unreachable via @capacitor/local-notifications, which builds its
  * notifications natively with no exposed hook for a custom setDeleteIntent() (confirmed by
- * reading its source; see CLAUDE.md). Currently covers the daily summary notification; the
- * per-task due-by reminder joins later in this same migration.
+ * reading its source; see CLAUDE.md). Covers the daily summary notification and the per-task
+ * due-by reminder.
  */
 @CapacitorPlugin(name = "NativeNotifications")
 class NativeNotificationsPlugin : Plugin() {
@@ -35,6 +35,49 @@ class NativeNotificationsPlugin : Plugin() {
     fun cancelSummary(call: PluginCall) {
         SummaryNotificationStore.clear(context)
         NotificationManagerCompat.from(context).cancel(SUMMARY_NOTIFICATION_ID)
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun scheduleDueReminder(call: PluginCall) {
+        val taskId = call.getString("taskId")
+        val title = call.getString("title")
+        val body = call.getString("body")
+        val daysArray = call.getArray("days")
+        val hour = call.getInt("hour")
+        val minute = call.getInt("minute")
+        if (taskId == null || title == null || body == null || daysArray == null || hour == null || minute == null) {
+            call.reject("taskId, title, body, days, hour, and minute are required")
+            return
+        }
+        val days = (0 until daysArray.length()).map { daysArray.getInt(it) }
+        val amountsArray = call.getArray("quickAddAmounts")
+        val quickAddAmounts = amountsArray?.let { arr -> (0 until arr.length()).map { arr.getInt(it) } } ?: emptyList()
+
+        val entry = DueReminderEntry(
+            taskId = taskId,
+            routineId = call.getString("routineId"),
+            title = title,
+            body = body,
+            days = days,
+            hour = hour,
+            minute = minute,
+            group = call.getString("group"),
+            completionType = call.getString("completionType") ?: "boolean",
+            quickAddAmounts = quickAddAmounts,
+        )
+        DueReminderScheduler.schedule(context, entry)
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun cancelDueReminder(call: PluginCall) {
+        val taskId = call.getString("taskId")
+        if (taskId == null) {
+            call.reject("taskId is required")
+            return
+        }
+        DueReminderScheduler.cancel(context, taskId)
         call.resolve()
     }
 }

@@ -38,6 +38,10 @@
             android:name=".notify.SummaryDismissReceiver"
             android:exported="false" />
 
+        <receiver
+            android:name=".notify.DueReminderAlarmReceiver"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
