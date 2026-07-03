@@ -55,20 +55,16 @@ class WorkoutTimerService : Service() {
         private const val ACCENT_COLOR = 0xFF0A9764.toInt()
         private const val NEUTRAL_COLOR = 0xFF9E9689.toInt()
 
-        // TEMPORARILY DISABLED - a user on a real Android 16 (API 36) device reported the app
-        // still crashing/freezing during a workout session after this notification style shipped.
-        // buildProgressStyleNotification() compiled cleanly in CI, but CI's test emulator only
-        // runs API 30 and could never actually execute this branch - compiling clean does not
-        // prove Android's notification system accepts it at runtime, and the exact ProgressStyle
-        // API surface was pieced together from documentation that already turned out to be wrong
-        // once (see the dropped "promoted" attempt below). A try/catch around
-        // buildProgressStyleNotification() itself is still in place as defense-in-depth, but a
-        // "successfully built" Notification object can still be rejected by the system server at
-        // startForeground()/notify() time in ways that bypass a try/catch scoped to the builder
-        // call alone - so this flag forces the known-good plain notification unconditionally
-        // until real logcat/diagnostic output from an actual Android 16 device confirms what's
-        // actually happening. Flip back to true once that's understood and fixed.
-        private const val ENABLE_PROGRESS_STYLE_NOTIFICATION = false
+        // Was temporarily disabled after a real Android 16 device reported crashing during a
+        // workout session. Root cause has since been found via a real device bug report: a
+        // health-typed foreground service on Android 16 requires ACTIVITY_RECOGNITION (or an
+        // equivalent) in addition to FOREGROUND_SERVICE_HEALTH, thrown as a SecurityException at
+        // startForegroundService() time - see WorkoutSessionActivity.startTimerServiceOncePermitted().
+        // That crash happened before this service ever got far enough to build a notification at
+        // all, so it was never actually caused by this code. Re-enabled now that the real cause is
+        // fixed; the try/catch around buildProgressStyleNotification() stays in place as
+        // defense-in-depth regardless.
+        private const val ENABLE_PROGRESS_STYLE_NOTIFICATION = true
 
         fun start(context: Context, taskTitle: String) {
             val intent = Intent(context, WorkoutTimerService::class.java).apply {
