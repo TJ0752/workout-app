@@ -7,6 +7,12 @@ name: Verify Android Notifications (Emulator)
 # tests or the plain APK build in android-build.yml.
 on:
   workflow_dispatch: {}
+  # TEMPORARY: workflow_dispatch only works once this workflow exists on the
+  # default branch, which it doesn't yet - branch-scoped push trigger to
+  # fire a verification run before merge. Revert once confirmed (same
+  # pattern used twice before this session for the same reason).
+  push:
+    branches: [claude/android-routines-app-mvp-gjl4kh]
 
 jobs:
   verify:
@@ -54,3 +60,6 @@ jobs:
             adb install -r android/app/build/outputs/apk/debug/app-debug.apk
             adb shell am start -n com.tharuka.routines/.MainActivity
             node scripts/verify-notification-catchup.mjs
+            adb shell am force-stop com.tharuka.routines
+            adb shell am start -n com.tharuka.routines/.MainActivity
+            node scripts/verify-workout-session-notification.mjs
