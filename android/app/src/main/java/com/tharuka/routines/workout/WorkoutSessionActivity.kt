@@ -7,9 +7,9 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.getcapacitor.JSObject
 import com.tharuka.routines.shared.workout.Exercise
@@ -21,12 +21,28 @@ class WorkoutSessionActivity : ComponentActivity() {
     companion object {
         const val EXTRA_PAYLOAD = "com.tharuka.routines.workout.PAYLOAD"
         const val EXTRA_RESULT = "com.tharuka.routines.workout.RESULT"
-        private const val REQUEST_CODE_ACTIVITY_RECOGNITION = 4201
     }
 
     private var taskId: String? = null
     private var dateKey: String? = null
     private var pendingTimerStartTaskTitle: String? = null
+
+    // Must be registered unconditionally before the Activity reaches STARTED - a class-level
+    // property initializer (runs during construction, ahead of onCreate) is the standard way to
+    // satisfy that. ComponentActivity's own onRequestPermissionsResult() is the modern
+    // registerForActivityResult-backed one and isn't open to override with the legacy
+    // ActivityCompat.requestPermissions()/onRequestPermissionsResult() pattern - this launcher is
+    // the correct replacement.
+    private val activityRecognitionPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            val taskTitle = pendingTimerStartTaskTitle
+            pendingTimerStartTaskTitle = null
+            // If denied, the session still works fully without the live notification - it was
+            // always an enhancement on top of the core set-logging flow, never a requirement.
+            if (granted && taskTitle != null) {
+                WorkoutTimerService.start(this, taskTitle)
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -101,7 +117,7 @@ class WorkoutSessionActivity : ComponentActivity() {
      * (`SecurityException: Starting FGS with type health ... requires permissions: all of
      * [FOREGROUND_SERVICE_HEALTH] any of [ACTIVITY_RECOGNITION, ...]`), which is what was
      * actually crashing every workout session on a real Android 16 device - unrelated to the
-     * notification-id collision or the (now-disabled) ProgressStyle notification found earlier.
+     * notification-id collision or the ProgressStyle notification found earlier.
      * CI's test emulator only runs API 30, where this extra requirement doesn't exist, so nothing
      * caught it before a real device did. ACTIVITY_RECOGNITION is the fitting choice here (an
      * activity/workout tracker is its documented use case) over the health-metric-reading
@@ -121,24 +137,7 @@ class WorkoutSessionActivity : ComponentActivity() {
             return
         }
         pendingTimerStartTaskTitle = taskTitle
-        ActivityCompat.requestPermissions(
-            this,
-            arrayOf(Manifest.permission.ACTIVITY_RECOGNITION),
-            REQUEST_CODE_ACTIVITY_RECOGNITION,
-        )
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode != REQUEST_CODE_ACTIVITY_RECOGNITION) return
-        val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
-        val taskTitle = pendingTimerStartTaskTitle
-        pendingTimerStartTaskTitle = null
-        // If denied, the session still works fully without the live notification - it was always
-        // an enhancement on top of the core set-logging flow, never a requirement for it.
-        if (granted && taskTitle != null) {
-            WorkoutTimerService.start(this, taskTitle)
-        }
+        activityRecognitionPermissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
     }
 
     override fun onDestroy() {
