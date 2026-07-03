@@ -1,14 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const calls = { scheduled: [], cancelled: [], removed: [], registered: [], summaryShown: [], summaryCancelled: 0 };
+
 // Mock the two Capacitor packages notifications.js talks to. `isNativePlatform`
 // must return true, or every exported function in notifications.js short-
 // circuits into a no-op (see the `Capacitor.isNativePlatform()` gate at the
-// top of nearly every function in src/notifications.js).
+// top of nearly every function in src/notifications.js). `registerPlugin` backs
+// nativeNotifications.js's NativeNotifications plugin handle, created at module
+// load time under this same isNativePlatform() gate.
 vi.mock('@capacitor/core', () => ({
   Capacitor: { isNativePlatform: () => true },
+  registerPlugin: vi.fn(() => ({
+    showSummary: vi.fn(async (opts) => {
+      calls.summaryShown.push(opts);
+    }),
+    cancelSummary: vi.fn(async () => {
+      calls.summaryCancelled += 1;
+    }),
+  })),
 }));
-
-const calls = { scheduled: [], cancelled: [], removed: [], registered: [] };
 
 vi.mock('@capacitor/local-notifications', () => ({
   LocalNotifications: {
@@ -44,6 +54,8 @@ function resetCalls() {
   calls.cancelled.length = 0;
   calls.removed.length = 0;
   calls.registered.length = 0;
+  calls.summaryShown.length = 0;
+  calls.summaryCancelled = 0;
 }
 
 beforeEach(() => {
@@ -196,8 +208,8 @@ describe('updateSummaryNotification', () => {
 
     await updateSummaryNotification(routines, taskVersionsMap, completions);
 
-    const summary = calls.scheduled.find((n) => n.id === 900000001);
-    expect(summary).toBeDefined();
+    expect(calls.summaryShown).toHaveLength(1);
+    const summary = calls.summaryShown[0];
     // overall = (1 + 0.3 + 0) / 3 = 0.4333... -> 43%
     expect(summary.title).toBe('Today: 43% complete');
     expect(summary.body).toBe('Push-ups 30% · Water 0%');
@@ -211,7 +223,7 @@ describe('updateSummaryNotification', () => {
 
     await updateSummaryNotification([routine], taskVersionsMap, completions);
 
-    const summary = calls.scheduled.find((n) => n.id === 900000001);
+    const summary = calls.summaryShown[0];
     expect(summary.body).toBe('All done for today 🎉');
     expect(summary.ongoing).toBe(false);
   });
@@ -222,8 +234,7 @@ describe('updateSummaryNotification', () => {
 
     await updateSummaryNotification([routine], taskVersionsMap, { ta: {} });
 
-    const cancelledSummary = calls.cancelled.find((n) => n.id === 900000001);
-    expect(cancelledSummary).toBeDefined();
-    expect(calls.scheduled.find((n) => n.id === 900000001)).toBeUndefined();
+    expect(calls.summaryCancelled).toBe(1);
+    expect(calls.summaryShown).toHaveLength(0);
   });
 });

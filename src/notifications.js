@@ -2,14 +2,18 @@ import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { calcRoutineStreak, getRoutineFraction } from './utils/date';
 import { quickAddAmountsFor, isTaskDoneToday, MAX_EXTRA_REMINDERS } from './utils/tasks';
+import { showSummaryNotification, cancelSummaryNotification } from './nativeNotifications';
 
 const CHANNEL_ID = 'routine-reminders';
 const DIGEST_CHANNEL_ID = 'daily-digest';
+// Also hardcoded as SUMMARY_CHANNEL_ID in android/app/.../notify/SummaryNotificationBuilder.kt -
+// the channel itself is still created here via LocalNotifications.createChannel (channels are
+// app-wide, not plugin-scoped), but the notification is now posted natively - see
+// showSummaryNotification below.
 const SUMMARY_CHANNEL_ID = 'daily-summary';
 
 const BOOLEAN_ACTION_TYPE = 'task-boolean';
 
-const SUMMARY_NOTIFICATION_ID = 900000001;
 const MORNING_DIGEST_ID = 900000002;
 const EVENING_DIGEST_ID = 900000003;
 const STREAK_RISK_ID = 900000004;
@@ -425,10 +429,13 @@ function formatRoutineProgress(entries) {
 }
 
 /**
- * Refreshes the persistent "today at a glance" notification. Uses `ongoing`
- * (non-swipeable) instead of a live-ticking display, since the Android APIs
- * for a real live countdown/chronometer aren't exposed by this plugin - see
- * CLAUDE.md.
+ * Refreshes the persistent "today at a glance" notification. Posted natively (see
+ * nativeNotifications.js) with a real setDeleteIntent() rather than through
+ * @capacitor/local-notifications, so a swipe-dismiss reappears immediately instead of just
+ * vanishing - @capacitor/local-notifications builds its notifications with no exposed hook for
+ * a custom delete-intent at all (see CLAUDE.md). Still no live-ticking chronometer display here
+ * (that's only feasible via a real foreground service, see the workout session), just a
+ * point-in-time snapshot recomputed on every app-open/completion change.
  *
  * Title shows the actual overall completion (average of every due routine's
  * own fraction, itself an average of its due tasks' fractions - see
@@ -442,7 +449,7 @@ export async function updateSummaryNotification(routines, taskVersionsMap, compl
   const today = new Date();
   const due = activeDueRoutines(routines, taskVersionsMap, completions, today);
   if (due.length === 0) {
-    await LocalNotifications.cancel({ notifications: [{ id: SUMMARY_NOTIFICATION_ID }] });
+    await cancelSummaryNotification();
     return;
   }
   const overallFraction = due.reduce((sum, r) => sum + r.fraction, 0) / due.length;
@@ -451,18 +458,7 @@ export async function updateSummaryNotification(routines, taskVersionsMap, compl
   const body = remaining.length === 0 ? 'All done for today 🎉' : formatRoutineProgress(remaining);
 
   try {
-    await LocalNotifications.schedule({
-      notifications: [
-        {
-          id: SUMMARY_NOTIFICATION_ID,
-          title: `Today: ${overallPct}% complete`,
-          body,
-          channelId: SUMMARY_CHANNEL_ID,
-          ongoing: remaining.length > 0,
-          autoCancel: false,
-        },
-      ],
-    });
+    await showSummaryNotification(`Today: ${overallPct}% complete`, body, remaining.length > 0);
   } catch (err) {
     console.warn('Failed to update summary notification', err);
   }
