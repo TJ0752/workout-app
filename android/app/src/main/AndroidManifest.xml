@@ -81,7 +81,9 @@
          @capacitor/local-notifications' own manifest, since that plugin's contract shouldn't be
          load-bearing for a different notification type's boot survival. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <!-- Non-runtime permission (no request dialog) for the workout timer's Android 16+
-         "promoted"/live-update notification - see WorkoutTimerService.kt. -->
+    <!-- Non-runtime permission (no request dialog), reserved for the workout timer's Android 16+
+         "promoted"/live-update notification once the exact API is confirmed - see the doc
+         comment on WorkoutTimerService.buildProgressStyleNotification() for why that part is
+         deferred. Harmless to declare now even though nothing calls it yet. -->
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
 </manifest>

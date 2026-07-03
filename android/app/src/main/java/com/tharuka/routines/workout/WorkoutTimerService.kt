@@ -203,10 +203,17 @@ class WorkoutTimerService : Service() {
      * Android 16+ (API 36) Notification.ProgressStyle - one segment per exercise (sized by its
      * planned set count, current exercise highlighted), with a live chronometer, the current
      * exercise's last logged set, and a "New PR!" callout, all built from the fields
-     * updateProgress() feeds in. Marked EXTRA_REQUEST_PROMOTED_ONGOING for the higher shelf/lock-
-     * screen prominence "Live Updates" get - purely cosmetic prominence, not a dismiss-blocker
-     * (confirmed via Android's own docs); the genuine swipe-resistance here still comes from this
-     * being a real foreground service, exactly as on every other Android version.
+     * updateProgress() feeds in.
+     *
+     * Deliberately NOT marked as a "promoted"/Live Update notification: the exact real API for
+     * that (docs summaries suggested Notification.EXTRA_REQUEST_PROMOTED_ONGOING via
+     * notification.putExtra(), but that failed to compile - "Unresolved reference" for both the
+     * method and the constant against this project's compileSdk 36) couldn't be pinned down with
+     * certainty from available documentation. Promotion is purely a shelf/lock-screen prominence
+     * upgrade anyway, not a dismiss-blocker (confirmed via Android's own docs) - the genuine
+     * swipe-resistance here already comes from this being a real foreground service, exactly as
+     * on every other Android version - so it's left as a documented follow-up rather than another
+     * guess, to be verified against the real android.jar or a device before attempting again.
      */
     private fun buildProgressStyleNotification(): Notification {
         val segments = if (plannedSetsPerExercise.isEmpty()) {
@@ -244,9 +251,7 @@ class WorkoutTimerService : Service() {
             builder.setSubText("🏆 New PR!")
         }
 
-        val notification = builder.build()
-        notification.putExtra(Notification.EXTRA_REQUEST_PROMOTED_ONGOING, true)
-        return notification
+        return builder.build()
     }
 
     private fun createChannel() {
