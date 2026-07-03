@@ -1,10 +1,11 @@
 name: Verify Android Notifications (Emulator)
 
 # Manual only - booting a KVM-accelerated emulator adds several minutes over
-# the plain APK build, so this isn't run on every push. Use it to verify
-# real on-device notification behavior (e.g. src/notifications.js's
-# catchUpDueReminderIfNeeded) that can't be checked by the Node-level mock
-# tests or the plain APK build in android-build.yml.
+# the plain APK build, so this isn't run on every push. Use it to verify real
+# on-device notification behavior (native due-by reminder catch-up/reappear-
+# on-dismiss, group-summary, workout timer foreground service) that can't be
+# checked by the Node-level mock tests or the plain APK build in
+# android-build.yml.
 on:
   workflow_dispatch: {}
 
@@ -53,7 +54,10 @@ jobs:
           script: |
             adb install -r android/app/build/outputs/apk/debug/app-debug.apk
             adb shell am start -n com.tharuka.routines/.MainActivity
-            node scripts/verify-notification-catchup.mjs
+            node scripts/verify-due-reminder.mjs
+            adb shell am force-stop com.tharuka.routines
+            adb shell am start -n com.tharuka.routines/.MainActivity
+            node scripts/verify-group-summary.mjs
             adb shell am force-stop com.tharuka.routines
             adb shell am start -n com.tharuka.routines/.MainActivity
             node scripts/verify-workout-session-notification.mjs

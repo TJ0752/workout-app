@@ -73,7 +73,8 @@ prefer the emulator harness below over a desktop-browser Playwright script.
 `.github/workflows/android-emulator-verify.yml` (manual `workflow_dispatch` — booting a
 KVM-accelerated emulator adds several minutes over the plain APK build, so it doesn't run
 on every push) installs a real debug APK on a booted Android emulator and drives it via
-`scripts/verify-notification-catchup.mjs`. That script connects to the app's WebView over
+`scripts/verify-due-reminder.mjs` and `scripts/verify-group-summary.mjs`. Those scripts
+connect to the app's WebView over
 raw Chrome DevTools Protocol using Node's built-in `WebSocket`/`fetch` — **not**
 Playwright's `connectOverCDP`, which fails immediately ("Browser context management is not
 supported") because Android WebView's CDP support only implements page-level domains

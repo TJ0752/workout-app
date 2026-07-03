@@ -7,7 +7,7 @@
  * earlier stage only proved the code compiles.
  *
  * Creating the workout task and starting the session happens through the WebView (same raw-CDP
- * approach as verify-notification-catchup.mjs - see that file's header for why Playwright's
+ * approach as verify-due-reminder.mjs - see that file's header for why Playwright's
  * connectOverCDP doesn't work here). But the actual workout session screen
  * (WorkoutSessionActivity) is a *native* Compose Activity layered on top of MainActivity, not
  * part of the WebView's DOM - CDP cannot see or interact with it at all. Interacting with it
@@ -283,7 +283,7 @@ async function main() {
   // WorkoutSession.start()'s Intent launches WorkoutSessionActivity + WorkoutTimerService.onCreate
   // natively - there's no WebView DOM signal to poll for this, so poll dumpsys itself instead of a
   // fixed sleep (native SQLite/Activity-launch timing is variable on a cold emulator, same issue
-  // fixed in verify-notification-catchup.mjs).
+  // fixed in verify-due-reminder.mjs).
   console.log('Waiting for the workout timer notification to appear...');
   let records1 = [];
   let timerNotif1 = null;

@@ -1,28 +1,27 @@
 /**
  * Drives the real debug APK on a GitHub Actions Android emulator (see
- * .github/workflows/android-emulator-verify.yml) to prove the
- * catchUpDueReminderIfNeeded fix in src/notifications.js: a task's pinned
- * due-by reminder must survive a second app-wide notification resync (e.g.
- * reopening the app) instead of silently vanishing until the same weekday
- * next week - see the comment on catchUpDueReminderIfNeeded for the root
- * cause this guards against.
+ * .github/workflows/android-emulator-verify.yml) to prove two notification behaviors that are
+ * unrelated to the due-by reminder migration (see verify-due-reminder.mjs for that) and so live
+ * in their own script:
  *
- * Connects to the installed app's WebView over raw Chrome DevTools Protocol
- * (debug builds have WebView debugging enabled). This does NOT use
- * Playwright's connectOverCDP - Android WebView only implements page-level
- * CDP domains (Runtime/Page/DOM), not the Browser-level domain Playwright's
- * browser-context handshake requires (confirmed by a real failure: "Protocol
- * error (Browser.setDownloadBehavior): Browser context management is not
- * supported"). Instead this drives the page purely through
- * Runtime.evaluate, dispatching synthetic DOM events the same way a real
- * tap/keystroke would, then inspects real `adb shell dumpsys notification`
- * output for the actual native notification - checking real Android
- * notification manager state, not just app-level JS logic.
+ *   1. A multi-task routine gets a real Android `groupSummary: true` notification
+ *      (updateRoutineGroupSummary in src/notifications.js), not just cosmetic `group` tagging on
+ *      each task's own reminder.
+ *   2. The daily summary notification (NativeNotificationsPlugin.showSummary /
+ *      SummaryDismissReceiver) reappears immediately if swiped away, since it has a real
+ *      setDeleteIntent() behind it that @capacitor/local-notifications has no hook to support
+ *      (see CLAUDE.md).
+ *
+ * Formerly the tail half of verify-notification-catchup.mjs, split out once that script's other
+ * half (the due-by reminder catch-up/reappear-on-dismiss checks) moved fully onto the native
+ * NativeNotificationsPlugin path and needed its own real-swipe-based verification.
+ *
+ * Connects to the installed app's WebView over raw Chrome DevTools Protocol - see
+ * verify-due-reminder.mjs's header for why this doesn't use Playwright's connectOverCDP.
  */
 import { execSync } from 'node:child_process';
 
 const PACKAGE = 'com.tharuka.routines';
-const CHANNEL_ID = 'routine-reminders';
 const SUMMARY_CHANNEL_ID = 'daily-summary';
 const SUMMARY_DISMISS_RECEIVER = `${PACKAGE}/com.tharuka.routines.notify.SummaryDismissReceiver`;
 
@@ -30,7 +29,6 @@ function adb(cmd) {
   return execSync(`adb ${cmd}`, { encoding: 'utf8' });
 }
 
-/** `adb shell pidof`/similar exit non-zero (and execSync throws) when nothing matches yet - treat that as "". */
 function adbAllowFailure(cmd) {
   try {
     return execSync(`adb ${cmd}`, { encoding: 'utf8' });
@@ -46,20 +44,6 @@ function sleep(ms) {
 function fail(msg) {
   console.error(`FAIL: ${msg}`);
   process.exit(1);
-}
-
-function deviceNow() {
-  const hhmm = adb(`shell date +%H:%M`).trim();
-  const weekday = Number(adb(`shell date +%w`).trim()); // 0=Sunday..6=Saturday, matches JS Date.getDay()
-  return { hhmm, weekday };
-}
-
-function minutesAgo(hhmm, minutes) {
-  const [h, m] = hhmm.split(':').map(Number);
-  const total = (h * 60 + m - minutes + 24 * 60) % (24 * 60);
-  const hh = String(Math.floor(total / 60)).padStart(2, '0');
-  const mm = String(total % 60).padStart(2, '0');
-  return `${hh}:${mm}`;
 }
 
 function findDevtoolsSocket() {
@@ -96,7 +80,6 @@ function findAppRecords(dump) {
     });
 }
 
-/** Minimal raw-CDP client using only page-level domains (Runtime), since WebView doesn't support Browser-level CDP. */
 class CdpPage {
   constructor(wsUrl) {
     this.ws = new WebSocket(wsUrl);
@@ -136,7 +119,6 @@ class CdpPage {
     });
   }
 
-  /** Evaluates a JS expression in the page and returns its value (must be JSON-serializable). */
   async evaluate(expression) {
     const result = await this.send('Runtime.evaluate', {
       expression,
@@ -171,18 +153,6 @@ const JS_HELPERS = `
       setter.call(el, value);
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
-      return true;
-    },
-    dayChipSelected: (label) => {
-      const el = [...document.querySelectorAll('.routine-form .day-buttons .day-chip')]
-        .find((e) => e.textContent.trim() === label);
-      return el ? el.className.includes('selected') : null;
-    },
-    clickDayChip: (label) => {
-      const el = [...document.querySelectorAll('.routine-form .day-buttons .day-chip')]
-        .find((e) => e.textContent.trim() === label);
-      if (!el) return false;
-      el.click();
       return true;
     },
   };
@@ -226,102 +196,18 @@ async function main() {
   if (!appReady) fail('App did not render .app-tabbar in time.');
   console.log('Connected to app WebView.');
 
-  const { hhmm: nowHHMM, weekday } = deviceNow();
-  const dueTime = minutesAgo(nowHHMM, 2);
-  console.log(`Device time is ${nowHHMM}, weekday ${weekday}. Creating a task due at ${dueTime} (2 min ago).`);
-
   async function mustEval(expression, description) {
     const ok = await page.evaluate(expression);
     if (!ok) fail(`UI step failed: ${description} (expression returned ${JSON.stringify(ok)})`);
     return ok;
   }
 
+  // --- Group-summary check: create a multi-task routine and confirm a real groupSummary:true
+  // notification is posted alongside its due reminders, not just cosmetic `group` tagging on
+  // each one (see updateRoutineGroupSummary).
+  console.log('Creating a multi-task routine to verify a real group-summary notification is posted...');
   await mustEval(`window.__test.clickByText('.app-tabbar button', 'Routines')`, 'click Routines tab');
   await sleep(300);
-  await mustEval(`window.__test.clickByText('button', '+ Add routine')`, 'click + Add routine');
-  await sleep(300);
-  await mustEval(
-    `window.__test.setValue('.routine-form input[placeholder="e.g. Morning stretch"]', 'Emulator Catchup Test')`,
-    'set routine title'
-  );
-  // "Starts at" is the 1st time input, "Due by" is the 2nd
-  await mustEval(
-    `window.__test.setValue('.routine-form input[type="time"]', ${JSON.stringify(dueTime)}, 1)`,
-    'set due time'
-  );
-
-  const labelOrder = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const targetLabel = labelOrder[weekday];
-  const selected = await page.evaluate(`window.__test.dayChipSelected(${JSON.stringify(targetLabel)})`);
-  if (selected === null) fail(`Could not find day chip for ${targetLabel}`);
-  if (!selected) {
-    await mustEval(`window.__test.clickDayChip(${JSON.stringify(targetLabel)})`, `select ${targetLabel} day chip`);
-  }
-  console.log(`Day chip ${targetLabel} selected:`, true);
-
-  await mustEval(`window.__test.clickByText('button[type="submit"]', 'Add routine')`, 'submit Add routine');
-  // Poll rather than a fixed sleep - handleSaveRoutine's native SQLite round-trip through
-  // syncAllNotifications has been observed to occasionally take several seconds on a
-  // freshly-booted emulator, well past what a short fixed sleep assumes.
-  const routineSaved = await waitFor(page, `document.body.innerText.includes('Emulator Catchup Test')`, 10000);
-  console.log('Routine visible in list after save:', routineSaved);
-  if (!routineSaved) fail('Routine was not created within 10s of submitting - form submission likely failed.');
-  await sleep(500); // let the notification-sync side-effects that follow the DOM update settle
-
-  console.log('--- dumpsys notification after initial save ---');
-  const dump1 = dumpNotifications();
-  console.log(`dumpsys notification: ${dump1.length} chars, mentions our package: ${dump1.includes(PACKAGE)}`);
-  const pkgLines1 = dump1.split('\n').filter((l) => l.includes(PACKAGE));
-  console.log(`Lines mentioning ${PACKAGE} (${pkgLines1.length}):`);
-  console.log(pkgLines1.join('\n'));
-  const records1 = findAppRecords(dump1);
-  console.log(records1.map((r) => ({ flags: r.flags.toString(16), ongoing: r.ongoing, channel: r.channel })));
-  const reminder1 = records1.find((r) => r.channel === CHANNEL_ID && r.ongoing);
-  if (!reminder1) {
-    fail('No ongoing routine-reminders notification found after initial save.');
-  }
-  console.log('PASS: ongoing due reminder present after initial save.');
-
-  // Re-trigger a full syncAllNotifications the same way the real bug actually
-  // happens: saving ANY routine re-syncs every routine's notifications (see
-  // handleSaveRoutine in App.jsx) - not by reloading the WebView. A raw
-  // window.location.reload() doesn't cleanly simulate "reopen the app" for
-  // this Capacitor SQLite plugin anyway (its native-side connection isn't
-  // tied to the WebView's JS lifecycle, so a JS reload while the native
-  // Activity stays alive throws "CreateConnection: Connection routines
-  // already exists" - a real app reopen goes through the native Activity
-  // lifecycle instead). Editing and re-saving the same routine without
-  // changing anything re-runs the exact resync path without touching SQLite
-  // connection state at all.
-  console.log('Re-saving the routine (no changes) to re-trigger syncAllNotifications, as a real routine edit would...');
-  await mustEval(`window.__test.clickByText('button', 'Edit')`, 'click Edit on the saved routine');
-  await sleep(300);
-  await mustEval(`window.__test.clickByText('button[type="submit"]', 'Save changes')`, 'submit Save changes');
-  await sleep(4500); // let handleSaveRoutine's syncAllNotifications finish - native SQLite round-trips
-                      // have been observed to occasionally take several seconds on a cold emulator
-
-  console.log('--- dumpsys notification after re-save/resync ---');
-  const dump2 = dumpNotifications();
-  const records2 = findAppRecords(dump2);
-  console.log(records2.map((r) => ({ flags: r.flags.toString(16), ongoing: r.ongoing, channel: r.channel })));
-  const reminder2 = records2.find((r) => r.channel === CHANNEL_ID && r.ongoing);
-  if (!reminder2) {
-    console.log(dump2);
-    fail(
-      'The ongoing due reminder disappeared after a resync - this is exactly the bug catchUpDueReminderIfNeeded ' +
-        'is supposed to fix. It regressed.'
-    );
-  }
-  console.log('PASS: ongoing due reminder survived a resync. Catch-up fix confirmed on a real device.');
-
-  // --- Group-summary check: create a multi-task routine and confirm a real
-  // groupSummary:true notification is posted alongside its due reminders,
-  // not just cosmetic `group` tagging on each one (see
-  // updateRoutineGroupSummary). This is genuinely new native behavior the
-  // plugin source supports but the app never exercised before, so it needs
-  // its own real-device check rather than assuming the JS-level logic tests
-  // are sufficient.
-  console.log('Creating a multi-task routine to verify a real group-summary notification is posted...');
   await mustEval(`window.__test.clickByText('button', '+ Add routine')`, 'click + Add routine (multi-task)');
   await sleep(300);
   await mustEval(
@@ -330,10 +216,10 @@ async function main() {
   );
   await mustEval(`window.__test.clickByText('button', '+ Add another task')`, 'add a second task');
   await sleep(300);
-  // Adding a 2nd task switches the form to multi-task mode, where each task
-  // needs its own name (the routine's own title only auto-fills the FIRST
-  // task's name if that task was still blank at the time) - the newly added
-  // 2nd task starts blank and would otherwise silently block submission.
+  // Adding a 2nd task switches the form to multi-task mode, where each task needs its own name
+  // (the routine's own title only auto-fills the FIRST task's name if that task was still blank
+  // at the time) - the newly added 2nd task starts blank and would otherwise silently block
+  // submission.
   await mustEval(
     `window.__test.setValue('input[placeholder="e.g. Breakfast"]', 'Second Task')`,
     'set 2nd task name'
@@ -348,47 +234,42 @@ async function main() {
   // BEFORE its own syncAllNotifications() await resolves - the two are independent async chains
   // kicked off from the same handler. For a multi-task routine, syncAllNotifications has to
   // schedule reminders for every task *and* post the real group-summary notification
-  // (updateRoutineGroupSummary), which is slower than the single-task path above - so poll
-  // dumpsys itself instead of assuming a fixed settle delay is enough.
+  // (updateRoutineGroupSummary), which is slower than a single-task path - so poll dumpsys
+  // itself instead of assuming a fixed settle delay is enough.
   console.log('Waiting for the group-summary notification to appear...');
-  let dump3 = '';
+  let dump1 = '';
   let mentionsGroupBody = false;
   let mentionsGroupTitle = false;
   const groupStart = Date.now();
   while (Date.now() - groupStart < 10000) {
-    dump3 = dumpNotifications();
-    mentionsGroupBody = dump3.includes('2 tasks');
-    mentionsGroupTitle = dump3.includes('Group Test Routine');
+    dump1 = dumpNotifications();
+    mentionsGroupBody = dump1.includes('2 tasks');
+    mentionsGroupTitle = dump1.includes('Group Test Routine');
     if (mentionsGroupBody && mentionsGroupTitle) break;
     await sleep(500);
   }
 
   console.log('--- dumpsys notification after creating multi-task routine ---');
-  const pkgLines3 = dump3.split('\n').filter((l) => l.includes(PACKAGE));
-  console.log(`Lines mentioning ${PACKAGE} (${pkgLines3.length}):`);
-  console.log(pkgLines3.join('\n'));
+  const pkgLines1 = dump1.split('\n').filter((l) => l.includes(PACKAGE));
+  console.log(`Lines mentioning ${PACKAGE} (${pkgLines1.length}):`);
+  console.log(pkgLines1.join('\n'));
   console.log('Mentions "2 tasks" body:', mentionsGroupBody, '| mentions routine title:', mentionsGroupTitle);
   if (!mentionsGroupBody || !mentionsGroupTitle) {
     fail('Could not find the expected group-summary notification content ("Group Test Routine" / "2 tasks").');
   }
   console.log('PASS: group-summary notification content found for the multi-task routine on a real device.');
 
-  // --- Summary-notification reappear-on-dismiss check: the routines created above are due
-  // today, so syncDynamicNotifications (triggered by every handleSaveRoutine call) should
-  // already have posted a real summary notification via NativeNotificationsPlugin.showSummary
-  // (see src/nativeNotifications.js) - a genuine setDeleteIntent()-backed notification, unlike
+  // --- Summary-notification reappear-on-dismiss check: the routine created above is due today,
+  // so syncDynamicNotifications (triggered by every handleSaveRoutine call) should already have
+  // posted a real summary notification via NativeNotificationsPlugin.showSummary (see
+  // src/nativeNotifications.js) - a genuine setDeleteIntent()-backed notification, unlike
   // anything @capacitor/local-notifications can produce (it builds notifications entirely
   // natively with no exposed hook for a custom delete-intent - see CLAUDE.md). Broadcasting
-  // directly to SummaryDismissReceiver's component (rather than attempting a real swipe
-  // gesture) is deterministic and still exercises the real registered receiver + persisted
-  // store - this is proving app-owned receiver logic, not an OS-level flag like the workout
-  // timer's swipe-resistance test was.
-  // The routines created above each trigger their own independent syncDynamicNotifications
-  // call, so the summary's content can still be catching up (e.g. not yet mentioning "Group
-  // Test Routine") for a moment after the group-summary check above already passed. Wait for
-  // two consecutive checks to agree before treating it as settled - otherwise a legitimate
-  // app-driven content update landing in the same window as the dismiss broadcast below would
-  // look exactly like a content-mismatch bug.
+  // directly to SummaryDismissReceiver's component (rather than attempting a real swipe gesture)
+  // is deterministic and still exercises the real registered receiver + persisted store - this
+  // is proving app-owned receiver logic, not an OS-level flag. Unlike the due reminder's own
+  // reappear-on-dismiss check (verify-due-reminder.mjs), the summary's delete-intent carries no
+  // per-task extra, so a plain no-args broadcast correctly simulates it.
   console.log('Waiting for the native summary notification to settle before dismissing it...');
   let summary1 = null;
   let previous = null;
