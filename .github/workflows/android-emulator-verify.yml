@@ -46,7 +46,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Boot an API 36 (Android 16) emulator to check image/KVM availability
+      - name: Boot an API 36 (Android 16) emulator and run the full verify suite
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -59,5 +59,19 @@ jobs:
             adb shell getprop ro.build.version.release
             adb shell getprop ro.build.version.sdk
             adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+            # Android 13+ (POST_NOTIFICATIONS) and 10+ (ACTIVITY_RECOGNITION, dangerous since
+            # API 29) both gate behind a real system permission dialog that no automation here
+            # taps - pre-granting via adb is the standard way to test the granted-permission
+            # path without needing UI Automator to click through a system dialog. This is new
+            # as of running on API 33+ for the first time; the previous API 30 target never
+            # exercised POST_NOTIFICATIONS since that permission didn't exist before API 33.
+            adb shell pm grant com.tharuka.routines android.permission.POST_NOTIFICATIONS || true
+            adb shell pm grant com.tharuka.routines android.permission.ACTIVITY_RECOGNITION || true
+            adb shell am start -n com.tharuka.routines/.MainActivity
+            node scripts/verify-due-reminder.mjs
+            adb shell am force-stop com.tharuka.routines
+            adb shell am start -n com.tharuka.routines/.MainActivity
+            node scripts/verify-group-summary.mjs
+            adb shell am force-stop com.tharuka.routines
             adb shell am start -n com.tharuka.routines/.MainActivity
             node scripts/verify-workout-session-notification.mjs
