@@ -112,7 +112,7 @@ function findAllNodesByLooseText(xml, text) {
       const boundsMatch = node.match(/\bbounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
       const classMatch = node.match(/\bclass="([^"]*)"/);
       if (boundsMatch) {
-        const [, x1, y1, x2, y2] = boundsMatch.slice(1).map(Number);
+        const [x1, y1, x2, y2] = boundsMatch.slice(1).map(Number);
         matches.push({
           x1,
           y1,
