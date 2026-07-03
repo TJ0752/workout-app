@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Sun, ListTodo, BarChart3, Calendar } from 'lucide-react';
 import './App.css';
 import TodayView from './components/TodayView';
@@ -8,6 +8,11 @@ import HistoryView from './components/HistoryView';
 import Logo from './components/Logo';
 import UpdateChecker from './components/UpdateChecker';
 import WorkoutSessionView from './components/WorkoutSessionView';
+import {
+  isNativeWorkoutSessionAvailable,
+  startNativeWorkoutSession,
+  initWorkoutSetListener,
+} from './nativeWorkoutSession';
 import {
   getRoutines,
   upsertRoutine,
@@ -58,6 +63,7 @@ function App() {
   const [workoutLogsByTask, setWorkoutLogsByTask] = useState({});
   const [loading, setLoading] = useState(true);
   const [activeSession, setActiveSession] = useState(null);
+  const handleLogWorkoutSetRef = useRef(null);
 
   const refreshAll = async () => {
     const [storedRoutines, storedCompletions, versionsMap, workoutLogs] = await Promise.all([
@@ -104,8 +110,15 @@ function App() {
       },
     });
 
+    const workoutListenerPromise = initWorkoutSetListener(async (taskId, dateKey, exercise, setIndex, values) => {
+      const state = await refreshAll();
+      const task = findTask(state.routines, taskId);
+      if (task) await handleLogWorkoutSetRef.current(task, dateKey, exercise, setIndex, values);
+    });
+
     return () => {
       listenerPromise?.then((handle) => handle.remove());
+      workoutListenerPromise?.then((handle) => handle.remove());
     };
   }, []);
 
@@ -192,6 +205,11 @@ function App() {
   };
 
   const handleStartWorkout = (task, routine, dateKey) => {
+    if (isNativeWorkoutSessionAvailable()) {
+      const logsForDate = workoutLogsByTask[task.id]?.[dateKey] || {};
+      startNativeWorkoutSession(task, dateKey, logsForDate);
+      return;
+    }
     setActiveSession({ task, routine, dateKey });
   };
 
@@ -211,6 +229,7 @@ function App() {
       await refreshTaskReminderVisibility(task, nextCompletions);
     }
   };
+  handleLogWorkoutSetRef.current = handleLogWorkoutSet;
 
   if (loading) {
     return <div className="app-shell loading">Loading…</div>;
