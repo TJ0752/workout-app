@@ -8,11 +8,6 @@ name: Verify Android Notifications (Emulator)
 # android-build.yml.
 on:
   workflow_dispatch: {}
-  # TEMPORARY - branch-scoped push trigger to verify the id-collision regression check in
-  # verify-workout-session-notification.mjs on a real emulator. Remove once confirmed green.
-  push:
-    branches:
-      - claude/android-routines-app-mvp-gjl4kh
 
 jobs:
   verify:
