@@ -23,6 +23,8 @@ import { execSync } from 'node:child_process';
 
 const PACKAGE = 'com.tharuka.routines';
 const CHANNEL_ID = 'routine-reminders';
+const SUMMARY_CHANNEL_ID = 'daily-summary';
+const SUMMARY_DISMISS_RECEIVER = `${PACKAGE}/com.tharuka.routines.notify.SummaryDismissReceiver`;
 
 function adb(cmd) {
   return execSync(`adb ${cmd}`, { encoding: 'utf8' });
@@ -80,8 +82,17 @@ function findAppRecords(dump) {
       const flagsMatch = b.match(/flags=0x([0-9a-fA-F]+)/);
       const channelMatch =
         b.match(/\bchannel=([^\s,)]+)/) || b.match(/channelId=([^\s,)]+)/) || b.match(/mChannelId=([^\s,)]+)/);
+      const titleMatch = b.match(/android\.title=String \(([^)]*)\)/);
+      const textMatch = b.match(/android\.text=String \(([^)]*)\)/);
       const flags = flagsMatch ? parseInt(flagsMatch[1], 16) : 0;
-      return { raw: b.slice(0, 200), flags, ongoing: Boolean(flags & 0x2), channel: channelMatch?.[1] };
+      return {
+        raw: b.slice(0, 200),
+        flags,
+        ongoing: Boolean(flags & 0x2),
+        channel: channelMatch?.[1],
+        title: titleMatch?.[1],
+        text: textMatch?.[1],
+      };
     });
 }
 
@@ -361,6 +372,54 @@ async function main() {
     fail('Could not find the expected group-summary notification content ("Group Test Routine" / "2 tasks").');
   }
   console.log('PASS: group-summary notification content found for the multi-task routine on a real device.');
+
+  // --- Summary-notification reappear-on-dismiss check: the routines created above are due
+  // today, so syncDynamicNotifications (triggered by every handleSaveRoutine call) should
+  // already have posted a real summary notification via NativeNotificationsPlugin.showSummary
+  // (see src/nativeNotifications.js) - a genuine setDeleteIntent()-backed notification, unlike
+  // anything @capacitor/local-notifications can produce (it builds notifications entirely
+  // natively with no exposed hook for a custom delete-intent - see CLAUDE.md). Broadcasting
+  // directly to SummaryDismissReceiver's component (rather than attempting a real swipe
+  // gesture) is deterministic and still exercises the real registered receiver + persisted
+  // store - this is proving app-owned receiver logic, not an OS-level flag like the workout
+  // timer's swipe-resistance test was.
+  console.log('Checking for the native summary notification before dismissing it...');
+  let dump4 = '';
+  let summary1 = null;
+  const summaryStart = Date.now();
+  while (Date.now() - summaryStart < 10000) {
+    dump4 = dumpNotifications();
+    summary1 = findAppRecords(dump4).find((r) => r.channel === SUMMARY_CHANNEL_ID);
+    if (summary1) break;
+    await sleep(500);
+  }
+  if (!summary1) {
+    console.log(dump4);
+    fail(`No notification found on the ${SUMMARY_CHANNEL_ID} channel before the dismiss check.`);
+  }
+  console.log('Summary notification before dismiss:', { title: summary1.title, text: summary1.text });
+
+  console.log('Broadcasting a dismiss to SummaryDismissReceiver...');
+  adb(`shell am broadcast -n ${SUMMARY_DISMISS_RECEIVER}`);
+
+  console.log('Waiting for the summary notification to reappear...');
+  let summary2 = null;
+  const repostStart = Date.now();
+  while (Date.now() - repostStart < 10000) {
+    summary2 = findAppRecords(dumpNotifications()).find((r) => r.channel === SUMMARY_CHANNEL_ID);
+    if (summary2) break;
+    await sleep(500);
+  }
+  if (!summary2) {
+    fail('The summary notification did not reappear after a dismiss broadcast - reappear-on-dismiss is broken.');
+  }
+  if (summary2.title !== summary1.title || summary2.text !== summary1.text) {
+    fail(
+      `The reposted summary notification's content changed unexpectedly (before: ${JSON.stringify(summary1)}, ` +
+        `after: ${JSON.stringify(summary2)}).`
+    );
+  }
+  console.log('PASS: summary notification reappeared with matching content after a simulated dismiss.');
 
   page.close();
 }
