@@ -69,11 +69,16 @@ function findAppRecords(dump) {
 
 /** Dumps the current UI tree (native or WebView, whichever has focus) via UI Automator, since CDP
  * cannot see the native Compose Activity at all once it's launched on top of the WebView. */
-/** `uiautomator dump` is known to intermittently fail to write its output file at all (no error,
- * just a missing file) when dumping mid-animation or over a system overlay like the notification
- * shade - retry a few times with a short settle delay rather than treating one failure as fatal. */
+/** `uiautomator dump` internally waits for the UI to go idle before it can capture a tree, and
+ * fails outright ("ERROR: could not get idle state.", no output file at all) if that never
+ * happens within its own hardcoded internal timeout. While the workout timer notification is
+ * showing, it never truly goes idle - it uses setUsesChronometer(true), a text view that updates
+ * once a second for as long as it's visible - so idle can only be reached by chance, in the sub-
+ * second gap between ticks. This is fundamentally probabilistic (not a one-off race to settle
+ * with a short delay), so give it many more attempts across a longer window rather than the
+ * handful used for ordinary UI-transition flakiness elsewhere in this script. */
 function uiDump() {
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 12; attempt++) {
     adbAllowFailure(`shell rm -f /sdcard/window_dump.xml`);
     adbAllowFailure(`shell uiautomator dump /sdcard/window_dump.xml`);
     const out = adbAllowFailure(`shell cat /sdcard/window_dump.xml`);
@@ -291,7 +296,11 @@ async function main() {
   console.log('Attempting to swipe-dismiss the notification via the shade...');
   adb(`shell cmd statusbar expand-notifications`);
   await sleep(2000);
-  const notifNode = await waitForNode('Emulator Workout Test', 20000);
+  // Generous timeout: uiDump()'s own internal retries can alone take several minutes worst-case
+  // while the chronometer-driven notification prevents UI Automator from reaching idle (see its
+  // comment above) - this outer budget just needs to comfortably outlast that, not add its own
+  // separate retry value.
+  const notifNode = await waitForNode('Emulator Workout Test', 200000);
   if (!notifNode) {
     console.log('Could not locate the notification in the shade via UI Automator dump - dumping XML for debugging.');
     console.log(uiDump());
