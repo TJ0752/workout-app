@@ -511,6 +511,28 @@ only** — `storage.js` remains the sole DB reader/writer.
     on a real emulator: the resulting notification carries genuine
     `FLAG_FOREGROUND_SERVICE` and survives a real swipe gesture, unlike
     `@capacitor/local-notifications`' `ongoing` flag alone.
+  - **Real crash, found via a real device's bug report, not CI**: Android 16 additionally
+    requires a `health`-typed foreground service to hold at least one of
+    `ACTIVITY_RECOGNITION`/`HIGH_SAMPLING_RATE_SENSORS`/a Health Connect read permission *in
+    addition to* `FOREGROUND_SERVICE_HEALTH` itself — enforced server-side
+    (`ActiveServices.validateForegroundServiceType`) and thrown synchronously back into
+    `Service.onStartCommand()` as `SecurityException: Starting FGS with type health ...
+    requires permissions: all of [FOREGROUND_SERVICE_HEALTH] any of [ACTIVITY_RECOGNITION,
+    ...]` — every workout session crashed on the reporting user's real Android 16 device from
+    the moment this feature was built, well before the notification-id collision or
+    ProgressStyle work below. `android-emulator-verify.yml` only runs API 30, which doesn't
+    enforce this, so nothing caught it before a real device did; diagnosed by walking the
+    user through Android's on-device "Take bug report" flow (no computer available) and
+    searching the resulting text for `Process: com.tharuka.routines` to isolate this app's
+    crash from the thousands of unrelated lines in a full system bug report.
+    `WorkoutSessionActivity.startTimerServiceOncePermitted()` now requests
+    `ACTIVITY_RECOGNITION` (declared in the manifest; a runtime/dangerous permission on API
+    29+) before ever calling `WorkoutTimerService.start()`/`startForegroundService()` — never
+    after, since once that call is made the service is contractually required to call
+    `startForeground()` within a few seconds or Android kills it with a *different* crash
+    (`ForegroundServiceDidNotStartInTimeException`), so catching the `SecurityException`
+    inside the service after the fact isn't sufficient on its own. If the user denies the
+    permission, the session still works fully, just without the live timer notification.
   - `setUsesChronometer(true)` (+ `setChronometerCountDown` while resting) gives a real live
     elapsed/rest-countdown display — solved for this one screen; every other screen still
     only has the `setInterval`-based fallback described above.
