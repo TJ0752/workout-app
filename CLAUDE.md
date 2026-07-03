@@ -247,18 +247,12 @@ web):
   `scheduleTaskNotifications` (per-task schedule/cancel), `handleToggleRoutineActive`, and
   `handleToggleTaskActive`'s deactivation branch, plus cancelled outright in
   `handleDeleteRoutine`.
-  - The `task.time` (due-by) reminder is scheduled with `ongoing: true, autoCancel: false`
-    so it stays pinned in the shade until the task is completed; `dismissTaskReminders`
-    (called via `refreshTaskReminderVisibility` from every completion-changing path in
-    `App.jsx`, including notification-action taps) clears it once done, using
-    `removeDeliveredNotifications` rather than `cancel()` — the former just dismisses
-    what's currently shown, the latter would rip out the underlying recurring alarm and
-    stop future weeks from firing at all (confirmed from `TimedNotificationPublisher`'s
-    self-rescheduling in the native plugin source). `ongoing: true` maps to Android's real
-    `FLAG_ONGOING_EVENT`, which genuinely blocks swipe-dismiss and "Clear all" while the
-    task is pending — this is not cosmetic. It does not, and cannot, survive the user
-    disabling notifications for the app/channel at the OS settings level; that's outside
-    what any app-level flag can override.
+  - The `task.time` (due-by) reminder itself is **no longer scheduled through
+    `@capacitor/local-notifications`** — see "Native notifications" below for why and how
+    it's posted natively instead. `dismissTaskReminders` (called via
+    `refreshTaskReminderVisibility` from every completion-changing path in `App.jsx`,
+    including notification-action taps) still exists and still clears it once the task is
+    done, now via `nativeDismissDueReminderToday`.
   - `task.reminderTimes` (extra nudges in addition to `time`) get their *own* ids
     (`extraReminderIdFor`, one fixed slot per array index, not the reminder's clock value)
     rather than sharing the due notification's id. This is a hard Android constraint, not
@@ -270,18 +264,19 @@ web):
     ever have been used, even after the user removes a reminder and the old time is gone
     from the task object.
 - **Computed notifications** (`syncDynamicNotifications`) — the persistent daily summary
-  (`ongoing: true` only while something's still due — see below), the streak-at-risk
-  nudge, and the morning/evening digests. These have no backend and no background-task
-  runner, so their content can only be recomputed when the app is actually open; they're
-  refreshed on every app load and after every completion change (including from a
-  notification action tap), and rely on `on: {hour, minute}` (no `weekday`) native daily
-  recurrence to keep firing even if the app isn't reopened — just with whatever content was
-  last computed. A multi-day gap without opening the app means stale content, not a missed
-  notification. `updateSummaryNotification`'s title is a real overall percentage
-  (`Math.round` of the average fraction across today's due routines, reusing the existing
-  `getRoutineFraction` pipeline — no separate math), and its body lists each not-yet-100%
-  routine as `Title NN%` (`formatRoutineProgress`) rather than a plain done/not-done count;
-  it drops `ongoing` once every due routine hits 100%, since there's nothing left to pin.
+  (posted natively — see "Native notifications" below), the streak-at-risk nudge, and the
+  morning/evening digests (both still plain `LocalNotifications`). These have no backend
+  and no background-task runner, so their content can only be recomputed when the app is
+  actually open; they're refreshed on every app load and after every completion change
+  (including from a notification action tap). The digests rely on `on: {hour, minute}` (no
+  `weekday`) native daily recurrence to keep firing even if the app isn't reopened — just
+  with whatever content was last computed; a multi-day gap without opening the app means
+  stale content, not a missed notification. `updateSummaryNotification`'s title is a real
+  overall percentage (`Math.round` of the average fraction across today's due routines,
+  reusing the existing `getRoutineFraction` pipeline — no separate math), and its body
+  lists each not-yet-100% routine as `Title NN%` (`formatRoutineProgress`) rather than a
+  plain done/not-done count; it drops `ongoing` once every due routine hits 100%, since
+  there's nothing left to pin.
 
 `scheduleTaskNotifications(task, routine, completions)` is the single choke point that
 decides whether a task's reminders actually get scheduled — it checks `task.active`,
@@ -295,36 +290,150 @@ unaffected by this gate and registers types for all tasks regardless of active s
 harmless, since an unused registered type just sits there (confirmed from the native plugin
 source: each action type is written to its own `SharedPreferences` file keyed by id, so
 registrations are additive/idempotent and never clobber each other or get silently dropped).
-
-**`catchUpDueReminderIfNeeded` — why the pinned due-by reminder needs a `completions` param
-at all.** `scheduleTaskNotifications` unconditionally calls `cancelTaskNotifications` before
-rescheduling (needed so a changed `time`/`days` doesn't leave a stale alarm behind), and
-since `syncAllNotifications` runs on every app open and every routine save, that cancel
-fires constantly — including for tasks whose due time already passed today. Confirmed from
-the native plugin source (`LocalNotificationManager.cancel` calls `dismissVisibleNotification`
-*and* `cancelTimerForNotification`, and `DateMatch.postponeTriggerIfNeeded` jumps a full
-`WEEK_OF_MONTH` forward once today's `hour:minute` has passed rather than firing later
-today): the net effect was that simply reopening the app, or saving any unrelated routine,
-silently wiped an already-showing pinned reminder and didn't bring it back until the same
-weekday *next week*. `catchUpDueReminderIfNeeded` re-fires the pinned reminder immediately
-(no `schedule` field, i.e. fires now, same pattern as `updateSummaryNotification`) whenever
-a sync leaves a currently-due, not-yet-done task without one — this is why
-`scheduleTaskNotifications`/`syncAllNotifications` need `completions` threaded through from
-every call site in `App.jsx`.
+`completions` is threaded through this call chain from every site in `App.jsx` purely so it
+can compute `isDoneToday` for the native due-reminder catch-up decision — see "Native
+notifications" below.
 
 **No live-updating countdown/chronometer in the notification itself, for anything routed
 through `@capacitor/local-notifications`** — this is a real Android `Notification.Builder`
 capability (`setUsesChronometer`) the plugin doesn't expose (open upstream feature request,
-unresolved as of this writing), and separately, every notification it posts goes through
-plain `NotificationManagerCompat.notify()`, never `startForeground()` — so its `ongoing`
-flag does not actually block swipe-dismiss on Android 8+ despite setting
-`FLAG_ONGOING_EVENT` (confirmed on-device). The community `capacitor-timer-notification`
-plugin exists but pins `@capacitor/core: ^6.0.0` against our v8 — not worth the
-compatibility risk. Both gaps are inherent to the plugin, not fixable from JS; getting a
-real fix requires a custom native Android plugin — which is exactly what the workout
-session screen below does, for that one screen. The in-app countdown on the Today screen
-(`TodayView.jsx`'s `CountdownLabel`, ticking via a 60s `setInterval`) remains the fallback
-everywhere else in the app.
+unresolved as of this writing). Not fixable from JS; getting a real fix requires a custom
+native Android plugin — which is exactly what the workout session screen further below
+does, for that one screen. The in-app countdown on the Today screen (`TodayView.jsx`'s
+`CountdownLabel`, ticking via a 60s `setInterval`) remains the fallback everywhere else in
+the app.
+
+### Native notifications: daily summary + due-by reminder (`android/app/.../notify/`)
+
+The persistent daily summary and the per-task due-by reminder are posted by a second native
+plugin, `NativeNotificationsPlugin` (`@CapacitorPlugin(name = "NativeNotifications")`,
+`android/app/src/main/java/com/tharuka/routines/notify/`, JS wrapper
+`src/nativeNotifications.js`), not `@capacitor/local-notifications`. This exists to make
+both notifications **reappear immediately if swiped away before they're supposed to be
+dismissed** (task done / nothing left due) — confirmed by reading the stock plugin's native
+source (`TimedNotificationPublisher.java`) that it builds/posts the entire `Notification`
+object natively at `schedule()`-call time with no exposed hook for a custom
+`setDeleteIntent()`, and its own `NotificationDismissReceiver` never calls back to JS for
+any notification type. Extra reminder nudges, the group-summary notification, and the
+morning/evening/streak-risk digests are untouched by this and stay on the stock plugin (see
+above).
+
+**"Reappear on dismiss," not true non-dismissibility — a real Android policy change, not a
+missing flag.** Android 13 made foreground-service notifications swipe-dismissible by
+default, and Android 14+ went further: even `setOngoing(true)` no longer reliably blocks
+swipe-dismiss for a general-purpose notification, with **no supported opt-back-in flag** —
+confirmed against official Android docs
+(`developer.android.com/develop/background-work/services/fgs/changes`,
+`.../about/versions/14/behavior-changes-14`) and matching third-party reports (the `notifee`
+library hit the identical regression). True non-dismissibility is off the table on modern
+Android for any notification type this app could use; "briefly disappears on swipe, then
+immediately reposts if not yet legitimately satisfied" is the actual achievable goal both
+notifications below implement.
+
+Same constraint as the workout session below applies here too: native code must never touch
+the app's SQLite file directly, so all persisted state for this plugin lives in
+SharedPreferences (`SummaryNotificationStore`, `DueReminderStore`), never the DB —
+`storage.js` remains the sole DB reader/writer.
+
+**Notification-id ranges are split across JS and Kotlin and must stay disjoint** — nothing
+else enforces this invariant. JS owns `notificationIdFor`/`snoozeIdFor` (roughly
+0–9,999,999), `EXTRA_REMINDER_ID_BASE = 500,000,000`, `GROUP_SUMMARY_ID_BASE =
+700,000,000`, and digests at `900,000,002`–`900,000,004`. Kotlin owns
+`DUE_REMINDER_ID_BASE = 600,000,000` (one id per task via `DUE_REMINDER_ID_BASE +
+hashToInt(taskId)`, a Kotlin port of the id-hashing scheme that doesn't need bit-for-bit
+parity with the JS version since the two live in disjoint ranges) and
+`SUMMARY_NOTIFICATION_ID = 800,000,001`.
+
+**Part A — summary.** `showSummary`/`cancelSummary` write the `{title, body, ongoing}`
+content to `SummaryNotificationStore` *before* posting/cancelling, in that order — this
+ordering is what lets `SummaryDismissReceiver` (the notification's real `setDeleteIntent()`
+target) tell an organic user-swipe (entry still present → repost) apart from a legitimate
+JS-driven cancel (entry absent → no-op) without any race. No alarm is needed here: JS
+already reactively reposts this on every app open and completion change via
+`syncDynamicNotifications`.
+
+**Part B — due-by reminder.** `DueReminderStore` holds one persisted entry per task
+(`{taskId, routineId, title, body, days, hour, minute, group, completionType,
+quickAddAmounts, awaitingCompletion}`) — the source of truth for every receiver below, all
+of which must work with the app process fully dead. `DueReminderScheduler.schedule()`
+compares the new entry against the stored one by content (`.copy(awaitingCompletion =
+false)` equality, ignoring the one bookkeeping field) and no-ops if unchanged, which is what
+lets a plain resync (app reopen, saving an unrelated routine — `syncAllNotifications`
+re-syncs *every* task on *any* save) leave an already-showing reminder alone instead of
+destructively cancelling and re-arming it every time. When something *did* change, it
+re-arms via `arm()`/`armAt()`, which compute the next trigger through `:shared`'s
+`computeNextOccurrenceDaysFromNow(days, hour, minute, todayWeekday, nowHour, nowMinute)` — a
+correct replacement for the stock plugin's `DateMatch.postponeTriggerIfNeeded`, which jumps
+a full week forward once today's time has passed rather than checking whether another
+active day still qualifies this week. `days`/`todayWeekday` use JS's `Date.getDay()`
+convention (0=Sunday..6=Saturday) so `task.days` passes through unchanged; only the Android
+caller's own `Calendar.DAY_OF_WEEK` (1=Sunday..7=Saturday) needs a `-1` conversion at that
+one boundary. Alarms are one-shot and self-reschedule on every fire
+(`DueReminderAlarmReceiver` re-arms via `arm()` immediately after posting) rather than using
+`AlarmManager.setRepeating()`, mirroring the stock plugin's own confirmed
+`TimedNotificationPublisher` self-rescheduling; exact-alarm scheduling degrades gracefully
+via `canScheduleExactAlarms()` the same way the stock plugin does, never hard-requiring
+`SCHEDULE_EXACT_ALARM`.
+
+- **The `isDoneToday`/catch-up mechanism, and a real regression found and fixed during the
+  cutover.** `DueReminderScheduler.schedule()` takes an `isDoneToday` boolean computed by
+  the JS caller (`isTaskDoneToday(task, completions)` in `src/notifications.js`) — native
+  code can't compute this itself, since that means reading SQLite completions, which is
+  exactly what native code must never do (see above). Combined with `:shared`'s
+  `isOverdueToday(days, hour, minute, todayWeekday, nowHour, nowMinute)`, this lets
+  `schedule()` immediately build-and-post the reminder when a task is due today, already
+  overdue, and not done — the direct native replacement for the old (now-deleted)
+  `catchUpDueReminderIfNeeded`, which existed for the same reason: `AlarmManager` never
+  retroactively fires an alarm for a time that's already passed, so without an explicit
+  catch-up a brand-new or just-edited overdue task would otherwise stay silent until its
+  next natural occurrence, possibly a full week away. Getting this right took two attempts
+  in this migration: the first cutover pass had `scheduleTaskNotifications` call the *full*
+  `cancelTaskNotifications` (which clears `DueReminderStore`'s entry) before every
+  reschedule, which defeated the no-op-if-unchanged comparison above on literally every
+  single sync, since there was never a previous entry left to compare against — fixed by
+  splitting a `cancelStockNotifications` helper (extra reminders/snooze/legacy per-day ids,
+  safe to re-run every sync) out of the full `cancelTaskNotifications` (which also clears
+  the native due reminder, called only when a task is genuinely being removed or paused).
+- **Reappear-on-dismiss and action buttons.** `DueReminderDismissReceiver` (the delete-intent
+  target) reposts if `awaitingCompletion` is still `true`, no-ops otherwise.
+  `DueReminderActionReceiver` + `DueReminderBridge` (a same-process singleton, the same
+  `var onAction: ((JSObject) -> Unit)?` idiom as `WorkoutSessionBridge` below) dispatch
+  Mark-done/`+N` taps to JS via `notifyListeners("dueReminderAction", ..., true)` when the
+  process is alive. If the process is dead, the action's `PendingIntent` relaunches
+  `MainActivity` carrying the action as typed extras
+  (`EXTRA_PENDING_TASK_ID`/`EXTRA_PENDING_ACTION_ID`/`EXTRA_PENDING_AMOUNT`), consumed once
+  in `NativeNotificationsPlugin.load()` — an accepted tradeoff: unlike the stock plugin, a
+  cold-start Mark-done tap visibly brings the app forward, matching what already happens
+  tapping the notification body today, not a new class of behavior. Snooze never touches
+  completions (a pure +15min re-post, matching the stock plugin's own `scheduleSnooze`), so
+  it's handled entirely natively by re-arming the same per-task alarm slot via `armAt()` —
+  no JS round-trip needed.
+- **Boot survival.** `DueReminderBootReceiver` (manifest, `directBootAware="true"`, listens
+  for `BOOT_COMPLETED`/`LOCKED_BOOT_COMPLETED`/`QUICKBOOT_POWERON`, needs
+  `RECEIVE_BOOT_COMPLETED` added explicitly since the stock plugin's own manifest contract
+  shouldn't be load-bearing for a completely different notification type) re-arms every
+  `DueReminderStore` entry on boot — `AlarmManager` alarms do **not** survive reboot on
+  their own, confirmed by the stock plugin needing its own equivalent
+  (`LocalNotificationRestoreReceiver`) for the exact same reason.
+
+**Realistic risk, stated up front, not chased further:** OEM background-process killing
+(OnePlus/OxygenOS is known for being unusually aggressive here) can still prevent alarms and
+receivers from ever firing again once the OS evicts the process — no app-level code fully
+overcomes this. The emulator verification below (a clean `adb reboot`, or a broadcast
+straight to a receiver) proves the wiring is correct; it does not prove survival against OEM
+battery-optimization eviction, which CI cannot simulate.
+
+`scripts/verify-due-reminder.mjs` proves the due-reminder catch-up and reappear-on-dismiss
+behavior on a real emulator (see "Real-device verification" above) — its dismiss check needs
+an actual swipe gesture (`uiautomator dump` + `adb shell input swipe`, safe here since this
+notification has no chronometer-driven ticking text, unlike the workout timer below), not a
+broadcast straight to `DueReminderDismissReceiver` like the summary check gets, since the
+due reminder's delete-intent carries a per-task `taskId` extra this script has no way to
+know independently (the id is `crypto.randomUUID()`-generated inside the app and never
+exposed to the DOM or `dumpsys`). `scripts/verify-group-summary.mjs` covers the (unrelated)
+group-summary notification and the summary's own reappear-on-dismiss check, which *can* use
+a plain no-args broadcast since its delete-intent carries no per-instance extra. Both
+replace the older, single `verify-notification-catchup.mjs`.
 
 ### Native Android workout session (`android/shared/`, `android/app/.../workout/`)
 
