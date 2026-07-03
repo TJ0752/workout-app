@@ -338,12 +338,23 @@ async function main() {
   const closeNode = await waitForNode('✕', 20000);
   if (!closeNode) fail('Could not find the session close ("✕") button via UI Automator.');
   tap(closeNode);
-  await sleep(2000);
+
+  // finish() -> onDestroy() -> WorkoutTimerService.stop() is a real Activity teardown, not
+  // instant - poll for the notification to actually clear rather than assuming a fixed delay is
+  // always enough, same reasoning as the SQLite/notification-sync polling elsewhere in this
+  // migration's verify scripts.
+  console.log('Waiting for the workout timer notification to clear...');
+  let dump3 = '';
+  let timerNotif3 = null;
+  const closeStart = Date.now();
+  while (Date.now() - closeStart < 10000) {
+    dump3 = dumpNotifications();
+    timerNotif3 = findAppRecords(dump3).find((r) => r.channel === TIMER_CHANNEL_ID);
+    if (!timerNotif3) break;
+    await sleep(500);
+  }
 
   console.log('--- dumpsys notification after closing the session ---');
-  const dump3 = dumpNotifications();
-  const records3 = findAppRecords(dump3);
-  const timerNotif3 = records3.find((r) => r.channel === TIMER_CHANNEL_ID);
   if (timerNotif3) {
     console.log(dump3);
     fail('The workout timer notification is still present after closing the session - the service was not stopped.');
