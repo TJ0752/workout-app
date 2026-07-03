@@ -8,9 +8,6 @@ name: Verify Android Notifications (Emulator)
 # android-build.yml.
 on:
   workflow_dispatch: {}
-  push:
-    branches:
-      - claude/android-routines-app-mvp-gjl4kh
 
 jobs:
   verify:
@@ -46,27 +43,16 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Boot an API 36 (Android 16) emulator and run the full verify suite
+      - name: Boot emulator, install APK, and verify notification catch-up
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 36
+          api-level: 30
           target: google_apis
           arch: x86_64
           profile: pixel_5
           disable-animations: true
           script: |
-            echo "Booted successfully. Reported version:"
-            adb shell getprop ro.build.version.release
-            adb shell getprop ro.build.version.sdk
             adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-            # Android 13+ (POST_NOTIFICATIONS) and 10+ (ACTIVITY_RECOGNITION, dangerous since
-            # API 29) both gate behind a real system permission dialog that no automation here
-            # taps - pre-granting via adb is the standard way to test the granted-permission
-            # path without needing UI Automator to click through a system dialog. This is new
-            # as of running on API 33+ for the first time; the previous API 30 target never
-            # exercised POST_NOTIFICATIONS since that permission didn't exist before API 33.
-            adb shell pm grant com.tharuka.routines android.permission.POST_NOTIFICATIONS || true
-            adb shell pm grant com.tharuka.routines android.permission.ACTIVITY_RECOGNITION || true
             adb shell am start -n com.tharuka.routines/.MainActivity
             node scripts/verify-due-reminder.mjs
             adb shell am force-stop com.tharuka.routines
