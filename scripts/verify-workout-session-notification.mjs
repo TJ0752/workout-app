@@ -303,6 +303,21 @@ async function main() {
   }
   console.log('PASS: workout timer notification is present with FLAG_FOREGROUND_SERVICE set.');
 
+  // The blind sweep below can't tell notifications apart by content, so a leftover
+  // plugin-originated notification (e.g. the "Group Test Routine" group-summary from the
+  // earlier catchup-script routines, re-synced on every app boot) sitting above ours in the
+  // shade could absorb a swipe as a TAP instead - its content intent then brings the app back
+  // to the foreground and tears down the workout session as a side effect, which looks like a
+  // false "notification was swiped away" failure but is actually an unrelated notification being
+  // hit. WorkoutTimerService's own notification is posted natively, outside this plugin's
+  // bookkeeping, so this only clears everything else out of the way.
+  console.log('Clearing other plugin-originated notifications before the swipe test...');
+  await page.evaluate(`(async () => {
+    const { LocalNotifications } = window.Capacitor.Plugins;
+    await LocalNotifications.removeAllDeliveredNotifications();
+  })()`);
+  await sleep(500);
+
   console.log('Attempting to swipe-dismiss the notification via the shade...');
   const screen = getScreenSize();
   if (!screen) fail('Could not determine screen size via `adb shell wm size`.');
