@@ -69,10 +69,18 @@ function findAppRecords(dump) {
 
 /** Dumps the current UI tree (native or WebView, whichever has focus) via UI Automator, since CDP
  * cannot see the native Compose Activity at all once it's launched on top of the WebView. */
+/** `uiautomator dump` is known to intermittently fail to write its output file at all (no error,
+ * just a missing file) when dumping mid-animation or over a system overlay like the notification
+ * shade - retry a few times with a short settle delay rather than treating one failure as fatal. */
 function uiDump() {
-  adbAllowFailure(`shell rm -f /sdcard/window_dump.xml`);
-  adb(`shell uiautomator dump /sdcard/window_dump.xml`);
-  return adb(`shell cat /sdcard/window_dump.xml`);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    adbAllowFailure(`shell rm -f /sdcard/window_dump.xml`);
+    adbAllowFailure(`shell uiautomator dump /sdcard/window_dump.xml`);
+    const out = adbAllowFailure(`shell cat /sdcard/window_dump.xml`);
+    if (out && out.includes('<hierarchy')) return out;
+    execSync('sleep 1');
+  }
+  return '';
 }
 
 /** Robust to attribute order within a <node .../> - matches text and bounds independently rather
@@ -272,8 +280,8 @@ async function main() {
 
   console.log('Attempting to swipe-dismiss the notification via the shade...');
   adb(`shell cmd statusbar expand-notifications`);
-  await sleep(1000);
-  const notifNode = await waitForNode('Emulator Workout Test', 8000);
+  await sleep(2000);
+  const notifNode = await waitForNode('Emulator Workout Test', 20000);
   if (!notifNode) {
     console.log('Could not locate the notification in the shade via UI Automator dump - dumping XML for debugging.');
     console.log(uiDump());
@@ -297,7 +305,7 @@ async function main() {
   console.log('PASS: workout timer notification survived a swipe attempt - genuinely swipe-resistant.');
 
   console.log('Closing the workout session...');
-  const closeNode = await waitForNode('✕', 8000);
+  const closeNode = await waitForNode('✕', 20000);
   if (!closeNode) fail('Could not find the session close ("✕") button via UI Automator.');
   tap(closeNode);
   await sleep(2000);
