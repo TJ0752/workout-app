@@ -16,6 +16,28 @@ import com.getcapacitor.annotation.CapacitorPlugin
 @CapacitorPlugin(name = "NativeNotifications")
 class NativeNotificationsPlugin : Plugin() {
 
+    override fun load() {
+        super.load()
+        DueReminderBridge.onAction = { data -> notifyListeners("dueReminderAction", data, true) }
+
+        // Cold-start case: DueReminderActionReceiver relaunched MainActivity because the app
+        // process (and this bridge) wasn't alive to dispatch directly - the action arrived as
+        // plain typed extras on the launch intent rather than through DueReminderBridge. Consume
+        // them once here so a later config-change recreate doesn't refire the same action.
+        val launchIntent = activity.intent
+        val taskId = launchIntent.getStringExtra(EXTRA_PENDING_TASK_ID) ?: return
+        val actionId = launchIntent.getStringExtra(EXTRA_PENDING_ACTION_ID) ?: return
+        val amount = if (launchIntent.hasExtra(EXTRA_PENDING_AMOUNT)) {
+            launchIntent.getIntExtra(EXTRA_PENDING_AMOUNT, 0)
+        } else {
+            null
+        }
+        launchIntent.removeExtra(EXTRA_PENDING_TASK_ID)
+        launchIntent.removeExtra(EXTRA_PENDING_ACTION_ID)
+        launchIntent.removeExtra(EXTRA_PENDING_AMOUNT)
+        notifyListeners("dueReminderAction", buildDueReminderActionData(taskId, actionId, amount), true)
+    }
+
     @PluginMethod
     fun showSummary(call: PluginCall) {
         val title = call.getString("title")

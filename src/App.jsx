@@ -13,6 +13,7 @@ import {
   startNativeWorkoutSession,
   initWorkoutSetListener,
 } from './nativeWorkoutSession';
+import { initDueReminderActionListener } from './nativeNotifications';
 import {
   getRoutines,
   upsertRoutine,
@@ -93,22 +94,25 @@ function App() {
       await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
     })();
 
-    const listenerPromise = initActionListener({
-      onMarkDone: async (taskId) => {
-        await setCompletion(taskId, todayKey(), true);
-        const state = await refreshAll();
-        await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
-        const task = findTask(state.routines, taskId);
-        if (task) await refreshTaskReminderVisibility(task, state.completions);
-      },
-      onAddQuantity: async (taskId, amount) => {
-        await addToCompletion(taskId, todayKey(), amount);
-        const state = await refreshAll();
-        await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
-        const task = findTask(state.routines, taskId);
-        if (task) await refreshTaskReminderVisibility(task, state.completions);
-      },
-    });
+    const handleMarkDone = async (taskId) => {
+      await setCompletion(taskId, todayKey(), true);
+      const state = await refreshAll();
+      await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
+      const task = findTask(state.routines, taskId);
+      if (task) await refreshTaskReminderVisibility(task, state.completions);
+    };
+    const handleAddQuantity = async (taskId, amount) => {
+      await addToCompletion(taskId, todayKey(), amount);
+      const state = await refreshAll();
+      await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
+      const task = findTask(state.routines, taskId);
+      if (task) await refreshTaskReminderVisibility(task, state.completions);
+    };
+
+    const listenerPromise = initActionListener({ onMarkDone: handleMarkDone, onAddQuantity: handleAddQuantity });
+    // Second event source feeding the same handlers - the native due-reminder's own Mark-done/+N
+    // action buttons (see src/nativeNotifications.js and android/.../notify/).
+    const dueReminderListenerPromise = initDueReminderActionListener(handleMarkDone, handleAddQuantity);
 
     const workoutListenerPromise = initWorkoutSetListener(async (taskId, dateKey, exercise, setIndex, values) => {
       const state = await refreshAll();
@@ -118,6 +122,7 @@ function App() {
 
     return () => {
       listenerPromise?.then((handle) => handle.remove());
+      dueReminderListenerPromise?.then((handle) => handle.remove());
       workoutListenerPromise?.then((handle) => handle.remove());
     };
   }, []);

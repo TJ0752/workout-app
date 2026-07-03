@@ -78,9 +78,20 @@ object DueReminderScheduler {
         calendar.set(Calendar.SECOND, 0)
         calendar.set(Calendar.MILLISECOND, 0)
 
+        armAt(context, entry.taskId, calendar.timeInMillis)
+    }
+
+    /**
+     * Re-arms the same per-task alarm slot for an arbitrary future time - shared by arm() (the
+     * next scheduled occurrence) and DueReminderActionReceiver's Snooze handling (now + 15min).
+     * Reusing the same PendingIntent/requestCode is deliberate: whichever fires next naturally
+     * overrides the other via FLAG_UPDATE_CURRENT, and when the snoozed alarm eventually fires it
+     * re-arms the real next occurrence itself (see DueReminderAlarmReceiver), so snoozing needs
+     * no separate bookkeeping beyond a temporary earlier alarm.
+     */
+    internal fun armAt(context: Context, taskId: String, triggerAtMillis: Long) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val triggerAtMillis = calendar.timeInMillis
-        val pending = pendingIntent(context, entry.taskId)
+        val pending = pendingIntent(context, taskId)
         // Matches @capacitor/local-notifications' own graceful degradation (confirmed by
         // reading its source) - never hard-require SCHEDULE_EXACT_ALARM.
         val canScheduleExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
