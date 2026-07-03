@@ -1255,6 +1255,13 @@
   color: var(--text-soft);
 }
 
+.workout-stats-bar {
+  font-size: 0.8em;
+  font-weight: 500;
+  color: var(--text-soft);
+  padding: 0.1rem 0.1rem 0.4rem;
+}
+
 .workout-set-panel {
   flex: 1;
   display: flex;

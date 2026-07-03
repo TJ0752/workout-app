@@ -33,7 +33,10 @@ import androidx.compose.ui.unit.dp
 import com.tharuka.routines.shared.workout.Exercise
 import com.tharuka.routines.shared.workout.LoggedSet
 import com.tharuka.routines.shared.workout.findNextPosition
+import com.tharuka.routines.shared.workout.getExercisePR
+import com.tharuka.routines.shared.workout.getExerciseVolume
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 data class SetValues(val reps: Int?, val weight: Double?, val durationSeconds: Int?, val completed: Boolean)
 
@@ -137,6 +140,8 @@ fun WorkoutSessionScreen(
 
     val totalCompletedSets = exercises.sumOf { ex -> (logsByExercise[ex.id] ?: emptyList()).count { it.completed } }
     val totalPlannedSets = exercises.sumOf { ex -> maxOf(1, ex.targetSets ?: 1) }
+    val currentExercisePR = getExercisePR(setsForExercise)
+    val sessionVolume = exercises.sumOf { ex -> getExerciseVolume(logsByExercise[ex.id] ?: emptyList()) }
 
     Scaffold(
         topBar = {
@@ -159,6 +164,20 @@ fun WorkoutSessionScreen(
                         onClick = { jumpTo(index) },
                         label = { Text("${ex.name} $doneCount/$exTotal") },
                         modifier = Modifier.padding(end = 8.dp)
+                    )
+                }
+            }
+
+            if (!finished) {
+                val statsParts = buildList {
+                    currentExercisePR?.let { add("PR: ${it.reps ?: 0} × ${formatNumber(it.weight ?: 0.0)}") }
+                    if (sessionVolume > 0.0) add("Session volume: ${formatNumber(sessionVolume)}")
+                }
+                if (statsParts.isNotEmpty()) {
+                    Text(
+                        statsParts.joinToString("   ·   "),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
                     )
                 }
             }
@@ -249,4 +268,12 @@ fun WorkoutSessionScreen(
             }
         }
     }
+}
+
+/** "60" for a whole number, "62.5" otherwise - the app has no separate weight-unit field
+ * (see WorkoutModels.kt's Exercise/LoggedSet), so this stays unitless like the existing
+ * "Weight (optional)" input field above. */
+private fun formatNumber(value: Double): String {
+    val rounded = (value * 10).roundToInt() / 10.0
+    return if (rounded == rounded.toLong().toDouble()) rounded.toLong().toString() else rounded.toString()
 }

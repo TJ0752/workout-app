@@ -47,6 +47,23 @@ fun getExercisePR(logs: List<LoggedSet>): LoggedSet? {
     return best
 }
 
+/**
+ * True if `newSet` beats the PR `previousLogs` already had (strictly - tying the existing PR
+ * isn't "new"), using the same weight-then-reps tie-break as getExercisePR. Used by the live
+ * workout notification's "New PR!" callout: called with the exercise's logs *before* the set
+ * being logged, so it can tell a genuine new best apart from just matching an old one.
+ */
+fun isNewPR(previousLogs: List<LoggedSet>, newSet: LoggedSet): Boolean {
+    if (!newSet.completed) return false
+    val weight = newSet.weight
+    if (weight == null || weight == 0.0) return false
+    val previousBest = getExercisePR(previousLogs) ?: return true
+    val previousWeight = previousBest.weight ?: return true
+    val previousReps = previousBest.reps ?: 0
+    val newReps = newSet.reps ?: 0
+    return weight > previousWeight || (weight == previousWeight && newReps > previousReps)
+}
+
 fun findNextPosition(exercises: List<Exercise>, logsForDate: Map<String, List<LoggedSet>>): SessionPosition? {
     for (ei in exercises.indices) {
         val exercise = exercises[ei]

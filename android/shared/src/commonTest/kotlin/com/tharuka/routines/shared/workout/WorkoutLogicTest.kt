@@ -85,6 +85,38 @@ class WorkoutLogicTest {
     }
 
     @Test
+    fun isNewPR_trueForHigherWeightThanPreviousBest() {
+        val previous = listOf(set(0, weight = 40.0, reps = 5))
+        assertTrue(isNewPR(previous, set(1, weight = 50.0, reps = 5)))
+    }
+
+    @Test
+    fun isNewPR_falseForLowerWeightThanPreviousBest() {
+        val previous = listOf(set(0, weight = 40.0, reps = 5))
+        assertEquals(false, isNewPR(previous, set(1, weight = 30.0, reps = 5)))
+    }
+
+    @Test
+    fun isNewPR_tiedWeightNeedsHigherRepsToCount() {
+        val previous = listOf(set(0, weight = 40.0, reps = 5))
+        assertTrue(isNewPR(previous, set(1, weight = 40.0, reps = 8)))
+        assertEquals(false, isNewPR(previous, set(1, weight = 40.0, reps = 5)))
+        assertEquals(false, isNewPR(previous, set(1, weight = 40.0, reps = 3)))
+    }
+
+    @Test
+    fun isNewPR_trueForFirstEverWeightedSet() {
+        assertTrue(isNewPR(emptyList(), set(0, weight = 20.0, reps = 10)))
+    }
+
+    @Test
+    fun isNewPR_falseWhenNewSetIsNotCompletedOrHasNoWeight() {
+        val previous = listOf(set(0, weight = 20.0, reps = 10))
+        assertEquals(false, isNewPR(previous, set(1, weight = 100.0, reps = 10, completed = false)))
+        assertEquals(false, isNewPR(previous, set(1, weight = null, reps = 10)))
+    }
+
+    @Test
     fun findNextPosition_resumesAtFirstIncompleteSet() {
         val exercises = listOf(
             Exercise("e1", "", 2, null, null, null, "reps", null),

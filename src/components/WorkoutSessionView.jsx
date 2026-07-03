@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react';
 import { X, ChevronLeft, ChevronRight, Check } from 'lucide-react';
+import { getExercisePR, getExerciseVolume } from '../utils/workouts';
+
+/** "60" for a whole number, "62.5" otherwise - no separate weight-unit field exists on a task's
+ * exercises, so this stays unitless like the existing "Weight (optional)" input. */
+function formatNumber(value) {
+  return String(Math.round(value * 10) / 10);
+}
 
 function findNextPosition(exercises, logsForDate) {
   for (let ei = 0; ei < exercises.length; ei++) {
@@ -105,6 +112,12 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
   }, 0);
   const totalPlannedSets = exercises.reduce((sum, ex) => sum + Math.max(1, ex.targetSets || 1), 0);
 
+  const currentExercisePR = getExercisePR(setsForExercise);
+  const sessionVolume = exercises.reduce((sum, ex) => sum + getExerciseVolume(logsForDate?.[ex.id] || []), 0);
+  const statsParts = [];
+  if (currentExercisePR) statsParts.push(`PR: ${currentExercisePR.reps || 0} × ${formatNumber(currentExercisePR.weight)}`);
+  if (sessionVolume > 0) statsParts.push(`Session volume: ${formatNumber(sessionVolume)}`);
+
   return (
     <div className="workout-session">
       <div className="workout-session-header">
@@ -136,6 +149,10 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
           );
         })}
       </div>
+
+      {!finished && statsParts.length > 0 && (
+        <div className="workout-stats-bar">{statsParts.join('   ·   ')}</div>
+      )}
 
       {finished ? (
         <div className="workout-finished-screen">
