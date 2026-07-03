@@ -60,6 +60,17 @@ class WorkoutSessionActivity : ComponentActivity() {
                         },
                         onRestStart = { restSeconds -> WorkoutTimerService.updateRest(this, restSeconds) },
                         onRestEnd = { WorkoutTimerService.clearRest(this) },
+                        onProgressUpdate = { snapshot ->
+                            WorkoutTimerService.updateProgress(
+                                this,
+                                snapshot.exerciseName,
+                                snapshot.plannedSetsPerExercise,
+                                snapshot.completedSetsPerExercise,
+                                snapshot.currentExerciseIndex,
+                                snapshot.lastSetSummary,
+                                snapshot.isPR,
+                            )
+                        },
                         onClose = { finishWithResult() },
                     )
                 }

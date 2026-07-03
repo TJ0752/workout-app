@@ -35,10 +35,22 @@ import com.tharuka.routines.shared.workout.LoggedSet
 import com.tharuka.routines.shared.workout.findNextPosition
 import com.tharuka.routines.shared.workout.getExercisePR
 import com.tharuka.routines.shared.workout.getExerciseVolume
+import com.tharuka.routines.shared.workout.isNewPR
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 data class SetValues(val reps: Int?, val weight: Double?, val durationSeconds: Int?, val completed: Boolean)
+
+/** Fed to WorkoutTimerService.updateProgress() so the API-36+ live notification (see that file)
+ * can mirror what's on screen - current exercise, per-exercise progress, and the last logged set. */
+data class ProgressSnapshot(
+    val exerciseName: String,
+    val plannedSetsPerExercise: List<Int>,
+    val completedSetsPerExercise: List<Int>,
+    val currentExerciseIndex: Int,
+    val lastSetSummary: String?,
+    val isPR: Boolean,
+)
 
 @Composable
 fun WorkoutSessionScreen(
@@ -48,6 +60,7 @@ fun WorkoutSessionScreen(
     onLogSet: (Exercise, Int, SetValues) -> Unit,
     onRestStart: (Int) -> Unit,
     onRestEnd: () -> Unit,
+    onProgressUpdate: (ProgressSnapshot) -> Unit,
     onClose: () -> Unit,
 ) {
     var logsByExercise by remember { mutableStateOf(initialLogs) }
@@ -57,6 +70,21 @@ fun WorkoutSessionScreen(
     var finished by remember { mutableStateOf(start == null) }
     var resting by remember { mutableStateOf(false) }
     var restRemaining by remember { mutableStateOf(0) }
+
+    fun notifyProgressUpdate(lastSetSummary: String? = null, isPR: Boolean = false) {
+        onProgressUpdate(
+            ProgressSnapshot(
+                exerciseName = exercises.getOrNull(exerciseIndex)?.name ?: taskTitle,
+                plannedSetsPerExercise = exercises.map { maxOf(1, it.targetSets ?: 1) },
+                completedSetsPerExercise = exercises.map { ex -> (logsByExercise[ex.id] ?: emptyList()).count { it.completed } },
+                currentExerciseIndex = exerciseIndex,
+                lastSetSummary = lastSetSummary,
+                isPR = isPR,
+            )
+        )
+    }
+
+    LaunchedEffect(Unit) { notifyProgressUpdate() }
 
     LaunchedEffect(resting, restRemaining) {
         if (resting && restRemaining > 0) {
@@ -90,6 +118,7 @@ fun WorkoutSessionScreen(
         setIndex = 0
         finished = false
         resting = false
+        notifyProgressUpdate()
     }
 
     fun goNext() {
@@ -119,9 +148,22 @@ fun WorkoutSessionScreen(
             completed = true,
         )
         onLogSet(exercise, setIndex, values)
-        val updatedSets = setsForExercise.filterNot { it.setIndex == setIndex } +
-            LoggedSet(setIndex, values.reps, values.weight, values.durationSeconds, true, exercise.name, null)
+        val newLoggedSet = LoggedSet(setIndex, values.reps, values.weight, values.durationSeconds, true, exercise.name, null)
+        val wasNewPR = isNewPR(setsForExercise, newLoggedSet)
+        val updatedSets = setsForExercise.filterNot { it.setIndex == setIndex } + newLoggedSet
         logsByExercise = logsByExercise + (exercise.id to updatedSets)
+
+        // Attribute the summary/PR badge to the exercise that was just logged, not wherever
+        // navigation lands next - notifyProgressUpdate() is called again below, but only if
+        // navigation actually moves to a *different* exercise, so this stays visible for a
+        // moment when simply advancing to the next set of the same exercise.
+        val summaryText = when {
+            isDuration -> values.durationSeconds?.let { "${it}s" }
+            values.reps != null && values.weight != null -> "${values.reps} × ${formatNumber(values.weight)}"
+            values.reps != null -> "${values.reps} reps"
+            else -> null
+        }
+        notifyProgressUpdate(lastSetSummary = summaryText, isPR = wasNewPR)
 
         val hasNextSet = setIndex + 1 < totalSets
         val hasNextExercise = exerciseIndex + 1 < exercises.size
@@ -132,7 +174,9 @@ fun WorkoutSessionScreen(
             onRestStart(restSeconds)
         }
         if (hasNextSet || hasNextExercise) {
+            val movingToNewExercise = !hasNextSet && hasNextExercise
             goNext()
+            if (movingToNewExercise) notifyProgressUpdate()
         } else {
             finished = true
         }
@@ -252,12 +296,15 @@ fun WorkoutSessionScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            IconButton(onClick = ::goPrev, enabled = !(exerciseIndex == 0 && setIndex == 0)) {
+                            IconButton(
+                                onClick = { goPrev(); notifyProgressUpdate() },
+                                enabled = !(exerciseIndex == 0 && setIndex == 0)
+                            ) {
                                 Text("‹", style = MaterialTheme.typography.headlineMedium)
                             }
                             Button(onClick = ::markDone) { Text("Mark set done") }
                             IconButton(
-                                onClick = ::goNext,
+                                onClick = { goNext(); notifyProgressUpdate() },
                                 enabled = !(exerciseIndex == exercises.size - 1 && setIndex == totalSets - 1)
                             ) {
                                 Text("›", style = MaterialTheme.typography.headlineMedium)
