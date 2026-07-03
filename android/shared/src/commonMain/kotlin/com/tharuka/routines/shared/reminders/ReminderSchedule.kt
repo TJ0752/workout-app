@@ -34,6 +34,27 @@ fun computeNextOccurrenceDaysFromNow(
 }
 
 /**
+ * True when `days` includes `todayWeekday` and `hour:minute` has already passed relative to
+ * `nowHour:nowMinute` (equal-to-the-minute counts as passed, matching the old JS
+ * catchUpDueReminderIfNeeded's `now < due` check, which fires at the exact due minute rather than
+ * waiting for it to be strictly in the past). Used by DueReminderScheduler to decide whether a
+ * just-(re)scheduled reminder needs an immediate catch-up post rather than waiting for its next
+ * armed alarm, which - by design - targets a future occurrence, never "later today if already
+ * passed" (see computeNextOccurrenceDaysFromNow above).
+ */
+fun isOverdueToday(
+    days: List<Int>,
+    hour: Int,
+    minute: Int,
+    todayWeekday: Int,
+    nowHour: Int,
+    nowMinute: Int,
+): Boolean {
+    if (!days.contains(todayWeekday)) return false
+    return hour < nowHour || (hour == nowHour && minute <= nowMinute)
+}
+
+/**
  * Deterministic, stable hash for deriving a native notification id from a task id string -
  * doesn't need to match src/notifications.js's own hashToInt bit-for-bit (they feed disjoint id
  * ranges, see CLAUDE.md), just needs to be idempotent for the same input.

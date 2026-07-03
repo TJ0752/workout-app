@@ -204,7 +204,7 @@ describe('native due-by reminder', () => {
     expect(entry.group).toBe('routine-routine-1');
   });
 
-  it('does not schedule a due reminder for an inactive task, a task with no active days, or a paused routine', async () => {
+  it('does not schedule a due reminder for an inactive task, a task with no active days, or a paused routine - but does cancel any existing one natively', async () => {
     const inactiveTask = task({ id: 'inactive', active: false });
     const noDaysTask = task({ id: 'no-days', days: [] });
     const pausedRoutineTask = task({ id: 'paused-routine-task' });
@@ -217,6 +217,37 @@ describe('native due-by reminder', () => {
     await scheduleTaskNotifications(pausedRoutineTask, routine3);
 
     expect(calls.dueReminderScheduled).toHaveLength(0);
+    expect(calls.dueReminderCancelled.sort()).toEqual(['inactive', 'no-days', 'paused-routine-task']);
+  });
+
+  it('does not cancel the native due reminder merely to reschedule an active task - only stock plugin ids', async () => {
+    // Regression check: scheduleTaskNotifications used to call the full cancelTaskNotifications
+    // (which clears DueReminderStore) before every reschedule, defeating
+    // DueReminderScheduler.schedule()'s no-op-if-unchanged comparison on literally every sync,
+    // since there would never be a previous entry left to compare against.
+    await scheduleTaskNotifications(task({ id: 'stays-armed' }), {
+      id: 'routine-7',
+      title: 'Stays armed',
+      tasks: [task({ id: 'stays-armed' })],
+      active: true,
+      notes: '',
+    });
+
+    expect(calls.dueReminderCancelled).toHaveLength(0);
+    expect(calls.dueReminderScheduled).toHaveLength(1);
+  });
+
+  it('passes isDoneToday through so the native scheduler can catch up an already-overdue task', async () => {
+    const overdueTask = task({ id: 'overdue', time: '08:00' }); // now is 10:00 - already passed
+    const routine = { id: 'routine-8', title: 'Overdue', tasks: [overdueTask], active: true, notes: '' };
+
+    await scheduleTaskNotifications(overdueTask, routine); // no completions - not done
+    expect(calls.dueReminderScheduled[0].isDoneToday).toBe(false);
+
+    resetCalls();
+    const completions = { overdue: { [TODAY_KEY]: 1 } };
+    await scheduleTaskNotifications(overdueTask, routine, completions);
+    expect(calls.dueReminderScheduled[0].isDoneToday).toBe(true);
   });
 
   it('cancels the native due reminder as part of cancelTaskNotifications', async () => {

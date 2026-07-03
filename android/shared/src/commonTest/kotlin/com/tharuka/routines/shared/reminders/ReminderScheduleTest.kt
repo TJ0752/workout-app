@@ -81,6 +81,28 @@ class ReminderScheduleTest {
     }
 
     @Test
+    fun isOverdueToday_falseWhenTodayIsNotAnActiveDay() {
+        assertEquals(false, isOverdueToday(listOf(1), 9, 0, todayWeekday = 3, nowHour = 10, nowMinute = 0))
+    }
+
+    @Test
+    fun isOverdueToday_falseWhenTimeHasNotPassedYet() {
+        assertEquals(false, isOverdueToday(listOf(3), 9, 0, todayWeekday = 3, nowHour = 8, nowMinute = 30))
+    }
+
+    @Test
+    fun isOverdueToday_trueAtTheExactDueMinute() {
+        // Matches the old JS catchUpDueReminderIfNeeded's `now < due` check - fires at the exact
+        // due minute rather than waiting for it to be strictly in the past.
+        assertEquals(true, isOverdueToday(listOf(3), 9, 0, todayWeekday = 3, nowHour = 9, nowMinute = 0))
+    }
+
+    @Test
+    fun isOverdueToday_trueWhenTimeHasClearlyPassed() {
+        assertEquals(true, isOverdueToday(listOf(3), 9, 0, todayWeekday = 3, nowHour = 10, nowMinute = 0))
+    }
+
+    @Test
     fun hashToInt_isDeterministic() {
         assertEquals(hashToInt("task-abc"), hashToInt("task-abc"))
     }

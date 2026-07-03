@@ -151,13 +151,17 @@ export async function registerNotificationActionTypes(routines) {
   }
 }
 
-export async function cancelTaskNotifications(task) {
-  if (!Capacitor.isNativePlatform()) return;
+/**
+ * Cancels only the stock-plugin-scheduled ids (extra reminder nudges, snooze, and any per-day
+ * due-by alarm left over from installs upgrading mid-migration) - never the native due reminder.
+ * scheduleTaskNotifications calls this (not the full cancelTaskNotifications below) before every
+ * reschedule, so a plain resync never clears DueReminderStore's persisted entry - doing so would
+ * defeat DueReminderScheduler.schedule()'s no-op-if-unchanged comparison on literally every call,
+ * since there'd never be a previous entry left to compare against.
+ */
+async function cancelStockNotifications(task) {
   const ids = [{ id: snoozeIdFor(task.id) }];
   for (const day of [0, 1, 2, 3, 4, 5, 6]) {
-    // Per-day due-by ids are no longer scheduled here (see scheduleTaskNotifications) - kept in
-    // this cancel list only to clean up any alarm still scheduled the old way for installs
-    // upgrading mid-migration; a no-op for anything created after the cutover.
     ids.push({ id: notificationIdFor(task.id, day) });
     for (let slot = 0; slot < MAX_EXTRA_REMINDERS; slot++) {
       ids.push({ id: extraReminderIdFor(task.id, day, slot) });
@@ -168,6 +172,12 @@ export async function cancelTaskNotifications(task) {
   } catch (err) {
     console.warn('Failed to cancel notifications', err);
   }
+}
+
+/** Full teardown - stock ids plus the native due reminder. Used when a task is actually being removed or paused, not just rescheduled. */
+export async function cancelTaskNotifications(task) {
+  if (!Capacitor.isNativePlatform()) return;
+  await cancelStockNotifications(task);
   await nativeCancelDueReminder(task.id);
 }
 
@@ -261,10 +271,11 @@ export async function cancelRoutineGroupSummary(routineId) {
   }
 }
 
-export async function scheduleTaskNotifications(task, routine) {
+export async function scheduleTaskNotifications(task, routine, completions = {}) {
   if (!Capacitor.isNativePlatform()) return;
-  await cancelTaskNotifications(task);
+  await cancelStockNotifications(task);
   if (!task.active || task.days.length === 0 || routine?.active === false) {
+    await nativeCancelDueReminder(task.id);
     if (routine) await updateRoutineGroupSummary(routine);
     return;
   }
@@ -319,16 +330,20 @@ export async function scheduleTaskNotifications(task, routine) {
     group,
     completionType: task.completionType,
     quickAddAmounts: task.completionType === 'quantity' ? quickAddAmountsFor(task) : [],
+    // Lets DueReminderScheduler catch up immediately on an already-overdue, not-yet-done task
+    // instead of waiting for its next natural occurrence (which may be a week away) - see
+    // DueReminderScheduler.schedule's isDoneToday param for why this can't be computed natively.
+    isDoneToday: isTaskDoneToday(task, completions),
   });
   if (routine) await updateRoutineGroupSummary(routine);
 }
 
-export async function syncAllNotifications(routines) {
+export async function syncAllNotifications(routines, completions = {}) {
   if (!Capacitor.isNativePlatform()) return;
   await registerNotificationActionTypes(routines);
   for (const routine of routines) {
     for (const task of routine.tasks) {
-      await scheduleTaskNotifications(task, routine);
+      await scheduleTaskNotifications(task, routine, completions);
     }
   }
 }

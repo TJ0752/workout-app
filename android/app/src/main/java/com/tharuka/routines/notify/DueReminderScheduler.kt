@@ -5,8 +5,10 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import androidx.core.app.NotificationManagerCompat
 import com.tharuka.routines.shared.reminders.computeNextOccurrenceDaysFromNow
 import com.tharuka.routines.shared.reminders.hashToInt
+import com.tharuka.routines.shared.reminders.isOverdueToday
 import java.util.Calendar
 
 // Sits in the gap between JS-owned ranges (EXTRA_REMINDER_ID_BASE=500,000,000,
@@ -27,26 +29,51 @@ internal fun dueReminderNotificationId(taskId: String): Int = DUE_REMINDER_ID_BA
  * confirmed in the stock plugin's own TimedNotificationPublisher.
  */
 object DueReminderScheduler {
-    fun schedule(context: Context, entry: DueReminderEntry) {
+    /**
+     * `isDoneToday` comes from the caller (src/notifications.js's isTaskDoneToday, computed
+     * against SQLite completions) since native code must never read the app's DB directly (see
+     * CLAUDE.md) - it's the one piece of state this decision needs that isn't already in
+     * DueReminderEntry.
+     */
+    fun schedule(context: Context, entry: DueReminderEntry, isDoneToday: Boolean) {
         val existing = DueReminderStore.read(context, entry.taskId)
-        // No-op if nothing that affects the alarm or its content actually changed - this is
-        // what removes the need to ever destructively cancel+rearm on every resync, the exact
-        // bug catchUpDueReminderIfNeeded (src/notifications.js) was built to patch around for
-        // the old stock-plugin-backed reminder.
-        if (existing != null &&
-            existing.days == entry.days &&
-            existing.hour == entry.hour &&
-            existing.minute == entry.minute &&
-            existing.title == entry.title &&
-            existing.body == entry.body &&
-            existing.group == entry.group &&
-            existing.completionType == entry.completionType &&
-            existing.quickAddAmounts == entry.quickAddAmounts
-        ) {
+        // Content-only equality (ignoring awaitingCompletion, which is bookkeeping, not content)
+        // is what removes the need to ever destructively cancel+rearm on every resync - the exact
+        // bug catchUpDueReminderIfNeeded (formerly in src/notifications.js) was built to patch
+        // around for the old stock-plugin-backed reminder.
+        val contentUnchanged = existing?.copy(awaitingCompletion = false) == entry.copy(awaitingCompletion = false)
+
+        val calendar = Calendar.getInstance()
+        // Calendar.DAY_OF_WEEK is 1=Sunday..7=Saturday; isOverdueToday/computeNextOccurrenceDaysFromNow
+        // use JS's Date.getDay() convention (0=Sunday..6=Saturday) - see arm() below.
+        val todayWeekday = calendar.get(Calendar.DAY_OF_WEEK) - 1
+        val nowHour = calendar.get(Calendar.HOUR_OF_DAY)
+        val nowMinute = calendar.get(Calendar.MINUTE)
+        val overdueToday = !isDoneToday && isOverdueToday(entry.days, entry.hour, entry.minute, todayWeekday, nowHour, nowMinute)
+        val alreadyCaughtUp = contentUnchanged && existing?.awaitingCompletion == true
+
+        if (contentUnchanged && !(overdueToday && !alreadyCaughtUp)) {
+            // Pure resync: nothing about the reminder's content changed and there's nothing new
+            // to catch up on - leave the existing alarm/notification exactly as they are.
             return
         }
-        DueReminderStore.save(context, entry.copy(awaitingCompletion = existing?.awaitingCompletion ?: false))
-        arm(context, entry)
+
+        val awaitingCompletion = overdueToday || (contentUnchanged && existing?.awaitingCompletion == true)
+        DueReminderStore.save(context, entry.copy(awaitingCompletion = awaitingCompletion))
+
+        if (overdueToday && !alreadyCaughtUp) {
+            // The reminder should already be showing (due today, not done) but isn't going to
+            // fire on its own - arm() only ever targets a future occurrence, never "later today
+            // if already passed" (see computeNextOccurrenceDaysFromNow). Without this, a
+            // brand-new or just-edited overdue task - or one whose alarm silently missed its
+            // moment (doze, device off) - would stay silent until its next natural occurrence,
+            // possibly a full week away.
+            val notification = buildDueReminderNotification(context, entry)
+            NotificationManagerCompat.from(context).notify(dueReminderNotificationId(entry.taskId), notification)
+        }
+        if (!contentUnchanged) {
+            arm(context, entry)
+        }
     }
 
     fun cancel(context: Context, taskId: String) {

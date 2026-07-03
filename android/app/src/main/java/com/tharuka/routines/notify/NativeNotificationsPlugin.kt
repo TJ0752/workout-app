@@ -88,7 +88,8 @@ class NativeNotificationsPlugin : Plugin() {
             completionType = call.getString("completionType") ?: "boolean",
             quickAddAmounts = quickAddAmounts,
         )
-        DueReminderScheduler.schedule(context, entry)
+        val isDoneToday = call.getBoolean("isDoneToday", false) ?: false
+        DueReminderScheduler.schedule(context, entry, isDoneToday)
         call.resolve()
     }
 
