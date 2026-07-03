@@ -58,7 +58,7 @@ class WorkoutSessionActivity : ComponentActivity() {
         startTimerServiceOncePermitted(taskTitle)
 
         setContent {
-            MaterialTheme {
+            MaterialTheme(colorScheme = WorkoutColorScheme) {
                 Surface {
                     WorkoutSessionScreen(
                         taskTitle = taskTitle,

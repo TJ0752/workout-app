@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, ChevronLeft, ChevronRight, Check } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Check } from 'lucide-react';
 import { getExercisePR, getExerciseVolume } from '../utils/workouts';
 
 /** "60" for a whole number, "62.5" otherwise - no separate weight-unit field exists on a task's
@@ -22,6 +22,9 @@ function findNextPosition(exercises, logsForDate) {
   return null;
 }
 
+const RING_RADIUS = 80;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
 export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClose }) {
   const exercises = task.exercises || [];
   const start = findNextPosition(exercises, logsForDate) || { exerciseIndex: 0, setIndex: 0 };
@@ -30,6 +33,7 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
   const [finished, setFinished] = useState(findNextPosition(exercises, logsForDate) === null);
   const [resting, setResting] = useState(false);
   const [restRemaining, setRestRemaining] = useState(0);
+  const [ringAnimKey, setRingAnimKey] = useState(0);
 
   const exercise = exercises[exerciseIndex];
   const isDuration = exercise?.unit === 'seconds';
@@ -93,6 +97,7 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
       durationSeconds: isDuration ? (duration === '' ? null : Number(duration)) : null,
       completed: true,
     });
+    setRingAnimKey((k) => k + 1);
     const hasNextSet = setIndex + 1 < totalSets;
     const hasNextExercise = exerciseIndex + 1 < exercises.length;
     if ((hasNextSet || hasNextExercise) && exercise.restSeconds) {
@@ -118,12 +123,31 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
   if (currentExercisePR) statsParts.push(`PR: ${currentExercisePR.reps || 0} × ${formatNumber(currentExercisePR.weight)}`);
   if (sessionVolume > 0) statsParts.push(`Session volume: ${formatNumber(sessionVolume)}`);
 
+  if (finished) {
+    return (
+      <div className="workout-complete-screen">
+        <Check size={52} strokeWidth={2.5} />
+        <h3>Workout complete</h3>
+        <p>
+          {totalCompletedSets} of {totalPlannedSets} sets logged
+        </p>
+        <button type="button" className="workout-complete-done-btn" onClick={onClose}>
+          Done
+        </button>
+      </div>
+    );
+  }
+
+  const completedCount = setsForExercise.filter((s) => s.completed).length;
+  const ringFraction = completedCount / totalSets;
+  const ringOffset = RING_CIRCUMFERENCE - ringFraction * RING_CIRCUMFERENCE;
+
   return (
     <div className="workout-session">
       <div className="workout-session-header">
         <span className="workout-session-title">{task.title}</span>
         <button type="button" className="workout-session-close" onClick={onClose} aria-label="Close">
-          <X size={20} />
+          <span aria-hidden="true">✕</span>
         </button>
       </div>
 
@@ -136,7 +160,7 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
             <button
               type="button"
               key={ex.id}
-              className={`workout-exercise-chip ${i === exerciseIndex && !finished ? 'active' : ''} ${
+              className={`workout-exercise-chip ${i === exerciseIndex ? 'active' : ''} ${
                 doneCount >= exTotal ? 'complete' : ''
               }`}
               onClick={() => jumpTo(i)}
@@ -150,26 +174,13 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
         })}
       </div>
 
-      {!finished && statsParts.length > 0 && (
-        <div className="workout-stats-bar">{statsParts.join('   ·   ')}</div>
-      )}
+      {statsParts.length > 0 && <div className="workout-stats-bar">{statsParts.join('   ·   ')}</div>}
 
-      {finished ? (
-        <div className="workout-finished-screen">
-          <Check size={48} className="workout-finished-icon" />
-          <h3>Workout complete</h3>
-          <p>
-            {totalCompletedSets} of {totalPlannedSets} sets logged
-          </p>
-          <button type="button" className="qty-btn primary" onClick={onClose}>
-            Done
-          </button>
-        </div>
-      ) : resting ? (
+      {resting ? (
         <div className="workout-rest-screen">
           <span className="workout-rest-label">Rest</span>
           <span className="workout-rest-countdown">{restRemaining}s</span>
-          <button type="button" className="qty-btn" onClick={() => setResting(false)}>
+          <button type="button" className="workout-skip-rest-btn" onClick={() => setResting(false)}>
             Skip rest
           </button>
         </div>
@@ -192,6 +203,25 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
               );
             })}
           </div>
+
+          <button type="button" className="workout-ring-tap" onClick={markDone} aria-label="Mark set done">
+            <span key={`pulse-${ringAnimKey}`} className="workout-ring-pulse" />
+            <svg className="workout-ring-svg" viewBox="0 0 180 180">
+              <circle className="workout-ring-track" cx="90" cy="90" r={RING_RADIUS} />
+              <circle
+                className="workout-ring-fill"
+                cx="90"
+                cy="90"
+                r={RING_RADIUS}
+                style={{ strokeDasharray: RING_CIRCUMFERENCE, strokeDashoffset: ringOffset }}
+              />
+            </svg>
+            <span key={`center-${ringAnimKey}`} className="workout-ring-center">
+              <span className="workout-ring-num">{setIndex + 1}</span>
+              <span className="workout-ring-of">of {totalSets}</span>
+              <span className="workout-ring-hint">Tap ring to log</span>
+            </span>
+          </button>
 
           <div className="inline-fields">
             {isDuration ? (
@@ -229,18 +259,16 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
               disabled={exerciseIndex === 0 && setIndex === 0}
               onClick={goPrev}
             >
-              <ChevronLeft size={18} />
+              <ChevronLeft size={26} />
             </button>
-            <button type="button" className="qty-btn primary workout-mark-done-btn" onClick={markDone}>
-              Mark set done
-            </button>
+            <span className="workout-set-nav-hint">Tap the ring to log the set</span>
             <button
               type="button"
               className="workout-set-nav-btn"
               disabled={exerciseIndex === exercises.length - 1 && setIndex === totalSets - 1}
               onClick={goNext}
             >
-              <ChevronRight size={18} />
+              <ChevronRight size={26} />
             </button>
           </div>
         </div>

@@ -1266,34 +1266,32 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
-  background: var(--card);
-  border: 1px solid var(--card-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 1.2rem;
+  align-items: center;
+  gap: 0.7rem;
 }
 
 .workout-exercise-name {
   margin: 0;
-  font-size: 1.3em;
+  font-size: 1.25em;
+  text-align: center;
 }
 
 .workout-set-dots {
   display: flex;
   gap: 0.4rem;
   flex-wrap: wrap;
+  justify-content: center;
 }
 
 .workout-set-dot {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   border: 1.6px solid var(--card-border);
-  background: var(--bg);
+  background: var(--card);
   color: var(--text-soft);
-  font-size: 0.8em;
-  font-weight: 600;
+  font-size: 0.85em;
+  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1302,28 +1300,142 @@
 .workout-set-dot.current {
   border-color: var(--accent);
   color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .workout-set-dot.done {
-  background: var(--good);
-  border-color: var(--good);
-  color: var(--card);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* Momentum ring - the dominant tap target for logging a set. The whole ring is the button;
+   filling it uses a spring-eased transition (not linear) paired with a bounce + an expanding,
+   fading pulse ring on every tap, so completing a set reads as a small reward. */
+.workout-ring-tap {
+  position: relative;
+  width: 220px;
+  height: 220px;
+  flex: 1;
+  min-height: 180px;
+  max-height: 260px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  padding: 0;
+  margin: 0.2rem auto;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  animation: workoutRingBounce 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.workout-ring-svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.workout-ring-track {
+  fill: none;
+  stroke: var(--card-border);
+  stroke-width: 14;
+}
+
+.workout-ring-fill {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 14;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.workout-ring-pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  opacity: 0;
+  animation: workoutRingPulse 0.7s ease-out;
+}
+
+.workout-ring-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+}
+
+.workout-ring-num {
+  font-size: 2.6rem;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1;
+}
+
+.workout-ring-of {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.workout-ring-hint {
+  margin-top: 0.35rem;
+  font-size: 0.68rem;
+  color: var(--text-soft);
+}
+
+@keyframes workoutRingPulse {
+  0% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+
+@keyframes workoutRingBounce {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.06);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 .workout-set-nav {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.6rem;
+  width: 100%;
   margin-top: auto;
+  padding-top: 0.3rem;
+}
+
+.workout-set-nav-hint {
+  font-size: 0.78em;
+  color: var(--text-soft);
+  text-align: center;
+  flex: 1;
 }
 
 .workout-set-nav-btn {
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
+  width: 60px;
+  height: 60px;
+  min-width: 60px;
   border-radius: 999px;
   border: 1px solid var(--card-border);
-  background: var(--bg);
+  background: var(--card);
   color: var(--text);
   display: flex;
   align-items: center;
@@ -1331,24 +1443,18 @@
   padding: 0;
 }
 
-.workout-mark-done-btn {
-  flex: 1;
-  padding: 0.75rem;
-  font-weight: 600;
+.workout-set-nav-btn:disabled {
+  color: var(--text-soft);
+  opacity: 0.4;
 }
 
-.workout-rest-screen,
-.workout-finished-screen {
+.workout-rest-screen {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 0.8rem;
-  background: var(--card);
-  border: 1px solid var(--card-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
   padding: 2rem;
   text-align: center;
 }
@@ -1361,20 +1467,55 @@
 }
 
 .workout-rest-countdown {
-  font-size: 3em;
-  font-weight: 700;
+  font-size: 4em;
+  font-weight: 800;
   color: var(--accent);
 }
 
-.workout-finished-icon {
-  color: var(--good);
+.workout-skip-rest-btn {
+  padding: 0.85rem 1.8rem;
+  border-radius: 999px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.95em;
 }
 
-.workout-finished-screen h3 {
-  margin: 0;
+/* Full-bleed green completion screen, matching the app's accent green rather than a plain
+   white card - the dominant color of "workout complete" should read the same as everywhere
+   else in the app. */
+.workout-complete-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  background: var(--accent);
+  color: #fff;
+  padding: 2rem;
+  text-align: center;
+  min-height: 100%;
 }
 
-.workout-finished-screen p {
+.workout-complete-screen h3 {
+  margin: 0.3rem 0 0.1rem;
+  font-size: 1.4em;
+}
+
+.workout-complete-screen p {
   margin: 0;
-  color: var(--text-soft);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.workout-complete-done-btn {
+  margin-top: 1.1rem;
+  padding: 0.85rem 2rem;
+  border-radius: 999px;
+  border: none;
+  background: #fff;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 0.95em;
 }

@@ -2,34 +2,66 @@
 
 package com.tharuka.routines.workout
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.tharuka.routines.shared.workout.Exercise
 import com.tharuka.routines.shared.workout.LoggedSet
 import com.tharuka.routines.shared.workout.findNextPosition
@@ -37,6 +69,7 @@ import com.tharuka.routines.shared.workout.getExercisePR
 import com.tharuka.routines.shared.workout.getExerciseVolume
 import com.tharuka.routines.shared.workout.isNewPR
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 data class SetValues(val reps: Int?, val weight: Double?, val durationSeconds: Int?, val completed: Boolean)
@@ -50,6 +83,37 @@ data class ProgressSnapshot(
     val currentExerciseIndex: Int,
     val lastSetSummary: String?,
     val isPR: Boolean,
+)
+
+/** Matches src/index.css's "Soft Paper" tokens exactly, so this native screen no longer falls
+ * back to the stock Material3 default palette (which reads as generic purple, not this app's
+ * identity). Defined once here and reused both for WorkoutSessionColorScheme below and for the
+ * full-bleed green completion screen, which intentionally paints outside the theme's normal
+ * surface/background roles. */
+object AppPalette {
+    val Background = Color(0xFFF7ECD2)
+    val Card = Color(0xFFFFFFFF)
+    val CardBorder = Color(0x29825F0F)
+    val TextMain = Color(0xFF241D10)
+    val TextSoft = Color(0xFF8C7F57)
+    val Accent = Color(0xFF0A9764)
+    val AccentInk = Color(0xFF062F1F)
+}
+
+val WorkoutColorScheme = lightColorScheme(
+    primary = AppPalette.Accent,
+    onPrimary = Color.White,
+    primaryContainer = AppPalette.Accent.copy(alpha = 0.15f),
+    onPrimaryContainer = AppPalette.Accent,
+    secondary = AppPalette.Accent,
+    background = AppPalette.Background,
+    onBackground = AppPalette.TextMain,
+    surface = AppPalette.Card,
+    onSurface = AppPalette.TextMain,
+    surfaceVariant = AppPalette.Card,
+    onSurfaceVariant = AppPalette.TextSoft,
+    outline = AppPalette.CardBorder,
+    outlineVariant = AppPalette.CardBorder,
 )
 
 @Composable
@@ -187,92 +251,117 @@ fun WorkoutSessionScreen(
     val currentExercisePR = getExercisePR(setsForExercise)
     val sessionVolume = exercises.sumOf { ex -> getExerciseVolume(logsByExercise[ex.id] ?: emptyList()) }
 
+    if (finished) {
+        WorkoutCompleteScreen(totalCompletedSets = totalCompletedSets, totalPlannedSets = totalPlannedSets, onClose = onClose)
+        return
+    }
+
     Scaffold(
+        containerColor = AppPalette.Background,
         topBar = {
             TopAppBar(
-                title = { Text(taskTitle) },
+                title = { Text(taskTitle, fontWeight = FontWeight.Bold) },
                 actions = {
-                    IconButton(onClick = onClose) { Text("✕") }
-                }
+                    IconButton(onClick = onClose) { Text("✕", fontSize = 18.sp) }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = AppPalette.Background),
             )
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            LazyRow(modifier = Modifier.padding(8.dp)) {
+            LazyRow(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 itemsIndexed(exercises) { index, ex ->
                     val sets = logsByExercise[ex.id] ?: emptyList()
                     val doneCount = sets.count { it.completed }
                     val exTotal = maxOf(1, ex.targetSets ?: 1)
                     FilterChip(
-                        selected = index == exerciseIndex && !finished,
+                        selected = index == exerciseIndex,
                         onClick = { jumpTo(index) },
                         label = { Text("${ex.name} $doneCount/$exTotal") },
-                        modifier = Modifier.padding(end = 8.dp)
                     )
                 }
             }
 
-            if (!finished) {
-                val statsParts = buildList {
-                    currentExercisePR?.let { add("PR: ${it.reps ?: 0} × ${formatNumber(it.weight ?: 0.0)}") }
-                    if (sessionVolume > 0.0) add("Session volume: ${formatNumber(sessionVolume)}")
-                }
-                if (statsParts.isNotEmpty()) {
+            val statsParts = buildList {
+                currentExercisePR?.let { add("PR: ${it.reps ?: 0} × ${formatNumber(it.weight ?: 0.0)}") }
+                if (sessionVolume > 0.0) add("Session volume: ${formatNumber(sessionVolume)}")
+            }
+            if (statsParts.isNotEmpty()) {
+                Text(
+                    statsParts.joinToString("   ·   "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppPalette.TextSoft,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+
+            if (resting) {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text("REST", fontSize = 14.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp, color = AppPalette.TextSoft)
                     Text(
-                        statsParts.joinToString("   ·   "),
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                        "${restRemaining}s",
+                        fontSize = 72.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = AppPalette.Accent,
+                        modifier = Modifier.padding(vertical = 12.dp),
                     )
-                }
-            }
-
-            when {
-                finished -> {
-                    Column(
-                        modifier = Modifier.fillMaxSize().padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
+                    Button(
+                        onClick = { resting = false; onRestEnd() },
+                        shape = RoundedCornerShape(999.dp),
+                        modifier = Modifier.height(52.dp),
                     ) {
-                        Text("✓", style = MaterialTheme.typography.displayMedium)
-                        Text("Workout complete", style = MaterialTheme.typography.headlineSmall)
-                        Text("$totalCompletedSets of $totalPlannedSets sets logged")
-                        Button(onClick = onClose, modifier = Modifier.padding(top = 16.dp)) { Text("Done") }
+                        Text("Skip rest", fontWeight = FontWeight.Bold)
                     }
                 }
-                resting -> {
-                    Column(
-                        modifier = Modifier.fillMaxSize().padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
+            } else {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        exercise.name,
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp),
+                    )
+
+                    Row(
+                        horizontalArrangement = Arrangement.Center,
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
                     ) {
-                        Text("Rest")
-                        Text("${restRemaining}s", style = MaterialTheme.typography.displayMedium)
-                        Button(onClick = { resting = false; onRestEnd() }, modifier = Modifier.padding(top = 16.dp)) {
-                            Text("Skip rest")
+                        for (i in 0 until totalSets) {
+                            val done = setsForExercise.any { it.setIndex == i && it.completed }
+                            SetDot(number = i + 1, done = done, current = i == setIndex, onClick = { setIndex = i })
                         }
                     }
-                }
-                else -> {
-                    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                        Text(exercise.name, style = MaterialTheme.typography.headlineSmall)
 
-                        Row(modifier = Modifier.padding(vertical = 8.dp)) {
-                            for (i in 0 until totalSets) {
-                                val done = setsForExercise.any { it.setIndex == i && it.completed }
-                                OutlinedButton(
-                                    onClick = { setIndex = i },
-                                    modifier = Modifier.padding(end = 4.dp)
-                                ) { Text("${i + 1}${if (done) " ✓" else ""}") }
-                            }
-                        }
+                    MomentumRing(
+                        modifier = Modifier.weight(1f),
+                        currentSetNumber = setIndex + 1,
+                        totalSets = totalSets,
+                        completedCount = setsForExercise.count { it.completed },
+                        onTap = ::markDone,
+                    )
 
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
                         if (isDuration) {
                             OutlinedTextField(
                                 value = duration,
                                 onValueChange = { duration = it },
                                 label = { Text("Duration (sec)") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.weight(1f),
                             )
                         } else {
                             OutlinedTextField(
@@ -280,39 +369,219 @@ fun WorkoutSessionScreen(
                                 onValueChange = { reps = it },
                                 label = { Text("Reps") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.weight(1f),
                             )
                         }
                         OutlinedTextField(
                             value = weight,
                             onValueChange = { weight = it },
-                            label = { Text("Weight (optional)") },
+                            label = { Text("Weight") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                            modifier = Modifier.weight(1f),
                         )
+                    }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconButton(
-                                onClick = { goPrev(); notifyProgressUpdate() },
-                                enabled = !(exerciseIndex == 0 && setIndex == 0)
-                            ) {
-                                Text("‹", style = MaterialTheme.typography.headlineMedium)
-                            }
-                            Button(onClick = ::markDone) { Text("Mark set done") }
-                            IconButton(
-                                onClick = { goNext(); notifyProgressUpdate() },
-                                enabled = !(exerciseIndex == exercises.size - 1 && setIndex == totalSets - 1)
-                            ) {
-                                Text("›", style = MaterialTheme.typography.headlineMedium)
-                            }
-                        }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        BigNavButton(
+                            symbol = "‹",
+                            enabled = !(exerciseIndex == 0 && setIndex == 0),
+                            onClick = { goPrev(); notifyProgressUpdate() },
+                        )
+                        Text(
+                            "Tap the ring to log the set",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AppPalette.TextSoft,
+                        )
+                        BigNavButton(
+                            symbol = "›",
+                            enabled = !(exerciseIndex == exercises.size - 1 && setIndex == totalSets - 1),
+                            onClick = { goNext(); notifyProgressUpdate() },
+                        )
                     }
                 }
             }
+        }
+    }
+}
+
+/** The dominant, full-screen tap target for logging a set - the whole ring is the button, not a
+ * small label inside it. Filling the ring uses a springy overshoot (not a linear tween) and pairs
+ * with a brief scale bounce and an expanding, fading pulse ring on every tap, so completing a set
+ * reads as a small reward rather than a flat state change. A contentDescription of "Mark set
+ * done" is set deliberately (Compose merges a clickable's descendant semantics into one
+ * accessibility node) so scripts/verify-workout-session-notification.mjs's existing loose
+ * text-or-content-desc lookup for that exact phrase keeps working unchanged. */
+@Composable
+private fun MomentumRing(
+    modifier: Modifier = Modifier,
+    currentSetNumber: Int,
+    totalSets: Int,
+    completedCount: Int,
+    onTap: () -> Unit,
+) {
+    val targetFraction = completedCount.toFloat() / totalSets.toFloat()
+    val animatedFraction = remember { Animatable(targetFraction) }
+    LaunchedEffect(targetFraction) {
+        animatedFraction.animateTo(
+            targetFraction,
+            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        )
+    }
+
+    val scale = remember { Animatable(1f) }
+    val pulseAlpha = remember { Animatable(0f) }
+    val pulseScale = remember { Animatable(1f) }
+    val scope = rememberCoroutineScope()
+
+    val ringColor = MaterialTheme.colorScheme.primary
+    val trackColor = MaterialTheme.colorScheme.outlineVariant
+    val numberColor = MaterialTheme.colorScheme.onBackground
+    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+
+    Box(
+        modifier = modifier
+            .size(230.dp)
+            .graphicsLayer { scaleX = scale.value; scaleY = scale.value }
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) {
+                onTap()
+                scope.launch {
+                    scale.snapTo(1f)
+                    scale.animateTo(1.08f, animationSpec = tween(140))
+                    scale.animateTo(1f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+                }
+                scope.launch {
+                    pulseScale.snapTo(1f)
+                    pulseAlpha.snapTo(0.7f)
+                    pulseScale.animateTo(1.5f, animationSpec = tween(700))
+                    pulseAlpha.animateTo(0f, animationSpec = tween(700))
+                }
+            }
+            .semantics { contentDescription = "Mark set done" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val stroke = 16.dp.toPx()
+            val inset = stroke / 2f
+            val arcTopLeft = Offset(inset, inset)
+            val arcSize = Size(size.width - stroke, size.height - stroke)
+
+            if (pulseAlpha.value > 0.001f) {
+                drawCircle(
+                    color = ringColor.copy(alpha = pulseAlpha.value),
+                    radius = (size.minDimension / 2f) * pulseScale.value,
+                    style = Stroke(width = 3.dp.toPx()),
+                )
+            }
+            drawArc(
+                color = trackColor,
+                startAngle = -90f,
+                sweepAngle = 360f,
+                useCenter = false,
+                topLeft = arcTopLeft,
+                size = arcSize,
+                style = Stroke(width = stroke, cap = StrokeCap.Round),
+            )
+            drawArc(
+                color = ringColor,
+                startAngle = -90f,
+                sweepAngle = 360f * animatedFraction.value.coerceIn(0f, 1f),
+                useCenter = false,
+                topLeft = arcTopLeft,
+                size = arcSize,
+                style = Stroke(width = stroke, cap = StrokeCap.Round),
+            )
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("$currentSetNumber", fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = numberColor)
+            Text("of $totalSets", fontSize = 13.sp, letterSpacing = 1.sp, color = labelColor)
+            Spacer(Modifier.height(6.dp))
+            Text("Tap ring to log", fontSize = 11.sp, color = labelColor)
+        }
+    }
+}
+
+@Composable
+private fun SetDot(number: Int, done: Boolean, current: Boolean, onClick: () -> Unit) {
+    val background = when {
+        done -> MaterialTheme.colorScheme.primary
+        current -> MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+        else -> MaterialTheme.colorScheme.surface
+    }
+    val foreground = when {
+        done -> Color.White
+        current -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Box(
+        modifier = Modifier
+            .padding(horizontal = 4.dp)
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(background)
+            .border(1.4.dp, if (current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant, CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("$number", color = foreground, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+    }
+}
+
+/** A large, unmistakable tap target - replaces the default 48dp IconButton, per the request that
+ * navigation controls read as full, deliberate buttons rather than small icons. */
+@Composable
+private fun BigNavButton(symbol: String, enabled: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.size(60.dp),
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+            Text(
+                symbol,
+                fontSize = 26.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+            )
+        }
+    }
+}
+
+/** Full-bleed green, deliberately outside the normal cream background/white-card roles - this is
+ * the "main completion page" whose dominant color should match the rest of the app's accent
+ * green rather than reading as a plain white Material dialog. */
+@Composable
+private fun WorkoutCompleteScreen(totalCompletedSets: Int, totalPlannedSets: Int, onClose: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(AppPalette.Accent)
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text("✓", fontSize = 56.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        Spacer(Modifier.height(16.dp))
+        Text("Workout complete", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Color.White, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(6.dp))
+        Text("$totalCompletedSets of $totalPlannedSets sets logged", fontSize = 15.sp, color = Color.White.copy(alpha = 0.85f))
+        Spacer(Modifier.height(28.dp))
+        Button(
+            onClick = onClose,
+            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = AppPalette.AccentInk),
+            shape = RoundedCornerShape(999.dp),
+            modifier = Modifier.height(54.dp),
+        ) {
+            Text("Done", fontWeight = FontWeight.Bold, fontSize = 16.sp)
         }
     }
 }
