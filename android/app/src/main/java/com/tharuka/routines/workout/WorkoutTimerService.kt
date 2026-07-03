@@ -85,6 +85,10 @@ class WorkoutTimerService : Service() {
                 postNotification(buildNotification(resting = false, restEndMs = 0L))
             }
             ACTION_STOP -> {
+                // Relying on implicit cleanup via onDestroy() isn't reliable across Android
+                // versions - stopSelf() alone can leave the notification pinned. Explicitly
+                // detach and remove it first.
+                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
         }
