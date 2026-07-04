@@ -61,6 +61,25 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".notify.ExtraReminderAlarmReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".notify.ExtraReminderActionReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".notify.ExtraReminderBootReceiver"
+            android:directBootAware="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

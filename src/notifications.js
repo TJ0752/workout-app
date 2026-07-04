@@ -8,6 +8,10 @@ import {
   nativeScheduleDueReminder,
   nativeCancelDueReminder,
   nativeDismissDueReminderToday,
+  nativeScheduleExtraReminder,
+  nativeCancelExtraReminderSlot,
+  nativeCancelExtraReminders,
+  nativeDismissExtraRemindersToday,
 } from './nativeNotifications';
 
 const CHANNEL_ID = 'routine-reminders';
@@ -152,11 +156,15 @@ export async function registerNotificationActionTypes(routines) {
 }
 
 /**
- * Cancels only the stock-plugin-scheduled ids (extra reminder nudges, snooze, and any per-day
- * due-by alarm left over from installs upgrading mid-migration) - never the native due reminder.
- * scheduleTaskNotifications calls this (not the full cancelTaskNotifications below) before every
- * reschedule, so a plain resync never clears DueReminderStore's persisted entry - doing so would
- * defeat DueReminderScheduler.schedule()'s no-op-if-unchanged comparison on literally every call,
+ * One-time cleanup sweep for ids that used to be scheduled through the stock plugin (extra
+ * reminder nudges, snooze, and the old per-day due-by alarm) before both were migrated to
+ * native alarms - nothing schedules through the stock plugin under these ids anymore, but an
+ * install upgrading mid-migration could still have some of them pending, and leaving them
+ * would show duplicate notifications alongside the new native ones. Never touches the native
+ * due reminder or native extra reminders. scheduleTaskNotifications calls this (not the full
+ * cancelTaskNotifications below) before every reschedule, so a plain resync never clears
+ * DueReminderStore's persisted entry - doing so would defeat
+ * DueReminderScheduler.schedule()'s no-op-if-unchanged comparison on literally every call,
  * since there'd never be a previous entry left to compare against.
  */
 async function cancelStockNotifications(task) {
@@ -174,11 +182,12 @@ async function cancelStockNotifications(task) {
   }
 }
 
-/** Full teardown - stock ids plus the native due reminder. Used when a task is actually being removed or paused, not just rescheduled. */
+/** Full teardown - legacy stock ids plus every native reminder. Used when a task is actually being removed or paused, not just rescheduled. */
 export async function cancelTaskNotifications(task) {
   if (!Capacitor.isNativePlatform()) return;
   await cancelStockNotifications(task);
   await nativeCancelDueReminder(task.id);
+  await nativeCancelExtraReminders(task.id);
 }
 
 /**
@@ -202,6 +211,7 @@ export async function dismissTaskReminders(task) {
     console.warn('Failed to dismiss task reminders', err);
   }
   await nativeDismissDueReminderToday(task.id);
+  await nativeDismissExtraRemindersToday(task.id);
 }
 
 /** Call after any completion change so a just-completed task's pinned reminder clears immediately. */
@@ -276,47 +286,39 @@ export async function scheduleTaskNotifications(task, routine, completions = {})
   await cancelStockNotifications(task);
   if (!task.active || task.days.length === 0 || routine?.active === false) {
     await nativeCancelDueReminder(task.id);
+    await nativeCancelExtraReminders(task.id);
     if (routine) await updateRoutineGroupSummary(routine);
     return;
   }
 
-  const { title, body, actionTypeId, group, extra } = taskNotificationContent(task, routine);
+  const { title, body, group } = taskNotificationContent(task, routine);
   const [hour, minute] = task.time.split(':').map(Number);
 
-  // The due-by reminder itself is scheduled natively (see nativeScheduleDueReminder) so it can
-  // reappear immediately if swiped away before the task is done - @capacitor/local-notifications
-  // has no exposed hook for a custom setDeleteIntent() at all (see CLAUDE.md). Extra reminder
-  // times are normal, dismissible nudges leading up to it and stay on the stock plugin
-  // unchanged; they get their own ids (extraReminderIdFor) since Android's AlarmManager treats
-  // two alarms scheduled under the same id as the same alarm and the later one cancels the
-  // earlier before it can ever fire.
+  // The due-by reminder and its extra nudge times are both scheduled natively - one
+  // self-rescheduling alarm per (task) for the due-by moment (see nativeScheduleDueReminder)
+  // and one per (task, slot) for each extra reminder (see nativeScheduleExtraReminder), each
+  // covering every day in task.days with a single alarm rather than one recurring schedule per
+  // (day, slot) the way the stock plugin required.
   const extraTimes = (task.reminderTimes || []).slice(0, MAX_EXTRA_REMINDERS);
-  const extraNotifications = [];
-  for (const day of task.days) {
-    extraTimes.forEach((timeStr, slot) => {
-      const [h, m] = timeStr.split(':').map(Number);
-      extraNotifications.push({
-        id: extraReminderIdFor(task.id, day, slot),
-        title,
-        body,
-        channelId: CHANNEL_ID,
-        actionTypeId,
-        group,
-        extra,
-        schedule: {
-          on: { weekday: day + 1, hour: h, minute: m },
-          allowWhileIdle: true,
-        },
-      });
+  for (let slot = 0; slot < extraTimes.length; slot++) {
+    const [h, m] = extraTimes[slot].split(':').map(Number);
+    await nativeScheduleExtraReminder({
+      taskId: task.id,
+      slot,
+      routineId: routine?.id,
+      title,
+      body,
+      days: task.days,
+      hour: h,
+      minute: m,
+      group,
+      completionType: task.completionType,
+      quickAddAmounts: task.completionType === 'quantity' ? quickAddAmountsFor(task) : [],
     });
   }
-
-  if (extraNotifications.length > 0) {
-    try {
-      await LocalNotifications.schedule({ notifications: extraNotifications });
-    } catch (err) {
-      console.warn('Failed to schedule notifications', err);
-    }
+  // Cancel any slots beyond however many extra times are configured now (e.g. the user removed one).
+  for (let slot = extraTimes.length; slot < MAX_EXTRA_REMINDERS; slot++) {
+    await nativeCancelExtraReminderSlot(task.id, slot);
   }
 
   await nativeScheduleDueReminder({

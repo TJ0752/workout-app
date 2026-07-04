@@ -58,3 +58,32 @@ export async function nativeDismissDueReminderToday(taskId) {
   if (!NativeNotifications) return;
   await NativeNotifications.dismissDueReminderToday({ taskId });
 }
+
+/**
+ * Schedules one extra-reminder nudge natively (see ExtraReminderScheduler.kt) - the native
+ * replacement for the stock plugin's per-(day, slot) recurring schedule. One self-rescheduling
+ * alarm per (taskId, slot) covers every day in `days`, mirroring how the due-by reminder itself
+ * already covers every day with a single alarm.
+ */
+export async function nativeScheduleExtraReminder(entry) {
+  if (!NativeNotifications) return;
+  await NativeNotifications.scheduleExtraReminder(entry);
+}
+
+/** Cancels a single extra-reminder slot - used when a task now has fewer reminder times than before. */
+export async function nativeCancelExtraReminderSlot(taskId, slot) {
+  if (!NativeNotifications) return;
+  await NativeNotifications.cancelExtraReminderSlot({ taskId, slot });
+}
+
+/** Full teardown of every extra-reminder slot for a task - used when a task is removed or paused. */
+export async function nativeCancelExtraReminders(taskId) {
+  if (!NativeNotifications) return;
+  await NativeNotifications.cancelExtraReminders({ taskId });
+}
+
+/** Clears whichever extra-reminder slots are currently showing for this task, for today only - called once a task is marked done. */
+export async function nativeDismissExtraRemindersToday(taskId) {
+  if (!NativeNotifications) return;
+  await NativeNotifications.dismissExtraRemindersToday({ taskId });
+}

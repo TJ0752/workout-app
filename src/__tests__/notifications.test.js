@@ -10,6 +10,10 @@ const calls = {
   dueReminderScheduled: [],
   dueReminderCancelled: [],
   dueReminderDismissed: [],
+  extraReminderScheduled: [],
+  extraReminderSlotCancelled: [],
+  extraRemindersCancelled: [],
+  extraRemindersDismissed: [],
 };
 
 // Mock the two Capacitor packages notifications.js talks to. `isNativePlatform`
@@ -35,6 +39,18 @@ vi.mock('@capacitor/core', () => ({
     }),
     dismissDueReminderToday: vi.fn(async ({ taskId }) => {
       calls.dueReminderDismissed.push(taskId);
+    }),
+    scheduleExtraReminder: vi.fn(async (entry) => {
+      calls.extraReminderScheduled.push(entry);
+    }),
+    cancelExtraReminderSlot: vi.fn(async ({ taskId, slot }) => {
+      calls.extraReminderSlotCancelled.push({ taskId, slot });
+    }),
+    cancelExtraReminders: vi.fn(async ({ taskId }) => {
+      calls.extraRemindersCancelled.push(taskId);
+    }),
+    dismissExtraRemindersToday: vi.fn(async ({ taskId }) => {
+      calls.extraRemindersDismissed.push(taskId);
     }),
   })),
 }));
@@ -84,6 +100,10 @@ function resetCalls() {
   calls.dueReminderScheduled.length = 0;
   calls.dueReminderCancelled.length = 0;
   calls.dueReminderDismissed.length = 0;
+  calls.extraReminderScheduled.length = 0;
+  calls.extraReminderSlotCancelled.length = 0;
+  calls.extraRemindersCancelled.length = 0;
+  calls.extraRemindersDismissed.length = 0;
 }
 
 beforeEach(() => {
@@ -260,6 +280,85 @@ describe('native due-by reminder', () => {
     await dismissTaskReminders(task({ id: 'to-dismiss' }));
 
     expect(calls.dueReminderDismissed).toEqual(['to-dismiss']);
+  });
+});
+
+describe('native extra reminders', () => {
+  it('schedules one native extra reminder per configured reminderTime, keyed by slot', async () => {
+    const extraTask = task({ id: 'extra-1', reminderTimes: ['09:00', '14:30'] });
+    const routine = { id: 'routine-extra', title: 'Extra', tasks: [extraTask], active: true, notes: '' };
+
+    await scheduleTaskNotifications(extraTask, routine);
+
+    expect(calls.extraReminderScheduled).toHaveLength(2);
+    expect(calls.extraReminderScheduled[0]).toMatchObject({
+      taskId: 'extra-1',
+      slot: 0,
+      days: [TUESDAY],
+      hour: 9,
+      minute: 0,
+    });
+    expect(calls.extraReminderScheduled[1]).toMatchObject({
+      taskId: 'extra-1',
+      slot: 1,
+      hour: 14,
+      minute: 30,
+    });
+  });
+
+  it('cancels the remaining slots when a task now has fewer reminderTimes than before', async () => {
+    const extraTask = task({ id: 'extra-2', reminderTimes: ['09:00'] });
+    const routine = { id: 'routine-extra-2', title: 'Extra 2', tasks: [extraTask], active: true, notes: '' };
+
+    await scheduleTaskNotifications(extraTask, routine);
+
+    // Slot 0 was scheduled; every remaining slot up to MAX_EXTRA_REMINDERS should be cancelled
+    // so a task that used to have more reminder times doesn't leave stale native alarms armed.
+    expect(calls.extraReminderScheduled).toHaveLength(1);
+    expect(calls.extraReminderSlotCancelled.map((c) => c.slot).sort()).toEqual([1, 2, 3, 4]);
+    expect(calls.extraReminderSlotCancelled.every((c) => c.taskId === 'extra-2')).toBe(true);
+  });
+
+  it('cancels every extra-reminder slot for an inactive task, a task with no active days, or a paused routine', async () => {
+    const inactiveTask = task({ id: 'inactive-extra', active: false, reminderTimes: ['09:00'] });
+    const routine = { id: 'r-inactive-extra', title: 'R', tasks: [inactiveTask], active: true, notes: '' };
+
+    await scheduleTaskNotifications(inactiveTask, routine);
+
+    expect(calls.extraReminderScheduled).toHaveLength(0);
+    expect(calls.extraRemindersCancelled).toEqual(['inactive-extra']);
+  });
+
+  it('tags an extra reminder with the routine group and quickAddAmounts, same as the due reminder', async () => {
+    const qtyTask = task({
+      id: 'qty-extra',
+      completionType: 'quantity',
+      target: 8,
+      quickAdd: [1, 2],
+      reminderTimes: ['12:00'],
+    });
+    const taskB = task({ id: 'sibling' });
+    const routine = { id: 'routine-qty-extra', title: 'Hydrate', tasks: [qtyTask, taskB], active: true, notes: '' };
+
+    await scheduleTaskNotifications(qtyTask, routine);
+
+    expect(calls.extraReminderScheduled[0]).toMatchObject({
+      completionType: 'quantity',
+      quickAddAmounts: [1, 2],
+      group: 'routine-routine-qty-extra',
+    });
+  });
+
+  it('cancels every extra-reminder slot as part of cancelTaskNotifications', async () => {
+    await cancelTaskNotifications(task({ id: 'to-cancel-extra' }));
+
+    expect(calls.extraRemindersCancelled).toEqual(['to-cancel-extra']);
+  });
+
+  it('dismisses today\'s extra reminders as part of dismissTaskReminders', async () => {
+    await dismissTaskReminders(task({ id: 'to-dismiss-extra' }));
+
+    expect(calls.extraRemindersDismissed).toEqual(['to-dismiss-extra']);
   });
 });
 

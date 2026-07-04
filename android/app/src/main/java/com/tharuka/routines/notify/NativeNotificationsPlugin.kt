@@ -120,4 +120,84 @@ class NativeNotificationsPlugin : Plugin() {
         NotificationManagerCompat.from(context).cancel(dueReminderNotificationId(taskId))
         call.resolve()
     }
+
+    @PluginMethod
+    fun scheduleExtraReminder(call: PluginCall) {
+        val taskId = call.getString("taskId")
+        val slot = call.getInt("slot")
+        val title = call.getString("title")
+        val body = call.getString("body")
+        val daysArray = call.getArray("days")
+        val hour = call.getInt("hour")
+        val minute = call.getInt("minute")
+        if (taskId == null || slot == null || title == null || body == null || daysArray == null || hour == null || minute == null) {
+            call.reject("taskId, slot, title, body, days, hour, and minute are required")
+            return
+        }
+        val days = (0 until daysArray.length()).map { daysArray.getInt(it) }
+        val amountsArray = call.getArray("quickAddAmounts")
+        val quickAddAmounts = amountsArray?.let { arr -> (0 until arr.length()).map { arr.getInt(it) } } ?: emptyList()
+
+        val entry = ExtraReminderEntry(
+            taskId = taskId,
+            slot = slot,
+            routineId = call.getString("routineId"),
+            title = title,
+            body = body,
+            days = days,
+            hour = hour,
+            minute = minute,
+            group = call.getString("group"),
+            completionType = call.getString("completionType") ?: "boolean",
+            quickAddAmounts = quickAddAmounts,
+        )
+        ExtraReminderScheduler.schedule(context, entry)
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun cancelExtraReminderSlot(call: PluginCall) {
+        val taskId = call.getString("taskId")
+        val slot = call.getInt("slot")
+        if (taskId == null || slot == null) {
+            call.reject("taskId and slot are required")
+            return
+        }
+        ExtraReminderScheduler.cancel(context, taskId, slot)
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun cancelExtraReminders(call: PluginCall) {
+        val taskId = call.getString("taskId")
+        if (taskId == null) {
+            call.reject("taskId is required")
+            return
+        }
+        ExtraReminderScheduler.cancelAllForTask(context, taskId)
+        call.resolve()
+    }
+
+    /**
+     * Clears whichever extra-reminder slots are currently showing for this task, for today
+     * only - called once a task is marked done, mirroring the due reminder's own
+     * dismissDueReminderToday. Since each (task, slot) alarm reschedules to its next occurrence
+     * immediately after firing, cancelling by its fixed id only ever clears something that was
+     * genuinely posted today; a slot that hasn't fired yet today has nothing shown to cancel.
+     * Unlike the due reminder, there's no persisted "awaitingCompletion" flag to clear here -
+     * extra reminders were never pinned/reappearing.
+     */
+    @PluginMethod
+    fun dismissExtraRemindersToday(call: PluginCall) {
+        val taskId = call.getString("taskId")
+        if (taskId == null) {
+            call.reject("taskId is required")
+            return
+        }
+        val notificationManager = NotificationManagerCompat.from(context)
+        for (slot in 0 until MAX_EXTRA_REMINDERS) {
+            notificationManager.cancel(extraReminderNotificationId(taskId, slot))
+        }
+        call.resolve()
+    }
 }
