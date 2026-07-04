@@ -200,4 +200,28 @@ class NativeNotificationsPlugin : Plugin() {
         }
         call.resolve()
     }
+
+    @PluginMethod
+    fun updateGroupSummary(call: PluginCall) {
+        val routineId = call.getString("routineId")
+        val title = call.getString("title")
+        val activeTaskCount = call.getInt("activeTaskCount")
+        if (routineId == null || title == null || activeTaskCount == null) {
+            call.reject("routineId, title, and activeTaskCount are required")
+            return
+        }
+        buildAndPostGroupSummaryNotification(context, routineId, title, activeTaskCount)
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun cancelGroupSummary(call: PluginCall) {
+        val routineId = call.getString("routineId")
+        if (routineId == null) {
+            call.reject("routineId is required")
+            return
+        }
+        NotificationManagerCompat.from(context).cancel(groupSummaryNotificationId(routineId))
+        call.resolve()
+    }
 }

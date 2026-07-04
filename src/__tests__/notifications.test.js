@@ -14,6 +14,8 @@ const calls = {
   extraReminderSlotCancelled: [],
   extraRemindersCancelled: [],
   extraRemindersDismissed: [],
+  groupSummaryUpdated: [],
+  groupSummaryCancelled: [],
 };
 
 // Mock the two Capacitor packages notifications.js talks to. `isNativePlatform`
@@ -51,6 +53,12 @@ vi.mock('@capacitor/core', () => ({
     }),
     dismissExtraRemindersToday: vi.fn(async ({ taskId }) => {
       calls.extraRemindersDismissed.push(taskId);
+    }),
+    updateGroupSummary: vi.fn(async (opts) => {
+      calls.groupSummaryUpdated.push(opts);
+    }),
+    cancelGroupSummary: vi.fn(async ({ routineId }) => {
+      calls.groupSummaryCancelled.push(routineId);
     }),
   })),
 }));
@@ -104,6 +112,8 @@ function resetCalls() {
   calls.extraReminderSlotCancelled.length = 0;
   calls.extraRemindersCancelled.length = 0;
   calls.extraRemindersDismissed.length = 0;
+  calls.groupSummaryUpdated.length = 0;
+  calls.groupSummaryCancelled.length = 0;
 }
 
 beforeEach(() => {
@@ -131,7 +141,7 @@ function task(overrides = {}) {
 }
 
 describe('routine group summary', () => {
-  it('creates a real groupSummary:true notification once a routine has 2+ active tasks', async () => {
+  it('posts a native group summary once a routine has 2+ active tasks', async () => {
     const taskA = task({ id: 'a', title: 'Stretch' });
     const taskB = task({ id: 'b', title: 'Water' });
     const routine = { id: 'routine-1', title: 'Morning', tasks: [taskA, taskB], active: true, notes: '' };
@@ -139,14 +149,11 @@ describe('routine group summary', () => {
     await scheduleTaskNotifications(taskA, routine);
     await scheduleTaskNotifications(taskB, routine);
 
-    const summary = calls.scheduled.find((n) => n.groupSummary === true);
-    expect(summary).toBeDefined();
-    expect(summary.group).toBe('routine-routine-1');
-    expect(summary.body).toBe('2 tasks');
-    expect(summary.title).toBe('Morning');
-    // Only the per-task due reminders it groups are pinned - the summary
-    // itself must stay swipeable (see CLAUDE.md).
-    expect(summary.ongoing).toBeUndefined();
+    expect(calls.groupSummaryUpdated).toContainEqual({
+      routineId: 'routine-1',
+      title: 'Morning',
+      activeTaskCount: 2,
+    });
   });
 
   it('cancels the group summary once the routine drops back to <=1 active task', async () => {
@@ -156,9 +163,8 @@ describe('routine group summary', () => {
 
     await updateRoutineGroupSummary(routine);
 
-    const groupSummaryCancel = calls.cancelled.find((n) => n.id >= 700000000);
-    expect(groupSummaryCancel).toBeDefined();
-    expect(calls.scheduled.find((n) => n.groupSummary === true)).toBeUndefined();
+    expect(calls.groupSummaryCancelled).toEqual(['routine-1']);
+    expect(calls.groupSummaryUpdated).toHaveLength(0);
   });
 
   it('does not create a group summary for a single-task routine at all', async () => {
@@ -167,7 +173,7 @@ describe('routine group summary', () => {
 
     await scheduleTaskNotifications(soloTask, routine);
 
-    expect(calls.scheduled.find((n) => n.groupSummary === true)).toBeUndefined();
+    expect(calls.groupSummaryUpdated).toHaveLength(0);
   });
 });
 

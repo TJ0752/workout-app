@@ -12,6 +12,8 @@ import {
   nativeCancelExtraReminderSlot,
   nativeCancelExtraReminders,
   nativeDismissExtraRemindersToday,
+  nativeUpdateGroupSummary,
+  nativeCancelGroupSummary,
 } from './nativeNotifications';
 
 const CHANNEL_ID = 'routine-reminders';
@@ -60,14 +62,6 @@ function extraReminderIdFor(taskId, weekday, slot) {
 
 function snoozeIdFor(taskId) {
   return hashToInt(`${taskId}-snooze`);
-}
-
-// Offset clear of every other id range (extra reminders top out around
-// EXTRA_REMINDER_ID_BASE + 10_000_000ish) so group-summary ids never collide.
-const GROUP_SUMMARY_ID_BASE = 700000000;
-
-function groupSummaryIdFor(routineId) {
-  return GROUP_SUMMARY_ID_BASE + hashToInt(routineId);
 }
 
 function quantityActionTypeId(amounts) {
@@ -243,7 +237,6 @@ function taskNotificationContent(task, routine) {
  */
 export async function updateRoutineGroupSummary(routine) {
   if (!Capacitor.isNativePlatform() || !routine) return;
-  const id = groupSummaryIdFor(routine.id);
   const activeTaskCount = routine.tasks.filter((t) => t.active && t.days.length > 0).length;
   // Only worth a group summary once there are 2+ *active* tasks to collapse -
   // routine.tasks.length alone (used for the `group` tag on individual
@@ -252,33 +245,12 @@ export async function updateRoutineGroupSummary(routine) {
     await cancelRoutineGroupSummary(routine.id);
     return;
   }
-  try {
-    await LocalNotifications.schedule({
-      notifications: [
-        {
-          id,
-          title: routine.title,
-          body: `${activeTaskCount} tasks`,
-          channelId: CHANNEL_ID,
-          group: `routine-${routine.id}`,
-          groupSummary: true,
-          autoCancel: true,
-          extra: { routineId: routine.id },
-        },
-      ],
-    });
-  } catch (err) {
-    console.warn('Failed to update routine group summary', err);
-  }
+  await nativeUpdateGroupSummary(routine.id, routine.title, activeTaskCount);
 }
 
 export async function cancelRoutineGroupSummary(routineId) {
   if (!Capacitor.isNativePlatform()) return;
-  try {
-    await LocalNotifications.cancel({ notifications: [{ id: groupSummaryIdFor(routineId) }] });
-  } catch (err) {
-    console.warn('Failed to cancel routine group summary', err);
-  }
+  await nativeCancelGroupSummary(routineId);
 }
 
 export async function scheduleTaskNotifications(task, routine, completions = {}) {

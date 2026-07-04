@@ -87,3 +87,18 @@ export async function nativeDismissExtraRemindersToday(taskId) {
   if (!NativeNotifications) return;
   await NativeNotifications.dismissExtraRemindersToday({ taskId });
 }
+
+/**
+ * Immediately builds and posts the multi-task routine group summary (see
+ * GroupSummaryNotificationBuilder.kt) - plain and swipeable by design, no reappear-on-dismiss,
+ * unlike the per-task reminders it groups.
+ */
+export async function nativeUpdateGroupSummary(routineId, title, activeTaskCount) {
+  if (!NativeNotifications) return;
+  await NativeNotifications.updateGroupSummary({ routineId, title, activeTaskCount });
+}
+
+export async function nativeCancelGroupSummary(routineId) {
+  if (!NativeNotifications) return;
+  await NativeNotifications.cancelGroupSummary({ routineId });
+}
