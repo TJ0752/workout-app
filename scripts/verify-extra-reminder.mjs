@@ -35,6 +35,9 @@ const ALARM_RECEIVER = `${PACKAGE}/com.tharuka.routines.notify.ExtraReminderAlar
 const ACTION_RECEIVER = `${PACKAGE}/com.tharuka.routines.notify.ExtraReminderActionReceiver`;
 const ACTION_MARK_DONE = 'com.tharuka.routines.notify.action.MARK_DONE';
 const ACTION_SNOOZE = 'com.tharuka.routines.notify.action.SNOOZE';
+// Control receiver for a sanity check unrelated to extras/store content - see the "control
+// broadcast" step below.
+const BG_SYNC_STOP_RECEIVER = `${PACKAGE}/com.tharuka.routines.notify.BackgroundSyncActionReceiver`;
 
 function adb(cmd) {
   return execSync(`adb ${cmd}`, { encoding: 'utf8' });
@@ -83,11 +86,17 @@ function dumpOwnPackageForDebugging() {
     blocks.length === 0
       ? `(no NotificationRecord blocks found for ${PACKAGE})`
       : blocks.map((b) => 'NotificationRecord(' + b.split('\n\n')[0]).join('\n---\n');
-  const logcat = adbAllowFailure(`shell logcat -d -t 500`)
+  // No `-t <n>` line cap here on purpose: an earlier version tailed the last 500 lines of the
+  // *entire device's* logcat, which on a system this chatty (dex2oat/installd/PackageManager
+  // noise from every app, not just this one) could genuinely push a real crash for this package
+  // out of the tail window before this even runs. `logcat -c` is called right before the
+  // broadcast this backs (see main()) so the buffer only contains what happened during this
+  // script's own test window, making an unbounded post-clear dump both safe and complete.
+  const logcat = adbAllowFailure(`shell logcat -d`)
     .split('\n')
     .filter((l) => l.includes(PACKAGE) || l.includes('FATAL EXCEPTION') || l.includes('AndroidRuntime'))
     .join('\n');
-  return `--- ${PACKAGE}'s own notification records ---\n${notificationSection}\n--- recent logcat mentioning ${PACKAGE} ---\n${logcat || '(nothing matched)'}`;
+  return `--- ${PACKAGE}'s own notification records ---\n${notificationSection}\n--- logcat since last clear mentioning ${PACKAGE} ---\n${logcat || '(nothing matched)'}`;
 }
 
 function findAppRecords(dump) {
@@ -335,20 +344,40 @@ async function main() {
     ) || '(empty/unreadable)'
   );
 
+  // Clear the device's logcat buffer right before broadcasting so a post-failure dump (see
+  // dumpOwnPackageForDebugging) only has to cover this test's own narrow window and can be read
+  // in full, rather than tailing the last N lines of the *entire device's* log and risking a
+  // real crash for this package getting pushed out by unrelated system noise (this device is
+  // very chatty - dex2oat/installd/PackageManager activity from every app, not just this one).
+  adbAllowFailure(`shell logcat -c`);
+
   console.log('Broadcasting directly to ExtraReminderAlarmReceiver (slot 0) to fire the alarm...');
   const broadcastResult = adb(`shell am broadcast -n ${ALARM_RECEIVER} --es taskId "${taskId}" --ei slot 0`);
   console.log('Broadcast result:', broadcastResult.trim());
   console.log('App pid after broadcast:', adbAllowFailure(`shell pidof ${PACKAGE}`).trim(), '(different from before means the process restarted)');
 
-  // 30s, not the usual 10s: ground-truth diagnostics from real failed CI runs (pid unchanged,
-  // ExtraReminderStore already holding the exact right entry both before and after the
-  // broadcast, zero crashes/exceptions in logcat) ruled out every code-level explanation - the
-  // one consistent factor across every failure was a PackageDexOptimizer/dex2oat recompilation
-  // job (BackgroundDexOptService, apparently triggered by this workflow's repeated `am
-  // force-stop`+relaunch cycles) running on the emulator during the exact poll window, which can
-  // starve the main thread long enough that onReceive() genuinely hadn't executed yet when a 10s
-  // poll gave up. `adb shell am broadcast`'s own "Broadcast completed" only confirms the intent
-  // was handed to the BroadcastQueue, not that the target's onReceive() has actually run.
+  // Control broadcast: `adb shell am broadcast`'s own "Broadcast completed: result=0" is printed
+  // even when nothing actually handled the intent, so it can't by itself confirm
+  // ExtraReminderAlarmReceiver's onReceive() ran. BackgroundSyncActionReceiver is a much simpler,
+  // already-shipped receiver (no extras, single side effect: stops the always-on background-sync
+  // service and removes its persistent notification) - broadcasting to it here and checking
+  // whether that notification disappears tells apart "explicit broadcasts to this app's manifest
+  // receivers aren't working on this run at all" from "something specific to
+  // ExtraReminderAlarmReceiver/its extras is the problem".
+  const bgSyncShowingBefore = Boolean(findAppRecords(dumpNotifications()).find((r) => r.channel === 'background-sync'));
+  console.log('Control check: background-sync notification showing before control broadcast:', bgSyncShowingBefore);
+  adb(`shell am broadcast -n ${BG_SYNC_STOP_RECEIVER}`);
+  const bgSyncStopped = await pollFor(
+    () => findAppRecords(dumpNotifications()).find((r) => r.channel === 'background-sync'),
+    (r) => !r,
+    10000
+  );
+  console.log(
+    'Control check result: background-sync notification gone after broadcasting to BackgroundSyncActionReceiver:',
+    !bgSyncStopped,
+    '(false here would mean explicit broadcasts to this app are not being delivered/handled at all right now, unrelated to ExtraReminderAlarmReceiver specifically)'
+  );
+
   const posted = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === CHANNEL_ID && r.title === TASK_TITLE && !r.ongoing),
     (r) => Boolean(r),
