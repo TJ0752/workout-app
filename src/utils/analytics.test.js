@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getDashboardStats, getOverallConsistency, getLongestOverallStreak } from './analytics.js';
+import { getDashboardStats, getOverallConsistency, getLongestOverallStreak, getDayBreakdown } from './analytics.js';
 import { dateToKey } from './date.js';
 
 // Fixed "now" = Tuesday, 2026-07-07 - matches date.test.js so streak/version
@@ -67,11 +67,12 @@ describe('getDashboardStats', () => {
     expect(stats.completionRate).toBe(50);
     expect(stats.bestStreak).toBe(7);
     expect(stats.longestStreak).toBe(7);
-    // consistency looks at its own 21-day window regardless of the 'week' range passed in:
-    // the 7 recent days average 50% (right at the default threshold, met), the other 14 in
-    // the window average 0% (weak routine never completes, strong has no data there either)
-    // -> 7 of 21 days met -> 33%.
-    expect(stats.consistency).toMatchObject({ daysMet: 7, totalDueDays: 21, pct: 33 });
+    // consistency and longestStreak now share the same window as the rest of the dashboard:
+    // for 'week' that's exactly the 7 dates in `dates`, not a fixed 21-day lookback. Both
+    // routines are due every day, averaging 50% (right at the default threshold, met) ->
+    // all 7 days met.
+    expect(stats.consistency).toMatchObject({ daysMet: 7, totalDueDays: 7, pct: 100 });
+    expect(stats.consistency.series).toHaveLength(7);
 
     expect(stats.perRoutine).toHaveLength(2);
     expect(stats.topRoutine.routine.id).toBe('strong');
@@ -148,6 +149,26 @@ describe('getDashboardStats', () => {
     expect(stats.dayOfWeek.map((d) => d.label)).toEqual(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']);
   });
 
+  it('consistency and longestStreak are scoped to the selected range, not a fixed lookback', () => {
+    const routine = { id: 'r1', title: 'R1', active: true, createdAt: '2020-01-01', tasks: [{ id: 't1' }] };
+    const taskVersionsMap = { t1: [boolVersion()] };
+    const completions = { t1: {} };
+    // Complete every day for the last 30 days (an 8-day-ago-and-earlier stretch stays met
+    // even in the 'week' window since every day is due and completed).
+    for (let i = 0; i < 30; i++) completions.t1[daysAgoKey(i)] = 1;
+
+    const week = getDashboardStats([routine], taskVersionsMap, completions, 'week');
+    const month = getDashboardStats([routine], taskVersionsMap, completions, 'month');
+
+    expect(week.consistency.totalDueDays).toBe(7);
+    expect(week.consistency.series).toHaveLength(7);
+    expect(week.longestStreak).toBe(7);
+
+    expect(month.consistency.totalDueDays).toBe(30);
+    expect(month.consistency.series).toHaveLength(30);
+    expect(month.longestStreak).toBe(30);
+  });
+
   it('all-time range starts from the earliest routine createdAt', () => {
     const oldRoutine = {
       id: 'old',
@@ -189,11 +210,34 @@ describe('getOverallConsistency', () => {
     expect(result.series.filter((d) => d.met)).toHaveLength(10);
   });
 
-  it('returns 0/0/0 when nothing was ever due in the window', () => {
+  it('returns 0/0/0 when nothing was ever due in the window, but still emits one empty series entry per day', () => {
     const routine = { id: 'r1', title: 'R1', active: true, createdAt: '2020-01-01', tasks: [{ id: 't1' }] };
     const taskVersionsMap = { t1: [boolVersion({ days: [] })] };
     const result = getOverallConsistency([routine], taskVersionsMap, { t1: {} });
     expect(result).toMatchObject({ daysMet: 0, totalDueDays: 0, pct: 0 });
+    // Days nothing was due still get a series entry (pct: null) rather than being omitted, so
+    // a heatmap/chart can render them as a distinct "empty" state instead of silently skipping.
+    expect(result.series).toHaveLength(21);
+    expect(result.series.every((d) => d.pct === null && d.met === false)).toBe(true);
+  });
+
+  it('a day nothing was due gets pct: null in the series while due days keep their real pct', () => {
+    const routine = { id: 'r1', title: 'R1', active: true, createdAt: '2020-01-01', tasks: [{ id: 't1' }] };
+    // Due Mon/Wed/Fri only.
+    const taskVersionsMap = { t1: [boolVersion({ days: [1, 3, 5] })] };
+    const completions = { t1: {} };
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(FIXED_NOW);
+      d.setDate(d.getDate() - i);
+      if ([1, 3, 5].includes(d.getDay())) completions.t1[daysAgoKey(i)] = 1;
+    }
+    const result = getOverallConsistency([routine], taskVersionsMap, completions, 0.5, 7);
+    expect(result.series).toHaveLength(7);
+    const dueEntries = result.series.filter((d) => d.pct !== null);
+    const emptyEntries = result.series.filter((d) => d.pct === null);
+    expect(dueEntries.length).toBe(result.totalDueDays);
+    expect(emptyEntries.every((d) => d.met === false)).toBe(true);
+    expect(dueEntries.every((d) => d.pct === 100 && d.met === true)).toBe(true);
   });
 
   it('a lower threshold counts partial-completion days that a 100% bar would miss', () => {
@@ -240,5 +284,79 @@ describe('getLongestOverallStreak', () => {
 
   it('returns 0 for an empty routine list', () => {
     expect(getLongestOverallStreak([], {}, {})).toBe(0);
+  });
+
+  it('respects an explicit windowDays, clipping a streak that started before the window', () => {
+    const routine = { id: 'r1', title: 'R1', active: true, createdAt: '2020-01-01', tasks: [{ id: 't1' }] };
+    const taskVersionsMap = { t1: [boolVersion()] };
+    const completions = { t1: {} };
+    for (let i = 0; i < 30; i++) completions.t1[daysAgoKey(i)] = 1;
+    expect(getLongestOverallStreak([routine], taskVersionsMap, completions, 365)).toBe(30);
+    expect(getLongestOverallStreak([routine], taskVersionsMap, completions, 7)).toBe(7);
+  });
+});
+
+describe('getDayBreakdown', () => {
+  it('groups due tasks by routine for a single day, omitting routines/tasks not due that day', () => {
+    const solo = { id: 'solo', title: 'Solo', active: true, createdAt: '2020-01-01', tasks: [{ id: 't-solo', title: 'Solo' }] };
+    const group = {
+      id: 'group',
+      title: 'Group',
+      active: true,
+      createdAt: '2020-01-01',
+      tasks: [
+        { id: 't-a', title: 'Task A' },
+        { id: 't-b', title: 'Task B' },
+      ],
+    };
+    const neverDue = {
+      id: 'never',
+      title: 'Never',
+      active: true,
+      createdAt: '2020-01-01',
+      tasks: [{ id: 't-never', title: 'Never' }],
+    };
+    const taskVersionsMap = {
+      't-solo': [boolVersion()],
+      't-a': [boolVersion()],
+      't-b': [boolVersion()],
+      't-never': [boolVersion({ days: [] })],
+    };
+    const today = new Date(FIXED_NOW);
+    const completions = {
+      't-solo': { [dateToKey(today)]: 1 },
+      't-a': {},
+      't-b': { [dateToKey(today)]: 1 },
+      't-never': {},
+    };
+
+    const result = getDayBreakdown([solo, group, neverDue], taskVersionsMap, completions, today);
+
+    expect(result).toHaveLength(2); // 'never' contributes nothing since it's never due
+    const soloEntry = result.find((r) => r.routineId === 'solo');
+    expect(soloEntry.tasks).toEqual([{ taskId: 't-solo', title: 'Solo', fraction: 1, completed: true }]);
+    const groupEntry = result.find((r) => r.routineId === 'group');
+    expect(groupEntry.tasks).toEqual([
+      { taskId: 't-a', title: 'Task A', fraction: 0, completed: false },
+      { taskId: 't-b', title: 'Task B', fraction: 1, completed: true },
+    ]);
+  });
+
+  it('returns an empty array when nothing is due that day', () => {
+    const routine = { id: 'r1', title: 'R1', active: true, createdAt: '2020-01-01', tasks: [{ id: 't1', title: 'T1' }] };
+    const taskVersionsMap = { t1: [boolVersion({ days: [] })] };
+    expect(getDayBreakdown([routine], taskVersionsMap, { t1: {} }, new Date(FIXED_NOW))).toEqual([]);
+  });
+
+  it('a paused routine contributes nothing even if its tasks would otherwise be due', () => {
+    const routine = {
+      id: 'r1',
+      title: 'R1',
+      active: false,
+      createdAt: '2020-01-01',
+      tasks: [{ id: 't1', title: 'T1' }],
+    };
+    const taskVersionsMap = { t1: [boolVersion()] };
+    expect(getDayBreakdown([routine], taskVersionsMap, { t1: {} }, new Date(FIXED_NOW))).toEqual([]);
   });
 });

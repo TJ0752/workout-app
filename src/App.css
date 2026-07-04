@@ -1240,17 +1240,31 @@
   align-items: flex-end;
   gap: 3px;
   height: 100%;
+  overflow-x: auto;
 }
 
+/* flex-shrink:0 with a small flex-basis means columns stretch to fill the width evenly
+   when there are few of them (Week/Month), but once the total basis exceeds the container
+   (All Time on an old account) they stop shrinking and the row scrolls horizontally instead
+   of squishing into illegible slivers. */
 .threshold-bar-col {
-  flex: 1;
+  flex: 1 0 6px;
+  min-width: 6px;
   height: 100%;
   display: flex;
   align-items: flex-end;
+  background: var(--card-border);
+  border-radius: 3px 3px 1px 1px;
+  cursor: pointer;
+}
+
+.threshold-bar-col.empty {
+  opacity: 0.45;
 }
 
 .threshold-bar {
   width: 100%;
+  min-height: 3px;
   border-radius: 3px 3px 1px 1px;
   background: var(--accent-chart);
 }
@@ -1281,16 +1295,22 @@
   z-index: 2;
 }
 
+/* Fixed-size cells that wrap (rather than a fixed grid-template-columns count) so this
+   naturally scales from a week's 7 cells up to a years-old account's all-time count without
+   needing to know that count in advance. */
 .heatmap-quiet {
-  display: grid;
-  grid-template-columns: repeat(21, 1fr);
-  gap: 2px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
   margin-bottom: 1.3rem;
 }
 
 .heatmap-cell-quiet {
-  aspect-ratio: 1;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
   border-radius: 2px;
+  cursor: pointer;
 }
 
 .heatmap-cell-quiet.seq-1 {
@@ -1311,6 +1331,85 @@
 .heatmap-cell-quiet.seq-none {
   background: var(--card-border);
   opacity: 0.4;
+}
+
+.day-drilldown-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(30, 25, 20, 0.45);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 40;
+}
+
+.day-drilldown-panel {
+  width: 100%;
+  max-width: 480px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 16px 16px 0 0;
+  box-shadow: var(--shadow);
+  padding: 1.1rem 1.2rem 1.4rem;
+}
+
+.day-drilldown-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.8rem;
+  font-size: 1.05em;
+}
+
+.day-drilldown-close {
+  background: none;
+  border: none;
+  padding: 0.2rem;
+  color: var(--text-soft);
+  cursor: pointer;
+  display: flex;
+}
+
+.day-drilldown-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.day-drilldown-routine-title {
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.day-drilldown-task {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0;
+  font-size: 0.95em;
+}
+
+.day-drilldown-task .dd-icon {
+  flex-shrink: 0;
+}
+
+.day-drilldown-task .dd-icon.done {
+  color: var(--good);
+}
+
+.day-drilldown-task .dd-icon.missed {
+  color: var(--bad);
+}
+
+.day-drilldown-task span:first-of-type {
+  flex: 1;
+}
+
+.dd-pct {
+  color: var(--text-soft);
+  font-size: 0.9em;
 }
 
 .breakdown-list {

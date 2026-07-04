@@ -208,14 +208,34 @@ Everything downstream of raw completions works in fractions (0–1), not boolean
   50%, 21 days). This is deliberately softer than a streak's all-or-nothing 100% bar — a
   routine set sitting at a steady 80% every day scores well here even though it never
   posts a single "complete" day for the streak counter. Also returns the day-by-day
-  `series` itself (`{date, pct, met}`), which both the consistency bar chart and the
-  completion heatmap render from directly, so the two visuals never disagree.
-- `analytics.js`'s `getDashboardStats(routines, taskVersionsMap, completions, range)` is
-  the single entry point the Dashboard uses; it computes per-routine and nested per-task
-  stats, an auto-scaled trend (daily buckets for Week, weekly for Month, monthly for All
-  Time), a day-of-week breakdown, and now also `longestStreak`/`consistency` (both
-  independent of `range` — they always look at their own fixed windows), all built on the
-  same fraction functions above.
+  `series` itself — **one entry per calendar day in the window, not just due days**: a day
+  nothing was due gets `{date, pct: null, met: false}` rather than being skipped, so the
+  consistency bar chart and completion heatmap (both render from this `series` directly, so
+  the two visuals never disagree) can show those days as a distinct "empty" state instead of
+  silently omitting them (a gap in a bar chart reads as "forgot to check," not "nothing was
+  scheduled" — those are different facts and needed different visuals).
+- `analytics.js`'s `getDashboardStats(routines, taskVersionsMap, completions, range)` is the
+  single entry point the Dashboard uses; it computes per-routine and nested per-task stats,
+  an auto-scaled trend (daily buckets for Week, weekly for Month, monthly for All Time), a
+  day-of-week breakdown, and `longestStreak`/`consistency`. All of these — including
+  `longestStreak`/`consistency` — are scoped to the *same* `dates` window the selected range
+  produces (`windowDays = dates.length`, threaded into `getOverallConsistency`/
+  `getLongestOverallStreak`), so switching Week/Month/All Time actually recomputes every
+  number on the screen instead of only `completionRate`/`trend` reacting while Consistency
+  quietly kept using a fixed 21-day/365-day lookback regardless of the tab — a real,
+  user-reported staleness bug from an earlier version of this screen. The one deliberate
+  exception is `bestStreak` (current streak): a live streak is inherently "today backward
+  until broken," not a windowed stat, so capping it at the selected range would just
+  truncate the number without adding information (e.g. showing "7" for Week when the actual
+  streak is 12 doesn't mean anything Week-specific).
+- `analytics.js`'s `getDayBreakdown(routines, taskVersionsMap, completions, date)` computes
+  the per-task completion state for exactly one calendar day, grouped by routine (nested
+  tasks for a multi-task routine, flat for a single-task one, matching the "flat when
+  simple" convention) — this is what backs the Consistency chart's tap-a-day drill-down.
+  Routines/tasks not due that day are omitted rather than shown as some "N/A" row. Both the
+  threshold bar chart's columns and the heatmap's cells are clickable and open the same
+  drill-down panel (a bottom sheet), including empty days, which show "Nothing was due this
+  day" rather than being unclickable.
 
 `taskVersionsMap` (task id -> its versions, sorted ascending, excluding deleted routines)
 is loaded once per app-level refresh (`storage.getTaskVersionsForAnalytics()`) and passed

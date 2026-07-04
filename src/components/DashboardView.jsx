@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { ChevronDown, Flame } from 'lucide-react';
-import { getDashboardStats } from '../utils/analytics';
+import { ChevronDown, Flame, X, Check } from 'lucide-react';
+import { getDashboardStats, getDayBreakdown } from '../utils/analytics';
 import { getFitnessOverview } from '../utils/workouts';
 import { getRoutineIcon } from '../utils/icons';
 
@@ -12,6 +12,14 @@ const RANGES = [
 
 function fmt1(value) {
   return String(Math.round(value * 10) / 10);
+}
+
+function formatDrillDate(dateKey) {
+  return new Date(`${dateKey}T00:00:00`).toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
 }
 
 function FitnessStatsPanel({ routines, workoutLogsByTask }) {
@@ -171,9 +179,15 @@ export default function DashboardView({ routines, completions, taskVersionsMap, 
   const [screen, setScreen] = useState('overall');
   const [range, setRange] = useState('month');
   const [expanded, setExpanded] = useState(() => new Set());
+  const [drillDownDate, setDrillDownDate] = useState(null);
   const stats = useMemo(
     () => getDashboardStats(routines, taskVersionsMap, completions, range),
     [routines, taskVersionsMap, completions, range]
+  );
+  const dayBreakdown = useMemo(
+    () =>
+      drillDownDate ? getDayBreakdown(routines, taskVersionsMap, completions, new Date(`${drillDownDate}T00:00:00`)) : null,
+    [drillDownDate, routines, taskVersionsMap, completions]
   );
 
   if (routines.length === 0) {
@@ -249,8 +263,15 @@ export default function DashboardView({ routines, completions, taskVersionsMap, 
           <span className="threshold-line-label">50% min</span>
           <div className="threshold-bars">
             {stats.consistency.series.map((d) => (
-              <div className="threshold-bar-col" key={d.date} title={`${d.date}: ${d.pct}%`}>
-                <div className={`threshold-bar ${d.met ? 'met' : 'unmet'}`} style={{ height: `${d.pct}%` }} />
+              <div
+                className={`threshold-bar-col ${d.pct === null ? 'empty' : ''}`}
+                key={d.date}
+                title={d.pct === null ? `${d.date}: nothing due` : `${d.date}: ${d.pct}%`}
+                onClick={() => setDrillDownDate(d.date)}
+              >
+                {d.pct !== null && (
+                  <div className={`threshold-bar ${d.met ? 'met' : 'unmet'}`} style={{ height: `${d.pct}%` }} />
+                )}
               </div>
             ))}
           </div>
@@ -259,13 +280,58 @@ export default function DashboardView({ routines, completions, taskVersionsMap, 
 
       <div className="section-title">
         Completion heatmap
-        <span className="section-subtitle">Darker = higher completion that day</span>
+        <span className="section-subtitle">Darker = higher completion that day - empty means nothing was due</span>
       </div>
       <div className="heatmap-quiet">
         {stats.consistency.series.map((d) => (
-          <div key={d.date} className={`heatmap-cell-quiet ${heatmapClass(d.pct)}`} title={`${d.date}: ${d.pct}%`} />
+          <div
+            key={d.date}
+            className={`heatmap-cell-quiet ${heatmapClass(d.pct)}`}
+            title={d.pct === null ? `${d.date}: nothing due` : `${d.date}: ${d.pct}%`}
+            onClick={() => setDrillDownDate(d.date)}
+          />
         ))}
       </div>
+
+      {drillDownDate && (
+        <div className="day-drilldown-overlay" onClick={() => setDrillDownDate(null)}>
+          <div className="day-drilldown-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="day-drilldown-header">
+              <strong>{formatDrillDate(drillDownDate)}</strong>
+              <button
+                type="button"
+                className="day-drilldown-close"
+                onClick={() => setDrillDownDate(null)}
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            {dayBreakdown.length === 0 ? (
+              <p className="empty-state">Nothing was due this day.</p>
+            ) : (
+              <div className="day-drilldown-list">
+                {dayBreakdown.map((r) => (
+                  <div key={r.routineId}>
+                    {r.tasks.length > 1 && <div className="day-drilldown-routine-title">{r.title}</div>}
+                    {r.tasks.map((t) => (
+                      <div className="day-drilldown-task" key={t.taskId}>
+                        {t.completed ? (
+                          <Check size={14} className="dd-icon done" />
+                        ) : (
+                          <X size={14} className="dd-icon missed" />
+                        )}
+                        <span>{r.tasks.length > 1 ? t.title : r.title}</span>
+                        <span className="dd-pct">{Math.round(t.fraction * 100)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {stats.trend.length > 1 && (
         <div className="trend-section">
