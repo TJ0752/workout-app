@@ -80,6 +80,21 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".notify.DailyDigestAlarmReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".notify.DailyDigestBootReceiver"
+            android:directBootAware="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

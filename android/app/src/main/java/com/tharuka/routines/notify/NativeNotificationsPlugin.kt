@@ -224,4 +224,31 @@ class NativeNotificationsPlugin : Plugin() {
         NotificationManagerCompat.from(context).cancel(groupSummaryNotificationId(routineId))
         call.resolve()
     }
+
+    @PluginMethod
+    fun scheduleDailyDigest(call: PluginCall) {
+        val kind = call.getString("kind")
+        val title = call.getString("title")
+        val body = call.getString("body")
+        val hour = call.getInt("hour")
+        val minute = call.getInt("minute")
+        if (kind == null || title == null || body == null || hour == null || minute == null) {
+            call.reject("kind, title, body, hour, and minute are required")
+            return
+        }
+        val entry = DailyDigestEntry(kind = kind, title = title, body = body, hour = hour, minute = minute)
+        DailyDigestScheduler.schedule(context, entry)
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun cancelDailyDigest(call: PluginCall) {
+        val kind = call.getString("kind")
+        if (kind == null) {
+            call.reject("kind is required")
+            return
+        }
+        DailyDigestScheduler.cancel(context, kind)
+        call.resolve()
+    }
 }

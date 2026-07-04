@@ -14,6 +14,8 @@ import {
   nativeDismissExtraRemindersToday,
   nativeUpdateGroupSummary,
   nativeCancelGroupSummary,
+  nativeScheduleDailyDigest,
+  nativeCancelDailyDigest,
 } from './nativeNotifications';
 
 const CHANNEL_ID = 'routine-reminders';
@@ -25,10 +27,6 @@ const DIGEST_CHANNEL_ID = 'daily-digest';
 const SUMMARY_CHANNEL_ID = 'daily-summary';
 
 const BOOLEAN_ACTION_TYPE = 'task-boolean';
-
-const MORNING_DIGEST_ID = 900000002;
-const EVENING_DIGEST_ID = 900000003;
-const STREAK_RISK_ID = 900000004;
 
 const MORNING_HOUR = 8;
 const EVENING_HOUR = 21;
@@ -429,7 +427,7 @@ async function updateStreakRiskNotification(routines, taskVersionsMap, completio
   });
 
   if (atRisk.length === 0) {
-    await LocalNotifications.cancel({ notifications: [{ id: STREAK_RISK_ID }] });
+    await nativeCancelDailyDigest('streak-risk');
     return;
   }
 
@@ -438,22 +436,9 @@ async function updateStreakRiskNotification(routines, taskVersionsMap, completio
     atRisk.length === 1
       ? `Finish "${names}" today to keep your streak alive.`
       : `${names} still need finishing to keep their streaks alive.`;
+  const title = atRisk.length === 1 ? 'Your streak is at risk' : 'Streaks at risk tonight';
 
-  try {
-    await LocalNotifications.schedule({
-      notifications: [
-        {
-          id: STREAK_RISK_ID,
-          title: atRisk.length === 1 ? 'Your streak is at risk' : 'Streaks at risk tonight',
-          body,
-          channelId: DIGEST_CHANNEL_ID,
-          schedule: { on: { hour: STREAK_RISK_HOUR, minute: 0 }, allowWhileIdle: true },
-        },
-      ],
-    });
-  } catch (err) {
-    console.warn('Failed to schedule streak-risk notification', err);
-  }
+  await nativeScheduleDailyDigest('streak-risk', title, body, STREAK_RISK_HOUR, 0);
 }
 
 async function updateMorningDigest(routines, taskVersionsMap, completions) {
@@ -470,21 +455,7 @@ async function updateMorningDigest(routines, taskVersionsMap, completions) {
     ? `Today: ${formatRoutineList(todayDue)}.`
     : 'Nothing due today.';
 
-  try {
-    await LocalNotifications.schedule({
-      notifications: [
-        {
-          id: MORNING_DIGEST_ID,
-          title: 'Good morning',
-          body: `${yesterdaySummary} ${todaySummary}`,
-          channelId: DIGEST_CHANNEL_ID,
-          schedule: { on: { hour: MORNING_HOUR, minute: 0 }, allowWhileIdle: true },
-        },
-      ],
-    });
-  } catch (err) {
-    console.warn('Failed to schedule morning digest', err);
-  }
+  await nativeScheduleDailyDigest('morning', 'Good morning', `${yesterdaySummary} ${todaySummary}`, MORNING_HOUR, 0);
 }
 
 async function updateEveningDigest(routines, taskVersionsMap, completions) {
@@ -502,21 +473,7 @@ async function updateEveningDigest(routines, taskVersionsMap, completions) {
     ? `Tomorrow: ${formatRoutineList(tomorrowDue)}.`
     : 'Nothing due tomorrow.';
 
-  try {
-    await LocalNotifications.schedule({
-      notifications: [
-        {
-          id: EVENING_DIGEST_ID,
-          title: 'Evening wrap-up',
-          body: `${todaySummary} ${tomorrowSummary}`,
-          channelId: DIGEST_CHANNEL_ID,
-          schedule: { on: { hour: EVENING_HOUR, minute: 0 }, allowWhileIdle: true },
-        },
-      ],
-    });
-  } catch (err) {
-    console.warn('Failed to schedule evening digest', err);
-  }
+  await nativeScheduleDailyDigest('evening', 'Evening wrap-up', `${todaySummary} ${tomorrowSummary}`, EVENING_HOUR, 0);
 }
 
 /**

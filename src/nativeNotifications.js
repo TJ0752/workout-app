@@ -102,3 +102,20 @@ export async function nativeCancelGroupSummary(routineId) {
   if (!NativeNotifications) return;
   await NativeNotifications.cancelGroupSummary({ routineId });
 }
+
+/**
+ * Schedules one of the 3 daily digest kinds ("morning", "evening", "streak-risk") natively (see
+ * DailyDigestScheduler.kt) - one self-rescheduling alarm per kind, firing every day at its own
+ * hour:minute. Content (title/body) is computed by the caller, same as every other native
+ * notification wrapper here.
+ */
+export async function nativeScheduleDailyDigest(kind, title, body, hour, minute) {
+  if (!NativeNotifications) return;
+  await NativeNotifications.scheduleDailyDigest({ kind, title, body, hour, minute });
+}
+
+/** Streak-risk is the one kind that needs a cancel path - morning/evening always have content, even "Nothing due today." */
+export async function nativeCancelDailyDigest(kind) {
+  if (!NativeNotifications) return;
+  await NativeNotifications.cancelDailyDigest({ kind });
+}

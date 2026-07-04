@@ -16,6 +16,8 @@ const calls = {
   extraRemindersDismissed: [],
   groupSummaryUpdated: [],
   groupSummaryCancelled: [],
+  dailyDigestScheduled: [],
+  dailyDigestCancelled: [],
 };
 
 // Mock the two Capacitor packages notifications.js talks to. `isNativePlatform`
@@ -60,6 +62,12 @@ vi.mock('@capacitor/core', () => ({
     cancelGroupSummary: vi.fn(async ({ routineId }) => {
       calls.groupSummaryCancelled.push(routineId);
     }),
+    scheduleDailyDigest: vi.fn(async (entry) => {
+      calls.dailyDigestScheduled.push(entry);
+    }),
+    cancelDailyDigest: vi.fn(async ({ kind }) => {
+      calls.dailyDigestCancelled.push(kind);
+    }),
   })),
 }));
 
@@ -90,6 +98,7 @@ import {
   dismissTaskReminders,
   updateRoutineGroupSummary,
   updateSummaryNotification,
+  syncDynamicNotifications,
 } from '../notifications.js';
 
 // Fixed "now" = Tuesday, 2026-07-07, 10:00 - same fixture used in
@@ -114,6 +123,8 @@ function resetCalls() {
   calls.extraRemindersDismissed.length = 0;
   calls.groupSummaryUpdated.length = 0;
   calls.groupSummaryCancelled.length = 0;
+  calls.dailyDigestScheduled.length = 0;
+  calls.dailyDigestCancelled.length = 0;
 }
 
 beforeEach(() => {
@@ -426,5 +437,55 @@ describe('updateSummaryNotification', () => {
 
     expect(calls.summaryCancelled).toBe(1);
     expect(calls.summaryShown).toHaveLength(0);
+  });
+});
+
+describe('native daily digest and streak-risk', () => {
+  it('schedules the morning and evening digests natively with fixed hours', async () => {
+    const routine = { id: 'r1', title: 'Routine', active: true, tasks: [{ id: 't1' }] };
+    const taskVersionsMap = {
+      t1: [{ effectiveFrom: '2020-01-01', active: true, days: [TUESDAY], completionType: 'boolean' }],
+    };
+
+    await syncDynamicNotifications([routine], taskVersionsMap, { t1: {} });
+
+    const morning = calls.dailyDigestScheduled.find((e) => e.kind === 'morning');
+    const evening = calls.dailyDigestScheduled.find((e) => e.kind === 'evening');
+    expect(morning).toMatchObject({ title: 'Good morning', hour: 8, minute: 0 });
+    expect(evening).toMatchObject({ title: 'Evening wrap-up', hour: 21, minute: 0 });
+  });
+
+  it('schedules the streak-risk digest when a routine has a live streak >= 2 and is not yet done today', async () => {
+    const routine = { id: 'r1', title: 'Streak Routine', active: true, tasks: [{ id: 't1' }] };
+    // Due Mon(1)/Tue(2) only - completed on the last two occurrences (this Monday and the
+    // Tuesday before that), giving calcRoutineStreak a live streak of 2 as of "now" (today,
+    // Tuesday, not yet done).
+    const taskVersionsMap = {
+      t1: [{ effectiveFrom: '2020-01-01', active: true, days: [1, 2], completionType: 'boolean' }],
+    };
+    const completions = { t1: { '2026-07-06': 1, '2026-06-30': 1 } };
+
+    await syncDynamicNotifications([routine], taskVersionsMap, completions);
+
+    expect(calls.dailyDigestScheduled).toContainEqual({
+      kind: 'streak-risk',
+      title: 'Your streak is at risk',
+      body: 'Finish "Streak Routine" today to keep your streak alive.',
+      hour: 19,
+      minute: 0,
+    });
+  });
+
+  it('cancels the streak-risk digest when nothing is at risk', async () => {
+    const routine = { id: 'r1', title: 'Routine', active: true, tasks: [{ id: 't1' }] };
+    const taskVersionsMap = {
+      t1: [{ effectiveFrom: '2020-01-01', active: true, days: [TUESDAY], completionType: 'boolean' }],
+    };
+
+    // Already done today, so nothing is at risk regardless of streak length.
+    await syncDynamicNotifications([routine], taskVersionsMap, { t1: { [TODAY_KEY]: 1 } });
+
+    expect(calls.dailyDigestCancelled).toEqual(['streak-risk']);
+    expect(calls.dailyDigestScheduled.find((e) => e.kind === 'streak-risk')).toBeUndefined();
   });
 });
