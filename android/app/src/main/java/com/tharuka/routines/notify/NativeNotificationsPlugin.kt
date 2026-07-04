@@ -1,6 +1,7 @@
 package com.tharuka.routines.notify
 
 import androidx.core.app.NotificationManagerCompat
+import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
@@ -19,6 +20,12 @@ class NativeNotificationsPlugin : Plugin() {
     override fun load() {
         super.load()
         DueReminderBridge.onAction = { data -> notifyListeners("dueReminderAction", data, true) }
+
+        // Fires once per app-process/bridge lifecycle, independent of Activity
+        // foreground/background state - matches "as long as the app is running," not tied to
+        // one Activity instance. See BackgroundSyncService.kt for why this exists at all.
+        BackgroundSyncBridge.onTick = { notifyListeners("backgroundSyncTick", JSObject(), true) }
+        BackgroundSyncService.start(context)
 
         // Cold-start case: DueReminderActionReceiver relaunched MainActivity because the app
         // process (and this bridge) wasn't alive to dispatch directly - the action arrived as
@@ -249,6 +256,17 @@ class NativeNotificationsPlugin : Plugin() {
             return
         }
         DailyDigestScheduler.cancel(context, kind)
+        call.resolve()
+    }
+
+    /**
+     * Test-only hook: fires a background-sync tick immediately instead of waiting for the real
+     * 15-minute interval, so the emulator verification script doesn't need to wait real minutes
+     * in CI.
+     */
+    @PluginMethod
+    fun triggerBackgroundSyncTick(call: PluginCall) {
+        BackgroundSyncBridge.onTick?.invoke()
         call.resolve()
     }
 }

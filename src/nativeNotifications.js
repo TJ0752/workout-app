@@ -119,3 +119,17 @@ export async function nativeCancelDailyDigest(kind) {
   if (!NativeNotifications) return;
   await NativeNotifications.cancelDailyDigest({ kind });
 }
+
+/**
+ * Listens for the native background-sync service's periodic tick (see BackgroundSyncService.kt)
+ * - fired roughly every 15 minutes while the app process is alive, foreground or backgrounded,
+ * so digest/summary/streak-risk content stays fresh without requiring the user to reopen the
+ * app or make a completion change. The service itself is started automatically once per app
+ * process (see NativeNotificationsPlugin.load()) - there's no JS-side start call.
+ */
+export function initBackgroundSyncListener(onTick) {
+  if (!NativeNotifications) return null;
+  return NativeNotifications.addListener('backgroundSyncTick', () => {
+    onTick?.();
+  });
+}

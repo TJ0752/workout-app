@@ -95,6 +95,19 @@
             </intent-filter>
         </receiver>
 
+        <service
+            android:name=".notify.BackgroundSyncService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the app process alive in the background so scheduled reminder and summary notifications stay up to date without requiring the user to reopen the app." />
+        </service>
+
+        <receiver
+            android:name=".notify.BackgroundSyncActionReceiver"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -119,6 +132,13 @@
          service. ACTIVITY_RECOGNITION fits this app's actual purpose (a workout tracker) far
          better than the health-metric-reading alternatives, which this app has no other use for. -->
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <!-- For BackgroundSyncService. Uses `specialUse`, not the more semantically-obvious
+         `dataSync`, because Android 15+ (this app's targetSdkVersion) caps dataSync/
+         mediaProcessing foreground services at 6 cumulative hours per 24-hour period while
+         backgrounded - which would silently kill this exact feature (staying alive for many
+         hours while backgrounded) a few hours into any day the app isn't reopened. Confirmed
+         against Android's official docs rather than assumed - see BackgroundSyncService.kt. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- For DueReminderBootReceiver - declared explicitly rather than relying on the merge from
          @capacitor/local-notifications' own manifest, since that plugin's contract shouldn't be
          load-bearing for a different notification type's boot survival. -->

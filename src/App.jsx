@@ -13,7 +13,7 @@ import {
   startNativeWorkoutSession,
   initWorkoutSetListener,
 } from './nativeWorkoutSession';
-import { initDueReminderActionListener } from './nativeNotifications';
+import { initDueReminderActionListener, initBackgroundSyncListener } from './nativeNotifications';
 import {
   getRoutines,
   upsertRoutine,
@@ -120,10 +120,21 @@ function App() {
       if (task) await handleLogWorkoutSetRef.current(task, dateKey, exercise, setIndex, values);
     });
 
+    // Fired roughly every 15 minutes by the native background-sync foreground service (see
+    // BackgroundSyncService.kt) as long as the app process is alive, foreground or backgrounded
+    // - keeps digest/summary/streak-risk content fresh without requiring the user to reopen the
+    // app. Same call sequence as the app-open effect above.
+    const backgroundSyncListenerPromise = initBackgroundSyncListener(async () => {
+      const state = await refreshAll();
+      await syncAllNotifications(state.routines, state.completions);
+      await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
+    });
+
     return () => {
       listenerPromise?.then((handle) => handle.remove());
       dueReminderListenerPromise?.then((handle) => handle.remove());
       workoutListenerPromise?.then((handle) => handle.remove());
+      backgroundSyncListenerPromise?.then((handle) => handle.remove());
     };
   }, []);
 
