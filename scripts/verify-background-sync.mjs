@@ -61,6 +61,21 @@ function dumpNotifications() {
   return adb(`shell dumpsys notification --noredact`);
 }
 
+/** See verify-extra-reminder.mjs's version of this helper for why the full system dump isn't printed directly. */
+function dumpOwnPackageForDebugging() {
+  const dump = dumpNotifications();
+  const blocks = dump.split('NotificationRecord(').slice(1).filter((b) => b.includes(`pkg=${PACKAGE}`));
+  const notificationSection =
+    blocks.length === 0
+      ? `(no NotificationRecord blocks found for ${PACKAGE})`
+      : blocks.map((b) => 'NotificationRecord(' + b.split('\n\n')[0]).join('\n---\n');
+  const logcat = adbAllowFailure(`shell logcat -d -t 500`)
+    .split('\n')
+    .filter((l) => l.includes(PACKAGE) || l.includes('FATAL EXCEPTION') || l.includes('AndroidRuntime'))
+    .join('\n');
+  return `--- ${PACKAGE}'s own notification records ---\n${notificationSection}\n--- recent logcat mentioning ${PACKAGE} ---\n${logcat || '(nothing matched)'}`;
+}
+
 function findAppRecords(dump) {
   const blocks = dump.split('NotificationRecord(').slice(1);
   return blocks
@@ -253,7 +268,7 @@ async function main() {
     10000
   );
   if (!bgNotification) {
-    console.log(dumpNotifications());
+    console.log(dumpOwnPackageForDebugging());
     fail('No notification found on the background-sync channel - BackgroundSyncService did not start from load().');
   }
   if (bgNotification.title !== 'Daily Routines') {
@@ -302,7 +317,7 @@ async function main() {
     10000
   );
   if (!before) {
-    console.log(dumpNotifications());
+    console.log(dumpOwnPackageForDebugging());
     fail(`Summary notification never showed "${staleLine}" after creating the task.`);
   }
   console.log('PASS: summary notification shows the new task at 0%, as expected.');
@@ -335,7 +350,7 @@ async function main() {
     10000
   );
   if (after) {
-    console.log(dumpNotifications());
+    console.log(dumpOwnPackageForDebugging());
     fail(
       `The summary notification still shows "${staleLine}" after triggerBackgroundSyncTick() - the background-sync ` +
         'tick did not actually re-run syncAllNotifications/syncDynamicNotifications.'
@@ -345,7 +360,7 @@ async function main() {
 
   // --- Stop action: confirm it removes the persistent notification.
   console.log('Broadcasting the Stop action...');
-  adb(`shell am broadcast -n ${STOP_RECEIVER}`);
+  console.log('Broadcast result:', adb(`shell am broadcast -n ${STOP_RECEIVER}`).trim());
 
   const stopped = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === BG_SYNC_CHANNEL_ID),
@@ -353,7 +368,7 @@ async function main() {
     10000
   );
   if (stopped) {
-    console.log(dumpNotifications());
+    console.log(dumpOwnPackageForDebugging());
     fail('The background-sync notification is still showing after broadcasting the Stop action.');
   }
   console.log('PASS: the Stop action removed the background-sync notification.');

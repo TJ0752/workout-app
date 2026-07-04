@@ -62,6 +62,21 @@ function dumpNotifications() {
   return adb(`shell dumpsys notification --noredact`);
 }
 
+/** See verify-extra-reminder.mjs's version of this helper for why the full system dump isn't printed directly. */
+function dumpOwnPackageForDebugging() {
+  const dump = dumpNotifications();
+  const blocks = dump.split('NotificationRecord(').slice(1).filter((b) => b.includes(`pkg=${PACKAGE}`));
+  const notificationSection =
+    blocks.length === 0
+      ? `(no NotificationRecord blocks found for ${PACKAGE})`
+      : blocks.map((b) => 'NotificationRecord(' + b.split('\n\n')[0]).join('\n---\n');
+  const logcat = adbAllowFailure(`shell logcat -d -t 500`)
+    .split('\n')
+    .filter((l) => l.includes(PACKAGE) || l.includes('FATAL EXCEPTION') || l.includes('AndroidRuntime'))
+    .join('\n');
+  return `--- ${PACKAGE}'s own notification records ---\n${notificationSection}\n--- recent logcat mentioning ${PACKAGE} ---\n${logcat || '(nothing matched)'}`;
+}
+
 function findAppRecords(dump) {
   const blocks = dump.split('NotificationRecord(').slice(1);
   return blocks
@@ -204,27 +219,27 @@ async function main() {
   await sleep(3000);
 
   console.log('Broadcasting kind=morning to DailyDigestAlarmReceiver...');
-  adb(`shell am broadcast -n ${ALARM_RECEIVER} --es kind morning`);
+  console.log('Broadcast result:', adb(`shell am broadcast -n ${ALARM_RECEIVER} --es kind morning`).trim());
   const morning = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === CHANNEL_ID && r.title === 'Good morning'),
     (r) => Boolean(r),
     10000
   );
   if (!morning) {
-    console.log(dumpNotifications());
+    console.log(dumpOwnPackageForDebugging());
     fail('No "Good morning" notification appeared on the daily-digest channel after firing the morning alarm.');
   }
   console.log('PASS: morning digest fired with real content.', { text: morning.text });
 
   console.log('Broadcasting kind=evening to DailyDigestAlarmReceiver...');
-  adb(`shell am broadcast -n ${ALARM_RECEIVER} --es kind evening`);
+  console.log('Broadcast result:', adb(`shell am broadcast -n ${ALARM_RECEIVER} --es kind evening`).trim());
   const evening = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === CHANNEL_ID && r.title === 'Evening wrap-up'),
     (r) => Boolean(r),
     10000
   );
   if (!evening) {
-    console.log(dumpNotifications());
+    console.log(dumpOwnPackageForDebugging());
     fail('No "Evening wrap-up" notification appeared on the daily-digest channel after firing the evening alarm.');
   }
   console.log('PASS: evening digest fired with real content.', { text: evening.text });
@@ -236,14 +251,14 @@ async function main() {
     `window.__test.scheduleNativeDigest('streak-risk', 'Your streak is at risk', 'Finish "Test Routine" today to keep your streak alive.', 19, 0)`
   );
   await sleep(500);
-  adb(`shell am broadcast -n ${ALARM_RECEIVER} --es kind streak-risk`);
+  console.log('Broadcast result:', adb(`shell am broadcast -n ${ALARM_RECEIVER} --es kind streak-risk`).trim());
   const atRisk = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === CHANNEL_ID && r.title === 'Your streak is at risk'),
     (r) => Boolean(r),
     10000
   );
   if (!atRisk) {
-    console.log(dumpNotifications());
+    console.log(dumpOwnPackageForDebugging());
     fail('No streak-risk notification appeared after scheduling+firing it natively.');
   }
   console.log('PASS: streak-risk notification fired via the native alarm receiver.', { text: atRisk.text });
@@ -262,12 +277,13 @@ async function main() {
   console.log('PASS: cancelDailyDigest actively removed the shown streak-risk notification.');
 
   console.log('Re-firing kind=streak-risk after cancellation to confirm the persisted entry was actually cleared (not just the alarm)...');
-  adb(`shell am broadcast -n ${ALARM_RECEIVER} --es kind streak-risk`);
+  console.log('Broadcast result:', adb(`shell am broadcast -n ${ALARM_RECEIVER} --es kind streak-risk`).trim());
   await sleep(2000);
   const repostedAfterCancel = findAppRecords(dumpNotifications()).find(
     (r) => r.channel === CHANNEL_ID && r.title === 'Your streak is at risk'
   );
   if (repostedAfterCancel) {
+    console.log(dumpOwnPackageForDebugging());
     fail(
       'Firing the streak-risk alarm after cancelDailyDigest still posted a notification - DailyDigestStore.clear() ' +
         'did not actually remove the persisted entry (DailyDigestAlarmReceiver should have found nothing to read and no-op).'

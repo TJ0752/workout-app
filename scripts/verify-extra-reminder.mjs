@@ -69,6 +69,27 @@ function dumpNotifications() {
   return adb(`shell dumpsys notification --noredact`);
 }
 
+/**
+ * A full `dumpsys notification` includes every app on the device's channels/records (hundreds of
+ * KB) - printing that wholesale on a failure both drowns out the one signal that actually matters
+ * and risks blowing past CI log/tool size limits. This prints only this package's own record
+ * blocks (still their full text, not findAppRecords' truncated `raw` slice) plus a logcat tail
+ * filtered to this package, so a future failure is actually diagnosable from the CI log alone.
+ */
+function dumpOwnPackageForDebugging() {
+  const dump = dumpNotifications();
+  const blocks = dump.split('NotificationRecord(').slice(1).filter((b) => b.includes(`pkg=${PACKAGE}`));
+  const notificationSection =
+    blocks.length === 0
+      ? `(no NotificationRecord blocks found for ${PACKAGE})`
+      : blocks.map((b) => 'NotificationRecord(' + b.split('\n\n')[0]).join('\n---\n');
+  const logcat = adbAllowFailure(`shell logcat -d -t 500`)
+    .split('\n')
+    .filter((l) => l.includes(PACKAGE) || l.includes('FATAL EXCEPTION') || l.includes('AndroidRuntime'))
+    .join('\n');
+  return `--- ${PACKAGE}'s own notification records ---\n${notificationSection}\n--- recent logcat mentioning ${PACKAGE} ---\n${logcat || '(nothing matched)'}`;
+}
+
 function findAppRecords(dump) {
   const blocks = dump.split('NotificationRecord(').slice(1);
   return blocks
@@ -301,7 +322,8 @@ async function main() {
   console.log('Resolved task id via SQLite query:', taskId);
 
   console.log('Broadcasting directly to ExtraReminderAlarmReceiver (slot 0) to fire the alarm...');
-  adb(`shell am broadcast -n ${ALARM_RECEIVER} --es taskId "${taskId}" --ei slot 0`);
+  const broadcastResult = adb(`shell am broadcast -n ${ALARM_RECEIVER} --es taskId "${taskId}" --ei slot 0`);
+  console.log('Broadcast result:', broadcastResult.trim());
 
   const posted = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === CHANNEL_ID && r.title === TASK_TITLE && !r.ongoing),
@@ -309,7 +331,7 @@ async function main() {
     10000
   );
   if (!posted) {
-    console.log(dumpNotifications());
+    console.log(dumpOwnPackageForDebugging());
     fail('No plain (non-ongoing) routine-reminders notification appeared after broadcasting to ExtraReminderAlarmReceiver.');
   }
   console.log('Extra reminder notification posted:', { title: posted.title, text: posted.text, ongoing: posted.ongoing });
@@ -319,7 +341,7 @@ async function main() {
   console.log('PASS: extra reminder fired via the native alarm receiver with Mark-done/Snooze actions intact.');
 
   console.log('Broadcasting a Snooze action for slot 0...');
-  adb(`shell am broadcast -n ${ACTION_RECEIVER} -a ${ACTION_SNOOZE} --es taskId "${taskId}" --ei slot 0`);
+  console.log('Broadcast result:', adb(`shell am broadcast -n ${ACTION_RECEIVER} -a ${ACTION_SNOOZE} --es taskId "${taskId}" --ei slot 0`).trim());
   await sleep(1000);
   const completionAfterSnooze = await page.evaluate(`window.__test.queryCompletion(${JSON.stringify(taskId)}, ${JSON.stringify(todayKey)})`);
   if (completionAfterSnooze !== null) {
@@ -328,7 +350,7 @@ async function main() {
   console.log('PASS: Snooze re-armed without touching completions.');
 
   console.log('Broadcasting a Mark-done action for slot 0...');
-  adb(`shell am broadcast -n ${ACTION_RECEIVER} -a ${ACTION_MARK_DONE} --es taskId "${taskId}" --ei slot 0`);
+  console.log('Broadcast result:', adb(`shell am broadcast -n ${ACTION_RECEIVER} -a ${ACTION_MARK_DONE} --es taskId "${taskId}" --ei slot 0`).trim());
 
   const completion = await pollFor(
     () => page.evaluate(`window.__test.queryCompletion(${JSON.stringify(taskId)}, ${JSON.stringify(todayKey)})`),
@@ -336,6 +358,7 @@ async function main() {
     10000
   );
   if (completion === null) {
+    console.log(dumpOwnPackageForDebugging());
     fail(
       'No completion row appeared for this task after broadcasting Mark-done - the ' +
         'ExtraReminderActionReceiver -> dispatchDueReminderAction -> DueReminderBridge -> JS ' +
@@ -350,6 +373,7 @@ async function main() {
     10000
   );
   if (remaining) {
+    console.log(dumpOwnPackageForDebugging());
     fail(`A notification for ${TASK_TITLE} is still showing after Mark-done - dismissExtraRemindersToday did not clear it.`);
   }
   console.log('PASS: the extra reminder notification was cleared after marking the task done.');
