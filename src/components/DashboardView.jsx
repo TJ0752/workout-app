@@ -27,7 +27,7 @@ function FitnessStatsPanel({ routines, workoutLogsByTask }) {
 
   return (
     <>
-      {(overview.topWeightedPR || overview.topBodyweightPR) && (
+      {(overview.topWeightedPR || overview.topRepPR || overview.topDurationPR) && (
         <div className="fit-overview-row">
           {overview.topWeightedPR && (
             <div className="fit-overview-tile weighted">
@@ -39,14 +39,24 @@ function FitnessStatsPanel({ routines, workoutLogsByTask }) {
               <div className="fo-sub">{overview.topWeightedPR.name}</div>
             </div>
           )}
-          {overview.topBodyweightPR && (
+          {overview.topRepPR && (
             <div className="fit-overview-tile bodyweight">
               <div className="fo-kind">Bodyweight PR</div>
               <div className="fo-num">
-                {overview.topBodyweightPR.repPR.reps}
+                {overview.topRepPR.repPR.reps}
                 <span className="fo-unit"> reps</span>
               </div>
-              <div className="fo-sub">{overview.topBodyweightPR.name}</div>
+              <div className="fo-sub">{overview.topRepPR.name}</div>
+            </div>
+          )}
+          {overview.topDurationPR && (
+            <div className="fit-overview-tile bodyweight">
+              <div className="fo-kind">Duration PR</div>
+              <div className="fo-num">
+                {overview.topDurationPR.durationPR.durationSeconds}
+                <span className="fo-unit">s</span>
+              </div>
+              <div className="fo-sub">{overview.topDurationPR.name}</div>
             </div>
           )}
         </div>

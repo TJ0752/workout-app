@@ -328,8 +328,28 @@ describe('getFitnessOverview', () => {
   it('picks the adaptive top-PR tiles: weighted from weighted exercises, bodyweight from bodyweight ones', () => {
     const overview = getFitnessOverview(routines, workoutLogsByTask);
     expect(overview.topWeightedPR.name).toBe('Bench Press');
-    expect(overview.topBodyweightPR.name).toBe('Push-ups');
-    expect(overview.topBodyweightPR.repPR.reps).toBe(20);
+    expect(overview.topRepPR.name).toBe('Push-ups');
+    expect(overview.topRepPR.repPR.reps).toBe(20);
+    expect(overview.topDurationPR).toBeNull();
+  });
+
+  it('never puts a duration-only exercise into topRepPR (regression: repPR is null there, and the UI reads .repPR.reps unconditionally)', () => {
+    const plankRoutines = [
+      {
+        id: 'r1',
+        tasks: [{ id: 'task-a', completionType: 'workout', exercises: [{ id: 'plank', name: 'Plank' }] }],
+      },
+    ];
+    const plankLogs = {
+      'task-a': {
+        '2026-07-01': { plank: [set({ weight: undefined, reps: undefined, durationSeconds: 40 })] },
+        '2026-07-02': { plank: [set({ weight: undefined, reps: undefined, durationSeconds: 60 })] },
+      },
+    };
+    const overview = getFitnessOverview(plankRoutines, plankLogs);
+    expect(overview.topRepPR).toBeNull();
+    expect(overview.topDurationPR.name).toBe('Plank');
+    expect(overview.topDurationPR.durationPR.durationSeconds).toBe(60);
   });
 
   it('sessionMix aggregates across every workout task, not just one', () => {
@@ -347,7 +367,8 @@ describe('getFitnessOverview', () => {
     expect(overview.hasWorkouts).toBe(false);
     expect(overview.exercises).toEqual([]);
     expect(overview.topWeightedPR).toBeNull();
-    expect(overview.topBodyweightPR).toBeNull();
+    expect(overview.topRepPR).toBeNull();
+    expect(overview.topDurationPR).toBeNull();
   });
 
   it('handles missing routines/logs gracefully', () => {

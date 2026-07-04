@@ -213,6 +213,19 @@ describe('getOverallConsistency', () => {
     expect(strict.pct).toBe(100);
     expect(lenient.pct).toBe(100);
   });
+
+  it('series dates use the local calendar day (dateToKey), not a UTC-shifted one (regression: date.toISOString() can land on a different day than dateToKey() outside UTC)', () => {
+    const routine = { id: 'r1', title: 'R1', active: true, createdAt: '2020-01-01', tasks: [{ id: 't1' }] };
+    const taskVersionsMap = { t1: [boolVersion()] };
+    const completions = { t1: {} };
+    for (let i = 0; i < 21; i++) completions.t1[daysAgoKey(i)] = 1;
+    const result = getOverallConsistency([routine], taskVersionsMap, completions, 0.5, 21);
+    const expectedDates = new Set();
+    for (let i = 0; i < 21; i++) expectedDates.add(daysAgoKey(i));
+    for (const d of result.series) {
+      expect(expectedDates.has(d.date)).toBe(true);
+    }
+  });
 });
 
 describe('getLongestOverallStreak', () => {

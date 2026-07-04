@@ -6,6 +6,7 @@ import {
   getTaskFraction,
   startOfDay,
   lastNDates,
+  dateToKey,
 } from './date.js';
 
 function datesBetween(start, end) {
@@ -155,7 +156,7 @@ export function getOverallConsistency(routines, taskVersionsMap, completions, th
     totalDueDays += 1;
     const met = pct / 100 >= thresholdFraction;
     if (met) daysMet += 1;
-    series.push({ date: date.toISOString().slice(0, 10), pct, met });
+    series.push({ date: dateToKey(date), pct, met });
   }
   return {
     daysMet,

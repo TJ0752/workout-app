@@ -288,11 +288,13 @@ export function getFitnessOverview(routines, workoutLogsByTask) {
     .map((w) => ({ ...w, weightedPct: Math.round((w.weighted / (w.weighted + w.bodyweight)) * 100) }));
 
   const weightedExercises = exercises.filter((e) => e.isWeighted && e.e1rm);
-  const bodyweightExercises = exercises.filter((e) => !e.isWeighted && (e.repPR || e.durationPR));
+  const repExercises = exercises.filter((e) => !e.isWeighted && e.repPR);
+  const durationExercises = exercises.filter((e) => !e.isWeighted && e.durationPR);
 
   const topWeightedPR = weightedExercises.reduce((best, e) => (!best || e.e1rm.e1rm > best.e1rm.e1rm ? e : best), null);
-  const topBodyweightPR = bodyweightExercises.reduce(
-    (best, e) => (!best || (e.repPR?.reps || 0) > (best.repPR?.reps || 0) ? e : best),
+  const topRepPR = repExercises.reduce((best, e) => (!best || e.repPR.reps > best.repPR.reps ? e : best), null);
+  const topDurationPR = durationExercises.reduce(
+    (best, e) => (!best || e.durationPR.durationSeconds > best.durationPR.durationSeconds ? e : best),
     null
   );
 
@@ -301,6 +303,7 @@ export function getFitnessOverview(routines, workoutLogsByTask) {
     exercises,
     sessionMix,
     topWeightedPR,
-    topBodyweightPR,
+    topRepPR,
+    topDurationPR,
   };
 }
