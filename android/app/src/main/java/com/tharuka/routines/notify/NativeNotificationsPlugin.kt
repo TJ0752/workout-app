@@ -19,6 +19,8 @@ class NativeNotificationsPlugin : Plugin() {
 
     override fun load() {
         super.load()
+        createNotificationChannels(context)
+
         DueReminderBridge.onAction = { data -> notifyListeners("dueReminderAction", data, true) }
 
         // Fires once per app-process/bridge lifecycle, independent of Activity

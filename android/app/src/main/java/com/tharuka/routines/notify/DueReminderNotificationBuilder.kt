@@ -6,8 +6,8 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
 
-// The channel already exists - created by initNotifications() in src/notifications.js -
-// channels are app-wide, not plugin-scoped.
+// The channel already exists - created by createNotificationChannels() (NotificationChannels.kt),
+// called from NativeNotificationsPlugin.load() - channels are app-wide, not plugin-scoped.
 internal const val DUE_REMINDER_CHANNEL_ID = "routine-reminders"
 
 internal const val ACTION_MARK_DONE = "com.tharuka.routines.notify.action.MARK_DONE"

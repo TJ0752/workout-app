@@ -4,8 +4,8 @@ import android.app.Notification
 import android.content.Context
 import androidx.core.app.NotificationCompat
 
-// Reuses the existing daily-digest channel, already created by src/notifications.js's
-// initNotifications() (channels are app-wide, not plugin-scoped).
+// Reuses the existing daily-digest channel, created by createNotificationChannels()
+// (NotificationChannels.kt) - channels are app-wide, not plugin-scoped.
 internal const val DIGEST_CHANNEL_ID = "daily-digest"
 
 /** Plain, dismissible - no actions, no delete-intent. Shared by DailyDigestAlarmReceiver. */

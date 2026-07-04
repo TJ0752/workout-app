@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const calls = {
-  scheduled: [],
-  cancelled: [],
-  removed: [],
-  registered: [],
   summaryShown: [],
   summaryCancelled: 0,
   dueReminderScheduled: [],
@@ -71,24 +67,13 @@ vi.mock('@capacitor/core', () => ({
   })),
 }));
 
+// Every notification now posts through native Kotlin (see notifications.js's
+// initNotifications() doc comment) - the stock plugin is kept installed solely for its runtime
+// POST_NOTIFICATIONS permission check/request, so that's the only surface still mocked here.
 vi.mock('@capacitor/local-notifications', () => ({
   LocalNotifications: {
-    schedule: vi.fn(async ({ notifications }) => {
-      calls.scheduled.push(...notifications);
-    }),
-    cancel: vi.fn(async ({ notifications }) => {
-      calls.cancelled.push(...notifications);
-    }),
-    removeDeliveredNotifications: vi.fn(async ({ notifications }) => {
-      calls.removed.push(...notifications);
-    }),
-    registerActionTypes: vi.fn(async ({ types }) => {
-      calls.registered.push(...types);
-    }),
     checkPermissions: vi.fn(async () => ({ display: 'granted' })),
     requestPermissions: vi.fn(async () => ({ display: 'granted' })),
-    createChannel: vi.fn(async () => {}),
-    addListener: vi.fn(),
   },
 }));
 
@@ -108,10 +93,6 @@ const TUESDAY = FIXED_NOW.getDay();
 const TODAY_KEY = '2026-07-07';
 
 function resetCalls() {
-  calls.scheduled.length = 0;
-  calls.cancelled.length = 0;
-  calls.removed.length = 0;
-  calls.registered.length = 0;
   calls.summaryShown.length = 0;
   calls.summaryCancelled = 0;
   calls.dueReminderScheduled.length = 0;

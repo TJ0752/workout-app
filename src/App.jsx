@@ -36,7 +36,6 @@ import {
   syncAllNotifications,
   syncDynamicNotifications,
   refreshTaskReminderVisibility,
-  initActionListener,
 } from './notifications';
 import { todayKey } from './utils/date';
 import { computeSessionFraction } from './utils/workouts';
@@ -109,9 +108,9 @@ function App() {
       if (task) await refreshTaskReminderVisibility(task, state.completions);
     };
 
-    const listenerPromise = initActionListener({ onMarkDone: handleMarkDone, onAddQuantity: handleAddQuantity });
-    // Second event source feeding the same handlers - the native due-reminder's own Mark-done/+N
-    // action buttons (see src/nativeNotifications.js and android/.../notify/).
+    // Native due-reminder and extra-reminder Mark-done/+N action buttons both feed this one
+    // listener (see src/nativeNotifications.js and android/.../notify/) - every notification
+    // action in the app is native now, there's no stock-plugin listener left to wire.
     const dueReminderListenerPromise = initDueReminderActionListener(handleMarkDone, handleAddQuantity);
 
     const workoutListenerPromise = initWorkoutSetListener(async (taskId, dateKey, exercise, setIndex, values) => {
@@ -131,7 +130,6 @@ function App() {
     });
 
     return () => {
-      listenerPromise?.then((handle) => handle.remove());
       dueReminderListenerPromise?.then((handle) => handle.remove());
       workoutListenerPromise?.then((handle) => handle.remove());
       backgroundSyncListenerPromise?.then((handle) => handle.remove());
