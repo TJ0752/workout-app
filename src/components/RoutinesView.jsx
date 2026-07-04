@@ -1,9 +1,17 @@
 import { useState } from 'react';
 import RoutineForm from './RoutineForm';
-import { DAY_LABELS } from '../utils/date';
+import { DAY_LABELS, calcRoutineCompletionRate } from '../utils/date';
 import { getRoutineIcon } from '../utils/icons';
 
-export default function RoutinesView({ routines, onSaveRoutine, onDeleteRoutine, onToggleRoutineActive, onToggleTaskActive }) {
+export default function RoutinesView({
+  routines,
+  completions,
+  taskVersionsMap,
+  onSaveRoutine,
+  onDeleteRoutine,
+  onToggleRoutineActive,
+  onToggleTaskActive,
+}) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
 
@@ -40,6 +48,9 @@ export default function RoutinesView({ routines, onSaveRoutine, onDeleteRoutine,
         {routines.map((routine) => {
           const RoutineIcon = getRoutineIcon(routine);
           const isSimple = routine.tasks.length === 1;
+          const completionRate = routine.active
+            ? calcRoutineCompletionRate(routine, taskVersionsMap, completions)
+            : null;
           return (
             <li key={routine.id} className={`routine-card ${routine.active ? '' : 'inactive'}`}>
               <span className="icon-badge">
@@ -55,6 +66,7 @@ export default function RoutinesView({ routines, onSaveRoutine, onDeleteRoutine,
                     ? routine.tasks[0]?.days.map((d) => DAY_LABELS[d]).join(', ')
                     : `${routine.tasks.length} tasks`}
                 </div>
+                {completionRate !== null && <span className="routine-rate-chip">{completionRate}% this month</span>}
                 {routine.notes && <div className="routine-notes">{routine.notes}</div>}
 
                 {!isSimple && (

@@ -5,6 +5,15 @@ import {
   getExerciseVolume,
   getWorkoutSessionHistory,
   getWorkoutStats,
+  epley1RM,
+  getExerciseE1RM,
+  getExerciseRepPR,
+  getExerciseTotalReps,
+  getExerciseDurationPR,
+  getExerciseTotalDuration,
+  getExerciseSessionSeries,
+  getSessionMixByWeek,
+  getFitnessOverview,
 } from './workouts.js';
 
 function set(overrides = {}) {
@@ -140,5 +149,209 @@ describe('getWorkoutStats', () => {
     const stats = getWorkoutStats({ id: 't', exercises: [] }, undefined);
     expect(stats.byExercise).toEqual({});
     expect(stats.recentSessions).toEqual([]);
+  });
+
+  it('adds the adaptive bodyweight/duration metrics alongside the existing weighted ones', () => {
+    const task = { id: 't', exercises: [{ id: 'pushups', name: 'Push-ups' }] };
+    const logsForTask = {
+      '2026-07-01': { pushups: [set({ weight: undefined, reps: 20 })] },
+      '2026-07-02': { pushups: [set({ weight: undefined, reps: 25 })] },
+    };
+    const stats = getWorkoutStats(task, logsForTask);
+    expect(stats.byExercise.pushups.isWeighted).toBe(false);
+    expect(stats.byExercise.pushups.repPR.reps).toBe(25);
+    expect(stats.byExercise.pushups.totalReps).toBe(45);
+    expect(stats.byExercise.pushups.pr).toBeNull(); // no weight ever logged
+    expect(stats.byExercise.pushups.series).toHaveLength(2);
+  });
+});
+
+describe('epley1RM', () => {
+  it('estimates a 1-rep max from weight x reps (Epley: weight * (1 + reps/30))', () => {
+    expect(epley1RM(100, 1)).toBeCloseTo(100 * (1 + 1 / 30));
+    expect(epley1RM(60, 8)).toBeCloseTo(60 * (1 + 8 / 30));
+  });
+
+  it('returns 0 for missing weight or reps', () => {
+    expect(epley1RM(0, 8)).toBe(0);
+    expect(epley1RM(60, 0)).toBe(0);
+  });
+});
+
+describe('getExerciseE1RM', () => {
+  it('picks the set with the highest estimated 1RM, which can differ from the raw top weight', () => {
+    // 100kg x 1 -> e1RM ~103.3. 85kg x 8 -> e1RM ~107.7, higher despite less raw weight.
+    const logs = [set({ weight: 100, reps: 1 }), set({ weight: 85, reps: 8 })];
+    const best = getExerciseE1RM(logs);
+    expect(best.weight).toBe(85);
+    expect(best.reps).toBe(8);
+  });
+
+  it('ignores incomplete sets and sets missing weight or reps', () => {
+    const logs = [set({ weight: 100, completed: false }), set({ weight: undefined, reps: 10 })];
+    expect(getExerciseE1RM(logs)).toBeNull();
+  });
+
+  it('returns null for empty/missing logs', () => {
+    expect(getExerciseE1RM([])).toBeNull();
+    expect(getExerciseE1RM(undefined)).toBeNull();
+  });
+});
+
+describe('getExerciseRepPR/getExerciseTotalReps (bodyweight)', () => {
+  it('finds the most reps in a single completed set with no weight', () => {
+    const logs = [set({ weight: undefined, reps: 20 }), set({ weight: undefined, reps: 30 }), set({ weight: undefined, reps: 25 })];
+    expect(getExerciseRepPR(logs).reps).toBe(30);
+    expect(getExerciseTotalReps(logs)).toBe(75);
+  });
+
+  it('excludes weighted sets from the bodyweight rep PR/total', () => {
+    const logs = [set({ weight: 20, reps: 999 }), set({ weight: undefined, reps: 15 })];
+    expect(getExerciseRepPR(logs).reps).toBe(15);
+    expect(getExerciseTotalReps(logs)).toBe(15);
+  });
+
+  it('returns null/0 for empty logs', () => {
+    expect(getExerciseRepPR([])).toBeNull();
+    expect(getExerciseTotalReps([])).toBe(0);
+  });
+});
+
+describe('getExerciseDurationPR/getExerciseTotalDuration', () => {
+  it('finds the longest hold and sums time under tension', () => {
+    const logs = [
+      set({ weight: undefined, reps: undefined, durationSeconds: 40 }),
+      set({ weight: undefined, reps: undefined, durationSeconds: 70 }),
+    ];
+    expect(getExerciseDurationPR(logs).durationSeconds).toBe(70);
+    expect(getExerciseTotalDuration(logs)).toBe(110);
+  });
+
+  it('returns null/0 for empty logs', () => {
+    expect(getExerciseDurationPR([])).toBeNull();
+    expect(getExerciseTotalDuration([])).toBe(0);
+  });
+});
+
+describe('getExerciseSessionSeries', () => {
+  it('returns one entry per date with completed sets, sorted chronologically', () => {
+    const logsForTaskByDate = {
+      '2026-07-03': { e1: [set({ weight: 60, reps: 5 })] },
+      '2026-07-01': { e1: [set({ weight: 50, reps: 5 })] },
+      '2026-07-02': { e1: [] },
+    };
+    const series = getExerciseSessionSeries(logsForTaskByDate, 'e1');
+    expect(series.map((s) => s.date)).toEqual(['2026-07-01', '2026-07-03']);
+    expect(series[1].e1rm).toBeCloseTo(epley1RM(60, 5));
+  });
+
+  it('returns an empty array when the exercise has no logs', () => {
+    expect(getExerciseSessionSeries({}, 'e1')).toEqual([]);
+  });
+});
+
+describe('getSessionMixByWeek', () => {
+  it('classifies each session as weighted or bodyweight and buckets by week', () => {
+    const logsForTaskByDate = {
+      '2026-06-01': { e1: [set({ weight: 60, reps: 5 })] }, // Monday - weighted
+      '2026-06-03': { e1: [set({ weight: undefined, reps: 20 })] }, // Wednesday - bodyweight
+      '2026-06-08': { e1: [set({ weight: 60, reps: 5 })] }, // next Monday - weighted
+    };
+    const mix = getSessionMixByWeek(logsForTaskByDate);
+    expect(mix).toHaveLength(2);
+    expect(mix[0]).toMatchObject({ weighted: 1, bodyweight: 1, weightedPct: 50 });
+    expect(mix[1]).toMatchObject({ weighted: 1, bodyweight: 0, weightedPct: 100 });
+  });
+
+  it('a session with both weighted and bodyweight sets counts as weighted', () => {
+    const logsForTaskByDate = {
+      '2026-06-01': {
+        e1: [set({ weight: 60, reps: 5 })],
+        e2: [set({ weight: undefined, reps: 20 })],
+      },
+    };
+    const mix = getSessionMixByWeek(logsForTaskByDate);
+    expect(mix[0]).toMatchObject({ weighted: 1, bodyweight: 0 });
+  });
+
+  it('returns an empty array for no logs', () => {
+    expect(getSessionMixByWeek({})).toEqual([]);
+  });
+});
+
+describe('getFitnessOverview', () => {
+  const routines = [
+    {
+      id: 'r1',
+      tasks: [
+        {
+          id: 'task-a',
+          completionType: 'workout',
+          exercises: [
+            { id: 'bench-a', name: 'Bench Press' },
+            { id: 'pushups', name: 'Push-ups' },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'r2',
+      tasks: [
+        {
+          id: 'task-b',
+          completionType: 'workout',
+          exercises: [{ id: 'bench-b', name: 'Bench Press' }],
+        },
+      ],
+    },
+  ];
+  const workoutLogsByTask = {
+    'task-a': {
+      '2026-07-01': {
+        'bench-a': [set({ weight: 60, reps: 5 })],
+        pushups: [set({ weight: undefined, reps: 20 })],
+      },
+    },
+    'task-b': {
+      '2026-07-02': { 'bench-b': [set({ weight: 65, reps: 5 })] },
+    },
+  };
+
+  it('merges the same-named exercise across different routines/tasks into one entry', () => {
+    const overview = getFitnessOverview(routines, workoutLogsByTask);
+    const bench = overview.exercises.find((e) => e.name === 'Bench Press');
+    expect(bench.pr.weight).toBe(65); // the higher of the two routines' logged sets
+    expect(bench.isWeighted).toBe(true);
+    expect(bench.series).toHaveLength(2); // one session from each routine's task
+  });
+
+  it('picks the adaptive top-PR tiles: weighted from weighted exercises, bodyweight from bodyweight ones', () => {
+    const overview = getFitnessOverview(routines, workoutLogsByTask);
+    expect(overview.topWeightedPR.name).toBe('Bench Press');
+    expect(overview.topBodyweightPR.name).toBe('Push-ups');
+    expect(overview.topBodyweightPR.repPR.reps).toBe(20);
+  });
+
+  it('sessionMix aggregates across every workout task, not just one', () => {
+    const overview = getFitnessOverview(routines, workoutLogsByTask);
+    const totalWeighted = overview.sessionMix.reduce((sum, w) => sum + w.weighted, 0);
+    const totalBodyweight = overview.sessionMix.reduce((sum, w) => sum + w.bodyweight, 0);
+    // task-a's session has both a weighted and bodyweight set -> counts as weighted;
+    // task-b's session is weighted too -> 2 weighted sessions, 0 bodyweight-only sessions.
+    expect(totalWeighted).toBe(2);
+    expect(totalBodyweight).toBe(0);
+  });
+
+  it('hasWorkouts is false and PR tiles are null when there are no workout tasks or no logs', () => {
+    const overview = getFitnessOverview([{ id: 'r1', tasks: [{ id: 't1', completionType: 'boolean' }] }], {});
+    expect(overview.hasWorkouts).toBe(false);
+    expect(overview.exercises).toEqual([]);
+    expect(overview.topWeightedPR).toBeNull();
+    expect(overview.topBodyweightPR).toBeNull();
+  });
+
+  it('handles missing routines/logs gracefully', () => {
+    expect(getFitnessOverview(undefined, undefined).hasWorkouts).toBe(false);
+    expect(getFitnessOverview([], {}).hasWorkouts).toBe(false);
   });
 });

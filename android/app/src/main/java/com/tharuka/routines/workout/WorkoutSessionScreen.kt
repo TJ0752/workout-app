@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -442,67 +443,80 @@ private fun MomentumRing(
     val numberColor = MaterialTheme.colorScheme.onBackground
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
 
-    Box(
-        modifier = modifier
-            .size(230.dp)
-            .graphicsLayer { scaleX = scale.value; scaleY = scale.value }
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-            ) {
-                onTap()
-                scope.launch {
-                    scale.snapTo(1f)
-                    scale.animateTo(1.08f, animationSpec = tween(140))
-                    scale.animateTo(1f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy))
-                }
-                scope.launch {
-                    pulseScale.snapTo(1f)
-                    pulseAlpha.snapTo(0.7f)
-                    pulseScale.animateTo(1.5f, animationSpec = tween(700))
-                    pulseAlpha.animateTo(0f, animationSpec = tween(700))
-                }
-            }
-            .semantics { contentDescription = "Mark set done" },
+    // BoxWithConstraints, not a fixed .size(230.dp) - the column that hosts this ring passes
+    // Modifier.weight(1f), and a fixed size on top of a weight-derived height allocation lets
+    // the two disagree: if the column's available height comes out less than 230dp (a shorter
+    // screen, or more chips/fields taking room above it), the fixed size gets constrained down
+    // in height only, while width stays at the full 230dp - producing an oval, not a circle.
+    // Deriving the side length from whichever of the two available dimensions is smaller
+    // guarantees a square regardless of how much space the surrounding layout actually grants.
+    BoxWithConstraints(
+        modifier = modifier,
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val stroke = 16.dp.toPx()
-            val inset = stroke / 2f
-            val arcTopLeft = Offset(inset, inset)
-            val arcSize = Size(size.width - stroke, size.height - stroke)
+        val ringSize = minOf(maxWidth, maxHeight, 230.dp)
+        Box(
+            modifier = Modifier
+                .size(ringSize)
+                .graphicsLayer { scaleX = scale.value; scaleY = scale.value }
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) {
+                    onTap()
+                    scope.launch {
+                        scale.snapTo(1f)
+                        scale.animateTo(1.08f, animationSpec = tween(140))
+                        scale.animateTo(1f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+                    }
+                    scope.launch {
+                        pulseScale.snapTo(1f)
+                        pulseAlpha.snapTo(0.7f)
+                        pulseScale.animateTo(1.5f, animationSpec = tween(700))
+                        pulseAlpha.animateTo(0f, animationSpec = tween(700))
+                    }
+                }
+                .semantics { contentDescription = "Mark set done" },
+            contentAlignment = Alignment.Center,
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val stroke = 16.dp.toPx()
+                val inset = stroke / 2f
+                val arcTopLeft = Offset(inset, inset)
+                val arcSize = Size(size.width - stroke, size.height - stroke)
 
-            if (pulseAlpha.value > 0.001f) {
-                drawCircle(
-                    color = ringColor.copy(alpha = pulseAlpha.value),
-                    radius = (size.minDimension / 2f) * pulseScale.value,
-                    style = Stroke(width = 3.dp.toPx()),
+                if (pulseAlpha.value > 0.001f) {
+                    drawCircle(
+                        color = ringColor.copy(alpha = pulseAlpha.value),
+                        radius = (size.minDimension / 2f) * pulseScale.value,
+                        style = Stroke(width = 3.dp.toPx()),
+                    )
+                }
+                drawArc(
+                    color = trackColor,
+                    startAngle = -90f,
+                    sweepAngle = 360f,
+                    useCenter = false,
+                    topLeft = arcTopLeft,
+                    size = arcSize,
+                    style = Stroke(width = stroke, cap = StrokeCap.Round),
+                )
+                drawArc(
+                    color = ringColor,
+                    startAngle = -90f,
+                    sweepAngle = 360f * animatedFraction.value.coerceIn(0f, 1f),
+                    useCenter = false,
+                    topLeft = arcTopLeft,
+                    size = arcSize,
+                    style = Stroke(width = stroke, cap = StrokeCap.Round),
                 )
             }
-            drawArc(
-                color = trackColor,
-                startAngle = -90f,
-                sweepAngle = 360f,
-                useCenter = false,
-                topLeft = arcTopLeft,
-                size = arcSize,
-                style = Stroke(width = stroke, cap = StrokeCap.Round),
-            )
-            drawArc(
-                color = ringColor,
-                startAngle = -90f,
-                sweepAngle = 360f * animatedFraction.value.coerceIn(0f, 1f),
-                useCenter = false,
-                topLeft = arcTopLeft,
-                size = arcSize,
-                style = Stroke(width = stroke, cap = StrokeCap.Round),
-            )
-        }
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("$currentSetNumber", fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = numberColor)
-            Text("of $totalSets", fontSize = 13.sp, letterSpacing = 1.sp, color = labelColor)
-            Spacer(Modifier.height(6.dp))
-            Text("Tap ring to log", fontSize = 11.sp, color = labelColor)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("$currentSetNumber", fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = numberColor)
+                Text("of $totalSets", fontSize = 13.sp, letterSpacing = 1.sp, color = labelColor)
+                Spacer(Modifier.height(6.dp))
+                Text("Tap ring to log", fontSize = 11.sp, color = labelColor)
+            }
         }
     }
 }

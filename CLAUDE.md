@@ -197,10 +197,25 @@ Everything downstream of raw completions works in fractions (0–1), not boolean
 - `calcRoutineStreak` → consecutive days at fraction `1` (100%); today gets a grace
   exception (an incomplete-so-far today doesn't break the streak, since the day isn't
   over).
+- `calcLongestRoutineStreak` → the longest run ever seen in the lookback window, not just
+  the live one — the habit equivalent of a fitness PR. Unlike `calcRoutineStreak`, it never
+  stops early and keeps the best run seen even after a later gap ends it; it also has no
+  grace exception for today, since an incomplete today just fails to extend whatever run
+  is currently being tracked rather than needing special-casing.
+- `analytics.js`'s `getOverallConsistency(routines, taskVersionsMap, completions,
+  thresholdFraction, windowDays)` → how many of the last `windowDays` due-days had an
+  *overall* (average-across-routines) completion at or above `thresholdFraction` (default
+  50%, 21 days). This is deliberately softer than a streak's all-or-nothing 100% bar — a
+  routine set sitting at a steady 80% every day scores well here even though it never
+  posts a single "complete" day for the streak counter. Also returns the day-by-day
+  `series` itself (`{date, pct, met}`), which both the consistency bar chart and the
+  completion heatmap render from directly, so the two visuals never disagree.
 - `analytics.js`'s `getDashboardStats(routines, taskVersionsMap, completions, range)` is
   the single entry point the Dashboard uses; it computes per-routine and nested per-task
   stats, an auto-scaled trend (daily buckets for Week, weekly for Month, monthly for All
-  Time), and a day-of-week breakdown, all built on the same fraction functions above.
+  Time), a day-of-week breakdown, and now also `longestStreak`/`consistency` (both
+  independent of `range` — they always look at their own fixed windows), all built on the
+  same fraction functions above.
 
 `taskVersionsMap` (task id -> its versions, sorted ascending, excluding deleted routines)
 is loaded once per app-level refresh (`storage.getTaskVersionsForAnalytics()`) and passed
@@ -599,6 +614,48 @@ driving a native Compose screen that has nothing to do with the WebView. The
 or a future API-36 CI emulator image — `android-emulator-verify.yml` currently runs API 30,
 which exercises the unchanged plain-notification fallback path, not the new one.
 
+### Fitness Stats (`src/components/DashboardView.jsx`, `src/utils/workouts.js`)
+
+Unlike the workout session screen above, this is **not** native — it's a second sub-tab
+inside the ordinary JS `DashboardView` (alongside the existing "Overall" completion
+analytics), rendered in the WebView on every platform exactly like Routines/Today/History.
+It exists because `getExercisePR`/`getExerciseVolume` (the only fitness stats that existed
+before this) both silently skip any set without a `weight` — a bodyweight exercise like
+push-ups or a duration one like a plank produced zero PR and zero volume, not just an
+undisplayed one.
+
+- **Adaptive, per-type metrics, not one universal set.** A weighted exercise's meaningful
+  "how strong am I" number is an **estimated 1-rep max** (`epley1RM`/`getExerciseE1RM`,
+  Epley's formula: `weight * (1 + reps/30)`) rather than raw top weight — 100kg×1 and
+  85kg×8 aren't comparable by weight alone, and e1RM is the standard way lifting apps
+  normalize across rep ranges (confirmed: 85kg×8 has a *higher* e1RM than 100kg×1, despite
+  the lower raw weight). A bodyweight/reps exercise gets `getExerciseRepPR`/
+  `getExerciseTotalReps` (most reps in one set / total reps, the reps-denominated
+  equivalents of PR/volume). A duration exercise gets `getExerciseDurationPR`/
+  `getExerciseTotalDuration` (longest hold / total time-under-tension). Which metric a
+  given exercise shows is decided at render time from whether any completed set for it
+  ever had a `weight` — not from the exercise's configured `unit`, since a nominally
+  bodyweight exercise logged with added weight one session should still count as weighted
+  that session.
+- **`getFitnessOverview(routines, workoutLogsByTask)` merges by exercise *name*, not
+  exercise id**, across every workout-type task in the app. Exercise ids are per-task (a
+  "Bench Press" added to two different routines gets two different ids), so a PR/trend
+  computed per-id would silo the same real-world exercise's history by which routine it
+  happened to be logged under. This is the one place in the codebase that deliberately
+  looks across every routine at once, rather than one task/routine at a time like
+  `getWorkoutStats` (still used by the native session's own in-app stats bar) — the two
+  coexist because they answer different questions: "what's this one session's context" vs.
+  "what's this exercise's history everywhere."
+- **Calisthenics-vs-weightlifting is a session-count/percentage chart, not kg-vs-reps.**
+  Weighted volume (kg) and bodyweight volume (reps) are different units and can't share an
+  axis — plotting both as two lines on one chart would be a real dual-axis mistake, not
+  just a style choice. `getSessionMixByWeek` instead classifies each date's *session* as
+  weighted or bodyweight (any weighted set logged that day counts the whole session as
+  weighted, since mixed sessions are common) and buckets by week, so the chart tracks
+  training-style mix as a percentage — a unit both categories can actually share.
+- The overview tiles are genuinely adaptive: a routine with only bodyweight exercises
+  shows only the bodyweight-PR tile, not an empty/zero weighted one, and vice versa.
+
 ### Android signing (`android/debug.keystore`)
 
 The debug keystore is committed to the repo and wired into
@@ -610,12 +667,50 @@ uninstall (and full data loss) on every release. Never regenerate this file casu
 
 ### Design system
 
-Single committed light theme ("Soft Paper" — warm off-white, sage green accent, serif
-headers) defined as CSS custom properties in `src/index.css`, consumed throughout
-`src/App.css`. No dark mode / no `prefers-color-scheme` branching — this was a deliberate
-choice over the previous system-following theme. Icons come from `lucide-react`, looked up
-per-routine via `src/utils/icons.js`'s keyword-based `suggestIconId` (falls back to a
-generic icon) with a manual override stored on the routine.
+Single committed light theme (a warmer revision of the original "Soft Paper" look — warm
+off-white, muted forest green, serif headers) defined as CSS custom properties in
+`src/index.css`, consumed throughout `src/App.css`. No dark mode / no
+`prefers-color-scheme` branching — this was a deliberate choice over the previous
+system-following theme. Icons come from `lucide-react`, looked up per-routine via
+`src/utils/icons.js`'s keyword-based `suggestIconId` (falls back to a generic icon) with a
+manual override stored on the routine.
+
+**Color tokens carry a specific meaning each, not just a palette:**
+- `--accent`/`--good` (muted forest green, `#2f6b4f`) — the app's one primary/positive
+  color: routine completion, active states, primary buttons.
+- `--accent-chart` (`#1f8f5e`, more saturated than `--accent`) — reserved for chart marks
+  (SVG lines/bars/areas) specifically. The muted UI-chrome green reads as "too gray" once
+  it's a thin data line rather than a solid fill — confirmed by running the dataviz
+  skill's categorical-palette validator against it, which flagged `--accent` as below its
+  chroma floor for that use. UI chrome and chart marks are allowed to use two different
+  shades of the same hue; nothing else should introduce a third.
+- `--warn` (`#d9a23b`, gold) — "partial/in-progress," not a caution color. Reused for qty
+  partial-fill bars, dashboard mid-tier completion bars, and `history-cell.partial` — gold
+  rather than orange specifically so it doesn't compete with `--bad`'s red for "something's
+  wrong" attention.
+- `--bad` (`#d96c5f`, warm terracotta) — missed/below-threshold only.
+- `--gold`/`--gold-soft`/`--gold-ink` — kept *distinct* from `--warn`'s gold, reserved
+  specifically for streaks and PRs (the `Flame`-icon streak badge on Today/History items,
+  the "current/longest streak" Dashboard tiles, the bodyweight-PR Fitness Stats tile). The
+  point of splitting this from `--warn` is that "you're on a 12-day streak" and "this task
+  is 60% done" are different kinds of message and shouldn't compete for the same hue.
+- `--seq-1` through `--seq-5` — a sequential single-hue ramp (light to dark, derived from
+  `--accent-chart`) for heatmap magnitude specifically. Kept separate from the
+  status/categorical colors above since a ramp encodes *intensity*, not identity or state.
+
+One CSS gotcha already hit twice: the fixed bottom tab bar (`.app-tabbar`) must have an
+opaque `background` (currently the `Canvas` system color) — `background: inherit`
+resolves to transparent here since `.app-shell` sets no background, which only becomes
+visible once a scrollable view is taller than one screen.
+
+Another one hit once: a flex item can't be forced circular with a fixed `width`+`height`
+pair if it also has `flex: 1` inside a column — the flex algorithm's height distribution
+can resolve to something other than the hardcoded height, while width stays fixed,
+producing an oval. `aspect-ratio: 1 / 1` with `width: auto` (letting width derive from
+whatever height flex settles on, bounded by `min-height`/`max-height`) is the fix — see
+`.workout-ring-tap` in `App.css`, and its native-Compose equivalent
+(`BoxWithConstraints`-based sizing in `MomentumRing`, `WorkoutSessionScreen.kt`) for the
+same bug in the other implementation of the same screen.
 
 One CSS gotcha already hit twice: the fixed bottom tab bar (`.app-tabbar`) must have an
 opaque `background` (currently the `Canvas` system color) — `background: inherit`

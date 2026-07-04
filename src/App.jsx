@@ -281,6 +281,8 @@ function App() {
         {tab === 'routines' && (
           <RoutinesView
             routines={routines}
+            completions={completions}
+            taskVersionsMap={taskVersionsMap}
             onSaveRoutine={handleSaveRoutine}
             onDeleteRoutine={handleDeleteRoutine}
             onToggleRoutineActive={handleToggleRoutineActive}
@@ -288,7 +290,12 @@ function App() {
           />
         )}
         {tab === 'dashboard' && (
-          <DashboardView routines={routines} completions={completions} taskVersionsMap={taskVersionsMap} />
+          <DashboardView
+            routines={routines}
+            completions={completions}
+            taskVersionsMap={taskVersionsMap}
+            workoutLogsByTask={workoutLogsByTask}
+          />
         )}
         {tab === 'history' && (
           <HistoryView routines={routines} completions={completions} taskVersionsMap={taskVersionsMap} />

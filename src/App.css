@@ -322,6 +322,27 @@
   font-weight: 600;
 }
 
+.today-item-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.streak-flame {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.72em;
+  font-weight: 700;
+  color: var(--gold-ink);
+  background: var(--gold-soft);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  flex-shrink: 0;
+}
+
 .today-item-time {
   color: var(--text-soft);
   font-size: 0.85em;
@@ -621,6 +642,17 @@
   margin-top: 0.25rem;
 }
 
+.routine-rate-chip {
+  display: inline-block;
+  font-size: 0.72em;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  margin-top: 0.4rem;
+}
+
 .routine-notes {
   font-size: 0.85em;
   color: var(--text-soft);
@@ -880,7 +912,7 @@
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 0.6rem;
   margin-bottom: 1.2rem;
 }
@@ -898,6 +930,10 @@
   font-size: 1.3em;
   font-weight: 700;
   display: block;
+}
+
+.stat-value.gold {
+  color: var(--gold-ink);
 }
 
 .stat-label {
@@ -958,6 +994,185 @@
   color: var(--text-soft);
 }
 
+.trend-chart.small {
+  height: 60px;
+}
+
+/* ---- Fitness Stats sub-view ---- */
+.fit-overview-row {
+  display: flex;
+  gap: 0.6rem;
+  margin-bottom: 1.2rem;
+}
+
+.fit-overview-tile {
+  flex: 1;
+  padding: 0.85rem 0.7rem;
+  border-radius: var(--radius-sm);
+}
+
+.fit-overview-tile.weighted {
+  background: var(--accent-soft);
+}
+
+.fit-overview-tile.bodyweight {
+  background: var(--gold-soft);
+}
+
+.fo-kind {
+  font-size: 0.62em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-soft);
+}
+
+.fo-num {
+  font-size: 1.5em;
+  font-weight: 700;
+  margin: 0.1rem 0;
+}
+
+.fit-overview-tile.weighted .fo-num {
+  color: var(--accent);
+}
+
+.fit-overview-tile.bodyweight .fo-num {
+  color: var(--gold-ink);
+}
+
+.fo-unit {
+  font-size: 0.6em;
+  font-weight: 600;
+}
+
+.fo-sub {
+  font-size: 0.72em;
+  color: var(--text-soft);
+}
+
+.mix-chart {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  height: 90px;
+  margin-bottom: 0.5rem;
+}
+
+.mix-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.mix-seg.weighted {
+  background: var(--accent-chart);
+}
+
+.mix-seg.bodyweight {
+  background: var(--warn);
+}
+
+.mix-legend {
+  display: flex;
+  justify-content: center;
+  gap: 1.2rem;
+  font-size: 0.72em;
+  color: var(--text-soft);
+  margin-bottom: 1.3rem;
+}
+
+.mix-legend span {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.mix-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.mix-swatch.weighted {
+  background: var(--accent-chart);
+}
+
+.mix-swatch.bodyweight {
+  background: var(--warn);
+}
+
+.exercise-list {
+  margin-bottom: 1.2rem;
+}
+
+.exercise-item {
+  border-bottom: 1px solid var(--card-border);
+}
+
+.exercise-item:last-child {
+  border-bottom: none;
+}
+
+.exercise-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 0;
+  cursor: pointer;
+}
+
+.exercise-head-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.exercise-head-right {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.exercise-type-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.exercise-type-dot.weighted {
+  background: var(--accent-chart);
+}
+
+.exercise-type-dot.reps,
+.exercise-type-dot.duration {
+  background: var(--warn);
+}
+
+.exercise-name {
+  font-weight: 700;
+  font-size: 0.9em;
+}
+
+.exercise-metric {
+  font-size: 0.78em;
+  color: var(--text-soft);
+  text-align: right;
+}
+
+.exercise-metric strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.exercise-detail {
+  padding: 0 0 0.9rem;
+}
+
 .callout-row {
   display: flex;
   gap: 0.6rem;
@@ -992,6 +1207,110 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin: 0 0 0.6rem 0;
+}
+
+.section-subtitle {
+  display: block;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 0.95em;
+  margin-top: 0.15rem;
+}
+
+.consistency-summary {
+  font-weight: 600;
+  font-size: 0.95em;
+  margin-bottom: 0.7rem;
+}
+
+.consistency-pct {
+  font-weight: 400;
+  color: var(--text-soft);
+}
+
+.threshold-chart {
+  position: relative;
+  height: 84px;
+  margin-bottom: 1.3rem;
+}
+
+.threshold-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 100%;
+}
+
+.threshold-bar-col {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+}
+
+.threshold-bar {
+  width: 100%;
+  border-radius: 3px 3px 1px 1px;
+  background: var(--accent-chart);
+}
+
+.threshold-bar.unmet {
+  background: var(--bad);
+}
+
+.threshold-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 50%;
+  border-top: 1.5px dashed var(--text-soft);
+  opacity: 0.55;
+}
+
+.threshold-line-label {
+  position: absolute;
+  right: 0;
+  bottom: 50%;
+  font-size: 0.68em;
+  font-weight: 700;
+  color: var(--text-soft);
+  background: var(--bg);
+  padding-left: 5px;
+  transform: translateY(-135%);
+  z-index: 2;
+}
+
+.heatmap-quiet {
+  display: grid;
+  grid-template-columns: repeat(21, 1fr);
+  gap: 2px;
+  margin-bottom: 1.3rem;
+}
+
+.heatmap-cell-quiet {
+  aspect-ratio: 1;
+  border-radius: 2px;
+}
+
+.heatmap-cell-quiet.seq-1 {
+  background: var(--seq-1);
+}
+.heatmap-cell-quiet.seq-2 {
+  background: var(--seq-2);
+}
+.heatmap-cell-quiet.seq-3 {
+  background: var(--seq-3);
+}
+.heatmap-cell-quiet.seq-4 {
+  background: var(--seq-4);
+}
+.heatmap-cell-quiet.seq-5 {
+  background: var(--seq-5);
+}
+.heatmap-cell-quiet.seq-none {
+  background: var(--card-border);
+  opacity: 0.4;
 }
 
 .breakdown-list {
@@ -1314,11 +1633,18 @@
    fading pulse ring on every tap, so completing a set reads as a small reward. */
 .workout-ring-tap {
   position: relative;
-  width: 220px;
-  height: 220px;
+  /* aspect-ratio (not a fixed height) is what keeps this a perfect circle - a fixed
+     width+height pair alongside flex:1 let the flex algorithm's height distribution
+     float independently of the hardcoded width, producing an oval on any screen where
+     the column's available height differed from 220px. Width is auto so it derives
+     from whatever height flex settles on (bounded by min/max-height below), capped by
+     max-width as a symmetry safety net. */
+  width: auto;
+  aspect-ratio: 1 / 1;
   flex: 1;
   min-height: 180px;
   max-height: 260px;
+  max-width: 260px;
   border: none;
   border-radius: 50%;
   background: none;

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getDashboardStats } from './analytics.js';
+import { getDashboardStats, getOverallConsistency, getLongestOverallStreak } from './analytics.js';
 import { dateToKey } from './date.js';
 
 // Fixed "now" = Tuesday, 2026-07-07 - matches date.test.js so streak/version
@@ -66,6 +66,12 @@ describe('getDashboardStats', () => {
     // Overall = average of (100% + 0%) = 50%.
     expect(stats.completionRate).toBe(50);
     expect(stats.bestStreak).toBe(7);
+    expect(stats.longestStreak).toBe(7);
+    // consistency looks at its own 21-day window regardless of the 'week' range passed in:
+    // the 7 recent days average 50% (right at the default threshold, met), the other 14 in
+    // the window average 0% (weak routine never completes, strong has no data there either)
+    // -> 7 of 21 days met -> 33%.
+    expect(stats.consistency).toMatchObject({ daysMet: 7, totalDueDays: 21, pct: 33 });
 
     expect(stats.perRoutine).toHaveLength(2);
     expect(stats.topRoutine.routine.id).toBe('strong');
@@ -167,5 +173,59 @@ describe('getDashboardStats', () => {
     const labels = stats.trend.map((t) => t.label);
     expect(labels).toContain('Jun');
     expect(labels).toContain('Jul');
+  });
+});
+
+describe('getOverallConsistency', () => {
+  it('counts a day as met when the average completion across routines clears the threshold', () => {
+    const routine = { id: 'r1', title: 'R1', active: true, createdAt: '2020-01-01', tasks: [{ id: 't1' }] };
+    const taskVersionsMap = { t1: [boolVersion()] };
+    const completions = { t1: {} };
+    // Complete on 10 of the last 21 days.
+    for (let i = 0; i < 10; i++) completions.t1[daysAgoKey(i)] = 1;
+    const result = getOverallConsistency([routine], taskVersionsMap, completions, 0.5, 21);
+    expect(result).toMatchObject({ daysMet: 10, totalDueDays: 21, pct: Math.round((10 / 21) * 100) });
+    expect(result.series).toHaveLength(21);
+    expect(result.series.filter((d) => d.met)).toHaveLength(10);
+  });
+
+  it('returns 0/0/0 when nothing was ever due in the window', () => {
+    const routine = { id: 'r1', title: 'R1', active: true, createdAt: '2020-01-01', tasks: [{ id: 't1' }] };
+    const taskVersionsMap = { t1: [boolVersion({ days: [] })] };
+    const result = getOverallConsistency([routine], taskVersionsMap, { t1: {} });
+    expect(result).toMatchObject({ daysMet: 0, totalDueDays: 0, pct: 0 });
+  });
+
+  it('a lower threshold counts partial-completion days that a 100% bar would miss', () => {
+    const routine = {
+      id: 'r1',
+      title: 'R1',
+      active: true,
+      createdAt: '2020-01-01',
+      tasks: [{ id: 't1', completionType: undefined }],
+    };
+    const taskVersionsMap = { t1: [boolVersion()] };
+    // Every day complete -> both thresholds should see 100% consistency.
+    const completions = { t1: {} };
+    for (let i = 0; i < 21; i++) completions.t1[daysAgoKey(i)] = 1;
+    const strict = getOverallConsistency([routine], taskVersionsMap, completions, 1, 21);
+    const lenient = getOverallConsistency([routine], taskVersionsMap, completions, 0.3, 21);
+    expect(strict.pct).toBe(100);
+    expect(lenient.pct).toBe(100);
+  });
+});
+
+describe('getLongestOverallStreak', () => {
+  it('is the best all-time streak across every routine, not just the current one', () => {
+    const routine = { id: 'r1', title: 'R1', active: true, createdAt: '2020-01-01', tasks: [{ id: 't1' }] };
+    const taskVersionsMap = { t1: [boolVersion()] };
+    const completions = { t1: {} };
+    // A 6-day run 15 days ago, nothing recent.
+    for (let i = 15; i < 21; i++) completions.t1[daysAgoKey(i)] = 1;
+    expect(getLongestOverallStreak([routine], taskVersionsMap, completions)).toBe(6);
+  });
+
+  it('returns 0 for an empty routine list', () => {
+    expect(getLongestOverallStreak([], {}, {})).toBe(0);
   });
 });

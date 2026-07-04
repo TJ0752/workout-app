@@ -1,16 +1,35 @@
 :root {
-  --bg: #f7ecd2;
+  --bg: #f7f4ee;
   --card: #ffffff;
-  --card-border: rgba(130, 95, 15, 0.16);
-  --text: #241d10;
-  --text-soft: #8c7f57;
-  --accent: #0a9764;
-  --accent-soft: rgba(10, 151, 100, 0.15);
-  --good: #0a9764;
-  --warn: #e0932a;
-  --warn-soft: rgba(224, 147, 42, 0.17);
-  --bad: #d54b3a;
-  --bad-soft: rgba(213, 75, 58, 0.15);
+  --card-border: rgba(31, 41, 51, 0.09);
+  --text: #1f2933;
+  --text-soft: #6e6a61;
+  --accent: #2f6b4f;
+  --accent-soft: rgba(47, 107, 79, 0.13);
+  /* A more saturated variant of --accent, reserved for chart marks (SVG lines/areas/bars) -
+     the muted UI-chrome green above reads as "too gray" once it's a thin data line rather
+     than a solid fill, confirmed against the dataviz skill's categorical chroma-floor check. */
+  --accent-chart: #1f8f5e;
+  --good: #2f6b4f;
+  /* "Partial/in-progress," not a caution color - reused for qty partial-fill, dashboard
+     mid-tier bars, and history-cell.partial, which is why this is gold rather than orange. */
+  --warn: #d9a23b;
+  --warn-soft: rgba(217, 162, 59, 0.16);
+  --bad: #d96c5f;
+  --bad-soft: rgba(217, 108, 95, 0.14);
+  /* Reserved specifically for streaks/PRs/celebration - kept distinct from --warn's gold so
+     "you're on a 12-day streak" and "this task is 60% done" don't compete for the same hue. */
+  --gold: #e9b449;
+  --gold-soft: rgba(233, 180, 73, 0.16);
+  --gold-ink: #6b4c14;
+  /* Sequential single-hue ramp (light to dark), derived from --accent-chart, for heatmap
+     magnitude - separate from the categorical/status colors above since a ramp encodes
+     intensity, not identity or state. */
+  --seq-1: #eaf4ee;
+  --seq-2: #c5e3d2;
+  --seq-3: #93cbae;
+  --seq-4: #55a87e;
+  --seq-5: #1f8f5e;
   --radius: 18px;
   --radius-sm: 12px;
   --shadow: 0 2px 10px rgba(130, 95, 15, 0.08);

@@ -118,6 +118,29 @@ export function calcRoutineStreak(routine, taskVersionsMap, completions) {
   return streak;
 }
 
+/**
+ * The longest streak ever achieved, not just the live one - the habit equivalent of a fitness
+ * PR. Unlike calcRoutineStreak (which stops the moment a gap is hit and returns just that live
+ * count), this walks the whole lookback window and keeps the longest run seen, including runs
+ * that have since ended.
+ */
+export function calcLongestRoutineStreak(routine, taskVersionsMap, completions, lookbackDays = 365) {
+  const dates = lastNDates(lookbackDays);
+  let longest = 0;
+  let current = 0;
+  for (const date of dates) {
+    const fraction = getRoutineFraction(routine, taskVersionsMap, completions, date);
+    if (fraction === null) continue; // not due that day - doesn't break or extend a run
+    if (fraction === 1) {
+      current += 1;
+      longest = Math.max(longest, current);
+    } else {
+      current = 0;
+    }
+  }
+  return longest;
+}
+
 export function calcRoutineCompletionRate(routine, taskVersionsMap, completions, windowDays = 30) {
   const dates = lastNDates(windowDays);
   const fractions = dates

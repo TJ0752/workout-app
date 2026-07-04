@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ChevronDown, Flame } from 'lucide-react';
 import { getDashboardStats } from '../utils/analytics';
+import { getFitnessOverview } from '../utils/workouts';
 import { getRoutineIcon } from '../utils/icons';
 
 const RANGES = [
@@ -9,6 +10,136 @@ const RANGES = [
   { id: 'all', label: 'All Time' },
 ];
 
+function fmt1(value) {
+  return String(Math.round(value * 10) / 10);
+}
+
+function FitnessStatsPanel({ routines, workoutLogsByTask }) {
+  const [expandedExercise, setExpandedExercise] = useState(null);
+  const overview = useMemo(
+    () => getFitnessOverview(routines, workoutLogsByTask),
+    [routines, workoutLogsByTask]
+  );
+
+  if (!overview.hasWorkouts) {
+    return <p className="empty-state">Log a workout to see fitness stats here.</p>;
+  }
+
+  return (
+    <>
+      {(overview.topWeightedPR || overview.topBodyweightPR) && (
+        <div className="fit-overview-row">
+          {overview.topWeightedPR && (
+            <div className="fit-overview-tile weighted">
+              <div className="fo-kind">Weighted PR</div>
+              <div className="fo-num">
+                {fmt1(overview.topWeightedPR.e1rm.e1rm)}
+                <span className="fo-unit">kg e1RM</span>
+              </div>
+              <div className="fo-sub">{overview.topWeightedPR.name}</div>
+            </div>
+          )}
+          {overview.topBodyweightPR && (
+            <div className="fit-overview-tile bodyweight">
+              <div className="fo-kind">Bodyweight PR</div>
+              <div className="fo-num">
+                {overview.topBodyweightPR.repPR.reps}
+                <span className="fo-unit"> reps</span>
+              </div>
+              <div className="fo-sub">{overview.topBodyweightPR.name}</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {overview.sessionMix.length > 0 && (
+        <>
+          <div className="section-title">
+            Calisthenics vs. weightlifting
+            <span className="section-subtitle">Share of sessions each week - not raw kg vs. reps, which don't compare</span>
+          </div>
+          <div className="mix-chart">
+            {overview.sessionMix.map((w) => (
+              <div className="mix-col" key={w.weekStart} title={`Week of ${w.weekStart}: ${w.weightedPct}% weighted`}>
+                <div className="mix-seg bodyweight" style={{ height: `${100 - w.weightedPct}%` }} />
+                <div className="mix-seg weighted" style={{ height: `${w.weightedPct}%` }} />
+              </div>
+            ))}
+          </div>
+          <div className="mix-legend">
+            <span>
+              <span className="mix-swatch weighted" /> Weightlifting
+            </span>
+            <span>
+              <span className="mix-swatch bodyweight" /> Calisthenics
+            </span>
+          </div>
+        </>
+      )}
+
+      <div className="section-title">By exercise</div>
+      <div className="exercise-list">
+        {overview.exercises.map((ex) => {
+          const latest = ex.series[ex.series.length - 1];
+          const kind = ex.isWeighted ? 'weighted' : ex.repPR ? 'reps' : 'duration';
+          const headline =
+            kind === 'weighted'
+              ? `${fmt1(latest.e1rm)}kg e1RM`
+              : kind === 'reps'
+                ? `${latest.totalReps} reps`
+                : `${latest.totalDuration}s`;
+          const sub =
+            kind === 'weighted'
+              ? `PR ${fmt1(ex.e1rm.e1rm)}kg`
+              : kind === 'reps'
+                ? `PR ${ex.repPR.reps} reps`
+                : `PR ${ex.durationPR.durationSeconds}s`;
+          const seriesValues = ex.series.map((s) =>
+            kind === 'weighted' ? s.e1rm : kind === 'reps' ? s.totalReps : s.totalDuration
+          );
+          const maxSeriesValue = Math.max(1, ...seriesValues);
+          const isOpen = expandedExercise === ex.name;
+
+          return (
+            <div className={`exercise-item ${isOpen ? 'open' : ''}`} key={ex.name}>
+              <div
+                className="exercise-head"
+                onClick={() => setExpandedExercise(isOpen ? null : ex.name)}
+              >
+                <div className="exercise-head-left">
+                  <span className={`exercise-type-dot ${kind}`} />
+                  <span className="exercise-name">{ex.name}</span>
+                </div>
+                <div className="exercise-head-right">
+                  <span className="exercise-metric">
+                    <strong>{headline}</strong>
+                    <br />
+                    {sub}
+                  </span>
+                  <span className={`chevron ${isOpen ? 'open' : ''}`}>
+                    <ChevronDown size={16} />
+                  </span>
+                </div>
+              </div>
+              {isOpen && (
+                <div className="exercise-detail">
+                  <div className="trend-chart small">
+                    {seriesValues.slice(-8).map((v, i) => (
+                      <div className="trend-bar-wrap" key={i}>
+                        <div className="trend-bar" style={{ height: `${(v / maxSeriesValue) * 100}%` }} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
 function barClass(pct) {
   if (pct === null) return '';
   if (pct < 50) return 'low';
@@ -16,7 +147,18 @@ function barClass(pct) {
   return '';
 }
 
-export default function DashboardView({ routines, completions, taskVersionsMap }) {
+// Sequential single-hue ramp for the heatmap - light to dark, matching the app's accent green.
+function heatmapClass(pct) {
+  if (pct === null) return 'seq-none';
+  if (pct === 0) return 'seq-1';
+  if (pct < 40) return 'seq-2';
+  if (pct < 65) return 'seq-3';
+  if (pct < 90) return 'seq-4';
+  return 'seq-5';
+}
+
+export default function DashboardView({ routines, completions, taskVersionsMap, workoutLogsByTask }) {
+  const [screen, setScreen] = useState('overall');
   const [range, setRange] = useState('month');
   const [expanded, setExpanded] = useState(() => new Set());
   const stats = useMemo(
@@ -44,6 +186,19 @@ export default function DashboardView({ routines, completions, taskVersionsMap }
   return (
     <div className="dashboard-view">
       <div className="range-toggle">
+        <button className={screen === 'overall' ? 'active' : ''} onClick={() => setScreen('overall')}>
+          Overall
+        </button>
+        <button className={screen === 'fitness' ? 'active' : ''} onClick={() => setScreen('fitness')}>
+          Fitness Stats
+        </button>
+      </div>
+
+      {screen === 'fitness' ? (
+        <FitnessStatsPanel routines={routines} workoutLogsByTask={workoutLogsByTask} />
+      ) : (
+        <>
+      <div className="range-toggle">
         {RANGES.map((r) => (
           <button key={r.id} className={range === r.id ? 'active' : ''} onClick={() => setRange(r.id)}>
             {r.label}
@@ -57,13 +212,49 @@ export default function DashboardView({ routines, completions, taskVersionsMap }
           <span className="stat-label">COMPLETION RATE</span>
         </div>
         <div className="stat-card">
-          <span className="stat-value">{stats.bestStreak}</span>
-          <span className="stat-label">BEST STREAK</span>
+          <span className="stat-value gold">{stats.bestStreak}</span>
+          <span className="stat-label">CURRENT STREAK</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-value gold">{stats.longestStreak}</span>
+          <span className="stat-label">LONGEST STREAK</span>
         </div>
         <div className="stat-card">
           <span className="stat-value">{stats.totalCompleted}</span>
           <span className="stat-label">COMPLETED</span>
         </div>
+      </div>
+
+      <div className="section-title">
+        Consistency
+        <span className="section-subtitle">Days at or above a 50% minimum - not just perfect days</span>
+      </div>
+      <div className="consistency-summary">
+        {stats.consistency.daysMet} of {stats.consistency.totalDueDays} days ≥ 50%
+        <span className="consistency-pct"> · {stats.consistency.pct}% consistency</span>
+      </div>
+      {stats.consistency.series.length > 0 && (
+        <div className="threshold-chart">
+          <div className="threshold-line" />
+          <span className="threshold-line-label">50% min</span>
+          <div className="threshold-bars">
+            {stats.consistency.series.map((d) => (
+              <div className="threshold-bar-col" key={d.date} title={`${d.date}: ${d.pct}%`}>
+                <div className={`threshold-bar ${d.met ? 'met' : 'unmet'}`} style={{ height: `${d.pct}%` }} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="section-title">
+        Completion heatmap
+        <span className="section-subtitle">Darker = higher completion that day</span>
+      </div>
+      <div className="heatmap-quiet">
+        {stats.consistency.series.map((d) => (
+          <div key={d.date} className={`heatmap-cell-quiet ${heatmapClass(d.pct)}`} title={`${d.date}: ${d.pct}%`} />
+        ))}
       </div>
 
       {stats.trend.length > 1 && (
@@ -179,6 +370,8 @@ export default function DashboardView({ routines, completions, taskVersionsMap }
               </div>
             ))}
           </div>
+        </>
+      )}
         </>
       )}
     </div>

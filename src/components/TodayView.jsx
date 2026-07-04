@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Check, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
-import { getRoutineFraction, getTaskFraction, dateToKey, todayKey, startOfDay } from '../utils/date';
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Flame } from 'lucide-react';
+import { getRoutineFraction, getTaskFraction, dateToKey, todayKey, startOfDay, calcRoutineStreak } from '../utils/date';
+
+// Below this, a streak badge reads as noise rather than a meaningful "you're on a roll" signal.
+const STREAK_BADGE_MIN = 3;
 import { getRoutineIcon } from '../utils/icons';
 import { quickAddAmountsFor } from '../utils/tasks';
 
@@ -94,7 +97,16 @@ function DateNav({ date, onChange }) {
   );
 }
 
-function QuantityControl({ task, completions, dateKey, onAddQuantity, onSetQuantity, now, showCountdown }) {
+function StreakBadge({ streak }) {
+  if (streak < STREAK_BADGE_MIN) return null;
+  return (
+    <span className="streak-flame">
+      <Flame size={11} /> {streak}
+    </span>
+  );
+}
+
+function QuantityControl({ task, completions, dateKey, onAddQuantity, onSetQuantity, now, showCountdown, routineStreak }) {
   const actual = completions[task.id]?.[dateKey] || 0;
   const target = task.target || 0;
   const pct = target ? Math.min(100, Math.round((actual / target) * 100)) : 0;
@@ -105,7 +117,10 @@ function QuantityControl({ task, completions, dateKey, onAddQuantity, onSetQuant
   return (
     <div className="qty-row">
       <div className="qty-top">
-        <span className="today-item-title">{task.title}</span>
+        <span className="today-item-title-row">
+          <span className="today-item-title">{task.title}</span>
+          <StreakBadge streak={routineStreak} />
+        </span>
         <span className={`qty-value ${isComplete ? 'complete' : isPartial ? 'partial' : ''}`}>
           {actual} / {target} {task.unit || ''}
         </span>
@@ -143,7 +158,7 @@ function QuantityControl({ task, completions, dateKey, onAddQuantity, onSetQuant
   );
 }
 
-function WorkoutTaskCard({ task, routine, completions, dateKey, onStartWorkout, isToday }) {
+function WorkoutTaskCard({ task, routine, completions, dateKey, onStartWorkout, isToday, routineStreak }) {
   const fraction = completions[task.id]?.[dateKey] || 0;
   const pct = Math.round(fraction * 100);
   const isComplete = fraction >= 1;
@@ -153,7 +168,10 @@ function WorkoutTaskCard({ task, routine, completions, dateKey, onStartWorkout, 
   return (
     <div className="qty-row">
       <div className="qty-top">
-        <span className="today-item-title">{task.title}</span>
+        <span className="today-item-title-row">
+          <span className="today-item-title">{task.title}</span>
+          <StreakBadge streak={routineStreak} />
+        </span>
         <span className={`qty-value ${isComplete ? 'complete' : fraction > 0 ? 'partial' : ''}`}>
           {exerciseCount} exercise{exerciseCount === 1 ? '' : 's'}
         </span>
@@ -247,6 +265,7 @@ export default function TodayView({
       <ul className="today-list">
         {dueRoutines.map(({ routine, dueTasks }) => {
           const RoutineIcon = getRoutineIcon(routine);
+          const routineStreak = calcRoutineStreak(routine, taskVersionsMap, completions);
 
           if (dueTasks.length === 1) {
             const task = dueTasks[0];
@@ -265,6 +284,7 @@ export default function TodayView({
                       onSetQuantity={onSetQuantity}
                       now={now}
                       showCountdown={isToday}
+                      routineStreak={routineStreak}
                     />
                   </div>
                 </li>
@@ -284,6 +304,7 @@ export default function TodayView({
                       dateKey={dateKey}
                       onStartWorkout={onStartWorkout}
                       isToday={isToday}
+                      routineStreak={routineStreak}
                     />
                   </div>
                 </li>
@@ -302,6 +323,7 @@ export default function TodayView({
                     <RoutineIcon size={18} />
                   </span>
                   <span className="today-item-title">{routine.title}</span>
+                  <StreakBadge streak={routineStreak} />
                   <CountdownLabel
                     time={task.time}
                     windowStart={task.windowStart}
@@ -329,7 +351,10 @@ export default function TodayView({
                   <RoutineIcon size={18} />
                 </span>
                 <div className="group-title">
-                  <span className="name">{routine.title}</span>
+                  <span className="today-item-title-row">
+                    <span className="name">{routine.title}</span>
+                    <StreakBadge streak={routineStreak} />
+                  </span>
                   <span className="meta">
                     {doneTaskCount} of {dueTasks.length} done
                   </span>

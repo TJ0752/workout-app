@@ -1,9 +1,11 @@
 import {
   DAY_LABELS,
   calcRoutineStreak,
+  calcLongestRoutineStreak,
   getRoutineFraction,
   getTaskFraction,
   startOfDay,
+  lastNDates,
 } from './date.js';
 
 function datesBetween(start, end) {
@@ -135,6 +137,41 @@ function routineStatsOverDates(routine, taskVersionsMap, completions, dates) {
   };
 }
 
+/**
+ * How many of the last `windowDays` due-days had an overall completion at or above
+ * `thresholdFraction` - a softer, more forgiving read on reliability than a streak's
+ * all-or-nothing 100% requirement. A routine set sitting at a steady 80% every day scores well
+ * here even though it never posts a single "complete" day for the streak counter. Also returns
+ * the day-by-day series itself so a threshold chart can render each day's bar.
+ */
+export function getOverallConsistency(routines, taskVersionsMap, completions, thresholdFraction = 0.5, windowDays = 21) {
+  const dates = lastNDates(windowDays);
+  const series = [];
+  let daysMet = 0;
+  let totalDueDays = 0;
+  for (const date of dates) {
+    const pct = bucketPct(routines, taskVersionsMap, completions, [date]);
+    if (pct === null) continue;
+    totalDueDays += 1;
+    const met = pct / 100 >= thresholdFraction;
+    if (met) daysMet += 1;
+    series.push({ date: date.toISOString().slice(0, 10), pct, met });
+  }
+  return {
+    daysMet,
+    totalDueDays,
+    pct: totalDueDays === 0 ? 0 : Math.round((daysMet / totalDueDays) * 100),
+    series,
+  };
+}
+
+/** Best all-time streak across every routine, not just each one's live streak - the dashboard
+ * pairs this with getDashboardStats's existing bestStreak (current) the same way a fitness PR
+ * badge sits next to a live progress number. */
+export function getLongestOverallStreak(routines, taskVersionsMap, completions) {
+  return routines.reduce((max, r) => Math.max(max, calcLongestRoutineStreak(r, taskVersionsMap, completions)), 0);
+}
+
 export function getDashboardStats(routines, taskVersionsMap, completions, range) {
   const today = new Date();
   const start = rangeStartDate(range, routines, today);
@@ -156,12 +193,16 @@ export function getDashboardStats(routines, taskVersionsMap, completions, range)
 
   const overallPct = bucketPct(routines, taskVersionsMap, completions, dates);
   const bestStreak = perRoutine.reduce((max, r) => Math.max(max, r.streak), 0);
+  const longestStreak = getLongestOverallStreak(routines, taskVersionsMap, completions);
+  const consistency = getOverallConsistency(routines, taskVersionsMap, completions);
 
   const ranked = perRoutine.filter((r) => r.due > 0).sort((a, b) => b.pct - a.pct);
 
   return {
     completionRate: overallPct === null ? 0 : overallPct,
     bestStreak,
+    longestStreak,
+    consistency,
     totalCompleted: totalCompletedTaskDays,
     perRoutine: ranked,
     topRoutine: ranked[0] || null,

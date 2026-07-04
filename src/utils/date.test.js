@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   calcRoutineCompletionRate,
   calcRoutineStreak,
+  calcLongestRoutineStreak,
   dateToKey,
   findEffectiveVersion,
   getRoutineFraction,
@@ -266,6 +267,57 @@ describe('calcRoutineStreak', () => {
     // Every day in between wasn't due, so should be skipped rather than
     // breaking the run between last Tuesday and today.
     expect(calcRoutineStreak(routine, taskVersionsMap, completions)).toBe(2);
+  });
+});
+
+describe('calcLongestRoutineStreak', () => {
+  function everyDayVersion(overrides = {}) {
+    return boolVersion({ effectiveFrom: '2020-01-01', days: [0, 1, 2, 3, 4, 5, 6], ...overrides });
+  }
+
+  it('finds a run that has since ended, unlike calcRoutineStreak which only sees the live one', () => {
+    const routine = routineWith([{ id: 't1' }]);
+    const taskVersionsMap = { t1: [everyDayVersion()] };
+    const completions = { t1: {} };
+    // A 5-day complete run 10 days ago, then a gap, then nothing recent - the live streak is 0.
+    for (let i = 10; i < 15; i++) {
+      const d = new Date(FIXED_NOW);
+      d.setDate(d.getDate() - i);
+      completions.t1[dateToKey(d)] = 1;
+    }
+    expect(calcRoutineStreak(routine, taskVersionsMap, completions)).toBe(0);
+    expect(calcLongestRoutineStreak(routine, taskVersionsMap, completions)).toBe(5);
+  });
+
+  it('returns the live streak itself when it is also the longest one seen', () => {
+    const routine = routineWith([{ id: 't1' }]);
+    const taskVersionsMap = { t1: [everyDayVersion()] };
+    const completions = { t1: {} };
+    for (let i = 0; i < 3; i++) {
+      const d = new Date(FIXED_NOW);
+      d.setDate(d.getDate() - i);
+      completions.t1[dateToKey(d)] = 1;
+    }
+    expect(calcLongestRoutineStreak(routine, taskVersionsMap, completions)).toBe(3);
+  });
+
+  it('returns 0 when nothing was ever completed', () => {
+    const routine = routineWith([{ id: 't1' }]);
+    const taskVersionsMap = { t1: [everyDayVersion()] };
+    expect(calcLongestRoutineStreak(routine, taskVersionsMap, { t1: {} })).toBe(0);
+  });
+
+  it('does not give today a grace exception the way the live streak does - an incomplete day just does not extend the run', () => {
+    const routine = routineWith([{ id: 't1' }]);
+    const taskVersionsMap = { t1: [everyDayVersion()] };
+    const completions = { t1: {} };
+    for (let i = 1; i <= 4; i++) {
+      const d = new Date(FIXED_NOW);
+      d.setDate(d.getDate() - i);
+      completions.t1[dateToKey(d)] = 1;
+    }
+    // Today is incomplete, but the 4-day run ending yesterday is still the longest seen.
+    expect(calcLongestRoutineStreak(routine, taskVersionsMap, completions)).toBe(4);
   });
 });
 
