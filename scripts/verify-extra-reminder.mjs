@@ -355,6 +355,25 @@ async function main() {
   const broadcastResult = adb(`shell am broadcast -n ${ALARM_RECEIVER} --es taskId "${taskId}" --ei slot 0`);
   console.log('Broadcast result:', broadcastResult.trim());
   console.log('App pid after broadcast:', adbAllowFailure(`shell pidof ${PACKAGE}`).trim(), '(different from before means the process restarted)');
+  // Ground truth from Android's own broadcast dispatcher, not just adb's "completed" echo -
+  // shows per-receiver delivery status (delivered/skipped/blocked) and why, e.g. a "stopped
+  // package" skip that `am broadcast`'s own generic result code would never surface. Keep a
+  // window of context around each match, not just the matching line, since the actual
+  // delivered/skipped verdict is usually on a nearby line, not the one naming the receiver.
+  const broadcastHistoryLines = adbAllowFailure(`shell dumpsys activity broadcasts`).split('\n');
+  const contextWindow = new Set();
+  broadcastHistoryLines.forEach((l, i) => {
+    if (l.includes('ExtraReminderAlarmReceiver') || l.includes(taskId)) {
+      for (let j = Math.max(0, i - 3); j <= Math.min(broadcastHistoryLines.length - 1, i + 5); j++) contextWindow.add(j);
+    }
+  });
+  console.log(
+    'dumpsys activity broadcasts around ExtraReminderAlarmReceiver:',
+    [...contextWindow]
+      .sort((a, b) => a - b)
+      .map((i) => broadcastHistoryLines[i])
+      .join('\n') || '(no matching lines found in broadcast history)'
+  );
 
   // Control broadcast: `adb shell am broadcast`'s own "Broadcast completed: result=0" is printed
   // even when nothing actually handled the intent, so it can't by itself confirm
