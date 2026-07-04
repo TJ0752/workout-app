@@ -359,18 +359,22 @@ async function main() {
     'PASS: workout timer notification survived logging a set, and coexists with the daily summary notification (id-collision regression check).'
   );
 
-  // The blind sweep below can't tell notifications apart by content, so a leftover
-  // plugin-originated notification (e.g. the "Group Test Routine" group-summary from the
-  // earlier catchup-script routines, re-synced on every app boot) sitting above ours in the
-  // shade could absorb a swipe as a TAP instead - its content intent then brings the app back
-  // to the foreground and tears down the workout session as a side effect, which looks like a
-  // false "notification was swiped away" failure but is actually an unrelated notification being
-  // hit. WorkoutTimerService's own notification is posted natively, outside this plugin's
-  // bookkeeping, so this only clears everything else out of the way.
-  console.log('Clearing other plugin-originated notifications before the swipe test...');
+  // The blind sweep below can't tell notifications apart by content, so a leftover native
+  // notification (e.g. a group-summary or due-reminder from an earlier verify script's test
+  // routines, re-synced on every app boot) sitting above ours in the shade could absorb a swipe
+  // as a TAP instead - its content intent then brings the app back to the foreground and tears
+  // down the workout session as a side effect, which looks like a false "notification was swiped
+  // away" failure but is actually an unrelated notification being hit. Every notification in this
+  // app (including the workout timer's own) is now posted through NativeNotificationsPlugin, not
+  // the stock @capacitor/local-notifications plugin - `LocalNotifications.removeAllDeliveredNotifications()`
+  // used to handle this cleanup but stopped clearing anything relevant once nothing schedules
+  // through that plugin anymore (see CLAUDE.md's "Native notifications" section), so this uses
+  // NativeNotifications.clearAllExceptChannel instead, which enumerates and cancels every
+  // currently-posted notification except the workout timer's own channel.
+  console.log('Clearing every other native notification before the swipe test...');
   await page.evaluate(`(async () => {
-    const { LocalNotifications } = window.Capacitor.Plugins;
-    await LocalNotifications.removeAllDeliveredNotifications();
+    const { NativeNotifications } = window.Capacitor.Plugins;
+    await NativeNotifications.clearAllExceptChannel({ channelId: 'workout-session-timer' });
   })()`);
   await sleep(500);
 

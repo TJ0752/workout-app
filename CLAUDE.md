@@ -106,8 +106,11 @@ getting this working:
   over several minutes at a 0% success rate; this is a hard incompatibility, not a race
   worth retrying through. The swipe-resistance check locates its target by screen geometry
   (`adb shell wm size` + a sweep of plausible row Y-positions) instead of a UI dump, and
-  clears every *other* plugin-originated notification first
-  (`LocalNotifications.removeAllDeliveredNotifications()`) so a blind sweep can't
+  clears every *other* notification first
+  (`NativeNotifications.clearAllExceptChannel({ channelId: 'workout-session-timer' })` — see
+  "Native notifications" below; this replaced an earlier call to the stock plugin's
+  `LocalNotifications.removeAllDeliveredNotifications()`, which stopped clearing anything
+  relevant once every notification in the app moved off that plugin) so a blind sweep can't
   accidentally tap a leftover notification from an earlier test routine and tear down the
   session as a side effect — this happened: a stray tap on a re-synced group-summary
   notification brought the app to the foreground and looked exactly like a swipe-resistance
@@ -266,99 +269,102 @@ rely on this.
 
 ### Notifications (`src/notifications.js`)
 
-Two categories, both gated behind `Capacitor.isNativePlatform()` (everything no-ops on
-web):
+**Every notification in the app is posted by native Kotlin** — `@capacitor/local-notifications`
+schedules nothing anymore (see "Native notifications" below for the full native-side design).
+Everything here is gated behind `Capacitor.isNativePlatform()` (no-ops on web). This wasn't the
+original design — the app started with everything on the stock plugin and migrated one
+notification kind at a time as each turned out to need something the plugin couldn't do (see
+"Native notifications" for why); the migration is now complete, so `notifications.js` itself is
+almost entirely thin JS-side orchestration (compute content, decide what should be
+scheduled/cancelled, call the native plugin) rather than scheduling anything on its own.
 
-- **Per-task reminders** — one recurring `LocalNotifications` schedule per task per
-  scheduled weekday, with an `actionTypeId` giving it action buttons (Mark done /
-  `+N` quick-add / Snooze) and an `extra: {taskId, routineId}` payload so the shared
-  `localNotificationActionPerformed` listener (wired in `App.jsx`) knows which task a tap
-  applies to. Action *types* are shared/pre-registered (`registerNotificationActionTypes`)
-  — one per distinct quick-add combination in use plus one for boolean tasks — because
-  Android attaches action buttons to a registered type, not to each notification
-  individually. Multi-task routines' notifications share a `group` string so simultaneous
-  pending reminders collapse together in the shade. `updateRoutineGroupSummary(routine)`
-  additionally posts a real `groupSummary: true` notification (id from `groupSummaryIdFor`,
-  a hash of the routine id offset by `GROUP_SUMMARY_ID_BASE`) whenever a routine has more
-  than one active/scheduled task — confirmed via `dumpsys notification` on a real device
-  that `group`/`groupSummary` map straight to `NotificationCompat.Builder.setGroup()` /
-  `.setGroupSummary()`, not cosmetic. It's cancelled (`cancelRoutineGroupSummary`) the
-  moment a routine drops back to ≤1 active task, and is deliberately NOT `ongoing` — only
-  the per-task due reminders it groups are pinned; the summary itself is swipeable. Kept
-  in sync from every place a routine's active-task count can change:
-  `scheduleTaskNotifications` (per-task schedule/cancel), `handleToggleRoutineActive`, and
-  `handleToggleTaskActive`'s deactivation branch, plus cancelled outright in
-  `handleDeleteRoutine`.
-  - The `task.time` (due-by) reminder itself is **no longer scheduled through
-    `@capacitor/local-notifications`** — see "Native notifications" below for why and how
-    it's posted natively instead. `dismissTaskReminders` (called via
-    `refreshTaskReminderVisibility` from every completion-changing path in `App.jsx`,
-    including notification-action taps) still exists and still clears it once the task is
-    done, now via `nativeDismissDueReminderToday`.
-  - `task.reminderTimes` (extra nudges in addition to `time`) get their *own* ids
-    (`extraReminderIdFor`, one fixed slot per array index, not the reminder's clock value)
-    rather than sharing the due notification's id. This is a hard Android constraint, not
-    a style choice: `LocalNotificationManager` schedules every alarm via
-    `PendingIntent.getBroadcast(context, id, ...)` with `FLAG_CANCEL_CURRENT`, so two
-    alarms scheduled under the same id don't coexist — the later `schedule()` call cancels
-    the earlier one before it ever fires. Slot ids are keyed by array index rather than
-    the time value so `cancelTaskNotifications` can always sweep every slot that could
-    ever have been used, even after the user removes a reminder and the old time is gone
-    from the task object.
-- **Computed notifications** (`syncDynamicNotifications`) — the persistent daily summary
-  (posted natively — see "Native notifications" below), the streak-at-risk nudge, and the
-  morning/evening digests (both still plain `LocalNotifications`). These have no backend
-  and no background-task runner, so their content can only be recomputed when the app is
-  actually open; they're refreshed on every app load and after every completion change
-  (including from a notification action tap). The digests rely on `on: {hour, minute}` (no
-  `weekday`) native daily recurrence to keep firing even if the app isn't reopened — just
-  with whatever content was last computed; a multi-day gap without opening the app means
-  stale content, not a missed notification. `updateSummaryNotification`'s title is a real
-  overall percentage (`Math.round` of the average fraction across today's due routines,
-  reusing the existing `getRoutineFraction` pipeline — no separate math), and its body
-  lists each not-yet-100% routine as `Title NN%` (`formatRoutineProgress`) rather than a
-  plain done/not-done count; it drops `ongoing` once every due routine hits 100%, since
-  there's nothing left to pin.
+- **Per-task reminders** — the `task.time` due-by moment (`nativeScheduleDueReminder`) and each
+  of `task.reminderTimes`' extra nudge times (`nativeScheduleExtraReminder`, one call per slot,
+  capped at `MAX_EXTRA_REMINDERS`) are both scheduled as their own native alarm, each covering
+  every scheduled weekday with a single self-rescheduling `AlarmManager` entry rather than one
+  schedule per (day, slot) the way the stock plugin required. Extra-reminder slots are keyed by
+  array index, not the reminder's clock value, so `nativeCancelExtraReminderSlot` can always
+  sweep exactly the slots that could ever have been used, even after the user removes a reminder
+  and the old time is gone from the task object. `dismissTaskReminders` (called via
+  `refreshTaskReminderVisibility` from every completion-changing path in `App.jsx`, including
+  notification-action taps) clears whichever of these are currently showing for the task once
+  it's marked done, via `nativeDismissDueReminderToday`/`nativeDismissExtraRemindersToday`, without
+  touching the underlying recurring schedule for future days. Multi-task routines' reminders
+  share a `group` string (passed straight to `NotificationCompat.Builder.setGroup()`) so
+  simultaneous pending reminders collapse together in the shade.
+  `updateRoutineGroupSummary(routine)` additionally posts a real native group-summary
+  notification (`nativeUpdateGroupSummary` — confirmed via `dumpsys notification` on a real
+  device that Android's `group`/`groupSummary` collapsing is a genuine OS behavior, not
+  cosmetic) whenever a routine has more than one active/scheduled task, cancelled
+  (`cancelRoutineGroupSummary`) the moment it drops back to ≤1 — deliberately **not**
+  reappear-on-dismiss like the reminders it groups, just plain and swipeable. Kept in sync from
+  every place a routine's active-task count can change: `scheduleTaskNotifications` (per-task
+  schedule/cancel), `handleToggleRoutineActive`, and `handleToggleTaskActive`'s deactivation
+  branch, plus cancelled outright in `handleDeleteRoutine`.
+- **Computed notifications** (`syncDynamicNotifications`) — the persistent daily summary, the
+  streak-at-risk nudge, and the morning/evening digests, all posted natively
+  (`nativeScheduleDailyDigest`/`nativeCancelDailyDigest` for the latter two;
+  `showSummaryNotification`/`cancelSummaryNotification` for the summary). None of these have a
+  real backend, so their content can only be *recomputed* when JS is actually running — they're
+  refreshed on every app load, after every completion change (including from a notification
+  action tap), and now also roughly every 15 minutes while the app process is alive thanks to
+  the native background-sync foreground service (see below) — a real improvement over the
+  original design, where a multi-day gap without opening the app meant stale content on a still
+  correctly-firing digest. `updateSummaryNotification`'s title is a real overall percentage
+  (`Math.round` of the average fraction across today's due routines, reusing the existing
+  `getRoutineFraction` pipeline — no separate math), and its body lists each not-yet-100%
+  routine as `Title NN%` (`formatRoutineProgress`) rather than a plain done/not-done count.
 
-`scheduleTaskNotifications(task, routine, completions)` is the single choke point that
-decides whether a task's reminders actually get scheduled — it checks `task.active`,
+`scheduleTaskNotifications(task, routine, completions)` is the single choke point that decides
+whether a task's reminders actually get scheduled — it checks `task.active`,
 `task.days.length`, and (routine-level pause is deliberately not versioned, see above)
 `routine.active`, all three. This matters because `syncAllNotifications` re-syncs *every*
 routine's tasks whenever *any* routine is saved (`handleSaveRoutine` in `App.jsx` calls it
 with the full current routine list, not just the one edited) — without the `routine.active`
 check here, saving an unrelated routine would silently reschedule reminders for a routine
-the user had paused. Action-type registration (`registerNotificationActionTypes`) is
-unaffected by this gate and registers types for all tasks regardless of active state —
-harmless, since an unused registered type just sits there (confirmed from the native plugin
-source: each action type is written to its own `SharedPreferences` file keyed by id, so
-registrations are additive/idempotent and never clobber each other or get silently dropped).
-`completions` is threaded through this call chain from every site in `App.jsx` purely so it
-can compute `isDoneToday` for the native due-reminder catch-up decision — see "Native
-notifications" below.
+the user had paused. `completions` is threaded through this call chain from every site in
+`App.jsx` purely so it can compute `isDoneToday` for the native due-reminder catch-up decision
+— see "Native notifications" below.
 
-**No live-updating countdown/chronometer in the notification itself, for anything routed
-through `@capacitor/local-notifications`** — this is a real Android `Notification.Builder`
-capability (`setUsesChronometer`) the plugin doesn't expose (open upstream feature request,
-unresolved as of this writing). Not fixable from JS; getting a real fix requires a custom
-native Android plugin — which is exactly what the workout session screen further below
-does, for that one screen. The in-app countdown on the Today screen (`TodayView.jsx`'s
-`CountdownLabel`, ticking via a 60s `setInterval`) remains the fallback everywhere else in
-the app.
+**`@capacitor/local-notifications` stays installed, but schedules nothing.** Its only remaining
+call site is `initNotifications()`'s `checkPermissions()`/`requestPermissions()` — confirmed by
+reading its Android source (`LocalNotificationsPlugin.java`'s `@Permission` annotation) that
+this genuinely requests the runtime `POST_NOTIFICATIONS` permission, and it's the only code path
+in this app that does so. Fully uninstalling it would require an equivalent native permission
+flow on `NativeNotificationsPlugin` (Capacitor's own `@Permission`/`requestPermissionForAlias`
+machinery) — possible, but judged not worth the risk of a plumbing mistake silently breaking
+notification permissions (for every native notification, not just new ones) on a fresh Android
+13+ install, when this one small dependency costs nothing to keep around for exactly this one
+capability. A real future step, not an oversight.
 
-### Native notifications: daily summary + due-by reminder (`android/app/.../notify/`)
+**No live-updating countdown/chronometer in any of these** — that's a real Android
+`Notification.Builder` capability (`setUsesChronometer`) neither the stock plugin nor a plain
+`NotificationCompat.Builder` call gets you for free reason to reach for; it only shows up
+anywhere in this app on the workout session's foreground-service notification further below,
+which is the one notification that's backed by a real running `Service` rather than a one-shot
+`AlarmManager`-fired post. The in-app countdown on the Today screen (`TodayView.jsx`'s
+`CountdownLabel`, ticking via a 60s `setInterval`) remains the fallback everywhere else.
 
-The persistent daily summary and the per-task due-by reminder are posted by a second native
-plugin, `NativeNotificationsPlugin` (`@CapacitorPlugin(name = "NativeNotifications")`,
+### Native notifications (`android/app/.../notify/`)
+
+Every notification in the app is posted by one native plugin, `NativeNotificationsPlugin`
+(`@CapacitorPlugin(name = "NativeNotifications")`,
 `android/app/src/main/java/com/tharuka/routines/notify/`, JS wrapper
-`src/nativeNotifications.js`), not `@capacitor/local-notifications`. This exists to make
-both notifications **reappear immediately if swiped away before they're supposed to be
-dismissed** (task done / nothing left due) — confirmed by reading the stock plugin's native
-source (`TimedNotificationPublisher.java`) that it builds/posts the entire `Notification`
-object natively at `schedule()`-call time with no exposed hook for a custom
-`setDeleteIntent()`, and its own `NotificationDismissReceiver` never calls back to JS for
-any notification type. Extra reminder nudges, the group-summary notification, and the
-morning/evening/streak-risk digests are untouched by this and stay on the stock plugin (see
-above).
+`src/nativeNotifications.js`). This wasn't a single migration — it happened in two passes, for
+two different reasons:
+
+1. **The persistent daily summary and the per-task due-by reminder** moved first, specifically
+   to make both notifications **reappear immediately if swiped away before they're supposed to
+   be dismissed** (task done / nothing left due) — confirmed by reading the stock plugin's
+   native source (`TimedNotificationPublisher.java`) that it builds/posts the entire
+   `Notification` object natively at `schedule()`-call time with no exposed hook for a custom
+   `setDeleteIntent()`, and its own `NotificationDismissReceiver` never calls back to JS for any
+   notification type.
+2. **Everything else** (extra reminders, the multi-task group summary, and the morning/evening/
+   streak-risk digests) moved in a second pass, for consistency/reliability rather than any one
+   specific missing capability — plus a new **persistent background-sync foreground service**
+   (see below) that keeps the app process alive so all of this computed content can actually
+   stay fresh without the user reopening the app.
 
 **"Reappear on dismiss," not true non-dismissibility — a real Android policy change, not a
 missing flag.** Android 13 made foreground-service notifications swipe-dismissible by
@@ -369,34 +375,48 @@ confirmed against official Android docs
 `.../about/versions/14/behavior-changes-14`) and matching third-party reports (the `notifee`
 library hit the identical regression). True non-dismissibility is off the table on modern
 Android for any notification type this app could use; "briefly disappears on swipe, then
-immediately reposts if not yet legitimately satisfied" is the actual achievable goal both
-notifications below implement.
+immediately reposts if not yet legitimately satisfied" is the actual achievable goal the due
+reminder and summary implement below — every other notification in this section is plain and
+swipeable by design (it always was, even on the stock plugin), so this constraint doesn't apply
+to them.
 
 Same constraint as the workout session below applies here too: native code must never touch
 the app's SQLite file directly, so all persisted state for this plugin lives in
-SharedPreferences (`SummaryNotificationStore`, `DueReminderStore`), never the DB —
+SharedPreferences (`SummaryNotificationStore`, `DueReminderStore`, `ExtraReminderStore`,
+`DailyDigestStore` — the group summary needs no store at all, see Part D), never the DB —
 `storage.js` remains the sole DB reader/writer.
 
-**Notification-id ranges are split across JS and Kotlin (and across two separate Kotlin
-packages) and must stay disjoint** — nothing enforces this invariant automatically, so any
-new hardcoded id needs to be checked against this whole list by hand. JS owns
-`notificationIdFor`/`snoozeIdFor` (roughly 0–9,999,999), `EXTRA_REMINDER_ID_BASE =
-500,000,000`, `GROUP_SUMMARY_ID_BASE = 700,000,000`, and digests at
-`900,000,002`–`900,000,004`. `notify/` (this package) owns `DUE_REMINDER_ID_BASE =
-600,000,000` (one id per task via `DUE_REMINDER_ID_BASE + hashToInt(taskId)`, a Kotlin port
-of the id-hashing scheme that doesn't need bit-for-bit parity with the JS version since the
-two live in disjoint ranges) and `SUMMARY_NOTIFICATION_ID = 800,000,001`. `workout/`'s
-`WorkoutTimerService.NOTIFICATION_ID = 850,000,001` (see below) is a *third*, independently
-maintained id in yet another package — **this is exactly the gap that caused a real
-collision**: `WorkoutTimerService` originally hardcoded `800000001` before this native
-notifications migration existed, and when this migration picked `800,000,001` for the daily
-summary, nothing cross-referenced the already-existing workout package. Since
-`updateSummaryNotification` fires on every completion change — including every set logged
-during a workout — the two notifications fought over one raw id for the entire duration of
-any workout session (`startForeground(800000001, ...)` vs. plain `notify(800000001,
-...)`/`cancel(800000001)`), which crashed/froze the app. Fixed by moving the workout timer
-to `850,000,001`. **Any future new native notification id must be checked against every
-range in this paragraph, not just the ones in its own package.**
+**Notification-id ranges are split across three independently-maintained Kotlin packages and
+must stay disjoint** — nothing enforces this invariant automatically, so any new hardcoded id
+needs to be checked against this whole list by hand:
+- `notify/` (this package): `DUE_REMINDER_ID_BASE = 600,000,000` (one id per task via
+  `DUE_REMINDER_ID_BASE + hashToInt(taskId)`), `SUMMARY_NOTIFICATION_ID = 800,000,001`,
+  `EXTRA_REMINDER_ID_BASE = 450,000,000` (one id per `(taskId, slot)` via
+  `EXTRA_REMINDER_ID_BASE + hashToInt("$taskId:$slot")`), `GROUP_SUMMARY_ID_BASE =
+  700,000,000` (one id per routine via `GROUP_SUMMARY_ID_BASE + hashToInt(routineId)`),
+  `MORNING_DIGEST_ID = 900,000,002`, `EVENING_DIGEST_ID = 900,000,003`, `STREAK_RISK_ID =
+  900,000,004` (fixed, not hashed — only ever these 3 digest kinds), and
+  `BACKGROUND_SYNC_NOTIFICATION_ID = 950,000,001` (also fixed — exactly one background-sync
+  notification ever exists).
+- `workout/`'s `WorkoutTimerService.NOTIFICATION_ID = 850,000,001` (see below) is a *second*,
+  independently maintained id in a completely different package — **this is exactly the gap
+  that caused a real collision**: `WorkoutTimerService` originally hardcoded `800000001` before
+  the native notifications migration existed, and when that migration picked `800,000,001` for
+  the daily summary, nothing cross-referenced the already-existing workout package. Since
+  `updateSummaryNotification` fires on every completion change — including every set logged
+  during a workout — the two notifications fought over one raw id for the entire duration of
+  any workout session (`startForeground(800000001, ...)` vs. plain `notify(800000001,
+  ...)`/`cancel(800000001)`), which crashed/froze the app. Fixed by moving the workout timer to
+  `850,000,001`.
+- The old JS-side id constants this replaced (`notificationIdFor`/`snoozeIdFor`,
+  `EXTRA_REMINDER_ID_BASE = 500,000,000`, `GROUP_SUMMARY_ID_BASE = 700,000,000` (JS-side —
+  coincidentally the same numeric value the native `GROUP_SUMMARY_ID_BASE` above now uses, pure
+  coincidence since the two never coexisted), `MORNING_DIGEST_ID`/`EVENING_DIGEST_ID`/
+  `STREAK_RISK_ID`) are gone entirely — nothing in `src/notifications.js` schedules anything
+  under a raw numeric id anymore, native code owns every id in this app.
+
+**Any future new native notification id must be checked against every range in this list, not
+just the ones in its own package.**
 
 **Part A — summary.** `showSummary`/`cancelSummary` write the `{title, body, ongoing}`
 content to `SummaryNotificationStore` *before* posting/cancelling, in that order — this
@@ -427,7 +447,9 @@ one boundary. Alarms are one-shot and self-reschedule on every fire
 `AlarmManager.setRepeating()`, mirroring the stock plugin's own confirmed
 `TimedNotificationPublisher` self-rescheduling; exact-alarm scheduling degrades gracefully
 via `canScheduleExactAlarms()` the same way the stock plugin does, never hard-requiring
-`SCHEDULE_EXACT_ALARM`.
+`SCHEDULE_EXACT_ALARM`. This same `arm()`/`armAt()`/`canScheduleExactAlarms()` pattern, and the
+same day-of-week conversion, is reused as-is by `ExtraReminderScheduler` (Part C) and
+`DailyDigestScheduler` (Part E) below.
 
 - **The `isDoneToday`/catch-up mechanism, and a real regression found and fixed during the
   cutover.** `DueReminderScheduler.schedule()` takes an `isDoneToday` boolean computed by
@@ -446,8 +468,10 @@ via `canScheduleExactAlarms()` the same way the stock plugin does, never hard-re
   reschedule, which defeated the no-op-if-unchanged comparison above on literally every
   single sync, since there was never a previous entry left to compare against — fixed by
   splitting a `cancelStockNotifications` helper (extra reminders/snooze/legacy per-day ids,
-  safe to re-run every sync) out of the full `cancelTaskNotifications` (which also clears
-  the native due reminder, called only when a task is genuinely being removed or paused).
+  safe to re-run every sync — since deleted entirely, once extra reminders moved off the stock
+  plugin too and there was nothing stock-side left to sweep) out of the full
+  `cancelTaskNotifications` (which also clears the native due reminder, called only when a task
+  is genuinely being removed or paused).
 - **Reappear-on-dismiss and action buttons.** `DueReminderDismissReceiver` (the delete-intent
   target) reposts if `awaitingCompletion` is still `true`, no-ops otherwise.
   `DueReminderActionReceiver` + `DueReminderBridge` (a same-process singleton, the same
@@ -459,35 +483,166 @@ via `canScheduleExactAlarms()` the same way the stock plugin does, never hard-re
   in `NativeNotificationsPlugin.load()` — an accepted tradeoff: unlike the stock plugin, a
   cold-start Mark-done tap visibly brings the app forward, matching what already happens
   tapping the notification body today, not a new class of behavior. Snooze never touches
-  completions (a pure +15min re-post, matching the stock plugin's own `scheduleSnooze`), so
-  it's handled entirely natively by re-arming the same per-task alarm slot via `armAt()` —
-  no JS round-trip needed.
+  completions (a pure +15min re-post, matching the stock plugin's own original `scheduleSnooze`,
+  since deleted), so it's handled entirely natively by re-arming the same per-task alarm slot
+  via `armAt()` — no JS round-trip needed. The dispatch function itself
+  (`dispatchDueReminderAction`, top-level in `DueReminderActionReceiver.kt`, not a method on the
+  class) is reused as-is by `ExtraReminderActionReceiver` (Part C) for its own Mark-done/`+N`
+  handling — JS's `"dueReminderAction"` listener dispatches purely by `actionId`/`taskId`, with
+  no notion of which native mechanism sent it, so no second JS listener was needed for extra
+  reminders.
 - **Boot survival.** `DueReminderBootReceiver` (manifest, `directBootAware="true"`, listens
   for `BOOT_COMPLETED`/`LOCKED_BOOT_COMPLETED`/`QUICKBOOT_POWERON`, needs
   `RECEIVE_BOOT_COMPLETED` added explicitly since the stock plugin's own manifest contract
   shouldn't be load-bearing for a completely different notification type) re-arms every
   `DueReminderStore` entry on boot — `AlarmManager` alarms do **not** survive reboot on
   their own, confirmed by the stock plugin needing its own equivalent
-  (`LocalNotificationRestoreReceiver`) for the exact same reason.
+  (`LocalNotificationRestoreReceiver`) for the exact same reason. `ExtraReminderBootReceiver`
+  and `DailyDigestBootReceiver` (Parts C and E) mirror this exactly, one per store.
 
-**Realistic risk, stated up front, not chased further:** OEM background-process killing
-(OnePlus/OxygenOS is known for being unusually aggressive here) can still prevent alarms and
-receivers from ever firing again once the OS evicts the process — no app-level code fully
-overcomes this. The emulator verification below (a clean `adb reboot`, or a broadcast
-straight to a receiver) proves the wiring is correct; it does not prove survival against OEM
-battery-optimization eviction, which CI cannot simulate.
+**Part C — extra reminders.** `ExtraReminderStore`/`ExtraReminderScheduler`/
+`ExtraReminderNotificationBuilder`/`ExtraReminderAlarmReceiver` are their own small, dedicated
+file set (not a generalization of the due-reminder classes) keyed by `"$taskId:$slot"` — deliberately
+mirroring Part B's shape rather than sharing it, both because a task can have up to
+`MAX_EXTRA_REMINDERS` of these per task (vs. exactly one due reminder) and to avoid regressing
+the already-verified due-reminder path while adding this. The one real difference from the due
+reminder: **no catch-up/overdue-today logic** — these were always plain one-shot nudges leading
+up to the real due-by moment, never pinned/reappearing, so `ExtraReminderScheduler.schedule()`
+is just "is the content the same as last time, and if not, save + re-arm," with no `isDoneToday`
+parameter and no immediate-fire path. Same Mark-done/`+N`/Snooze actions as the due reminder
+(reusing `dispatchDueReminderAction`, see Part B), but no delete-intent — swiping one away just
+dismisses it, same as it always did.
 
-`scripts/verify-due-reminder.mjs` proves the due-reminder catch-up and reappear-on-dismiss
-behavior on a real emulator (see "Real-device verification" above) — its dismiss check needs
-an actual swipe gesture (`uiautomator dump` + `adb shell input swipe`, safe here since this
-notification has no chronometer-driven ticking text, unlike the workout timer below), not a
-broadcast straight to `DueReminderDismissReceiver` like the summary check gets, since the
-due reminder's delete-intent carries a per-task `taskId` extra this script has no way to
-know independently (the id is `crypto.randomUUID()`-generated inside the app and never
+**Part D — group summary.** The simplest of the bunch: no alarm, no persisted store at all.
+`buildAndPostGroupSummaryNotification(context, routineId, title, activeTaskCount)`
+(`GroupSummaryNotificationBuilder.kt`) builds and posts directly, the same "compute now, post
+now" shape as the summary notification's own `showSummary` — the caller (JS, via
+`updateRoutineGroupSummary`) already recomputes and re-calls this on every routine-active-task-
+count change, so there's nothing to reconcile against on a resync. Reuses the
+`routine-reminders` channel (the same one the due/extra reminders it groups use), and is
+deliberately plain/swipeable, not reappear-on-dismiss — see Part B's explanation of which
+notifications actually need that behavior and which don't.
+
+**Part E — daily digests.** Morning digest, evening digest, and streak-risk are structurally
+identical (single computed title/body, fires once a day at one hour:minute, no actions, plain
+dismissible) — unlike extra reminders, these genuinely warrant one shared mechanism rather than
+three near-duplicate file sets. `DailyDigestEntry(kind, title, body, hour, minute)` +
+`DailyDigestStore` are keyed by `kind` (`"morning"` / `"evening"` / `"streak-risk"`), and
+`DailyDigestScheduler` arms one alarm per kind across every day of the week (`days=[0..6]`),
+through the same `computeNextOccurrenceDaysFromNow`/no-op-if-unchanged pattern as Parts B/C. No
+catch-up logic here either — digest/streak-risk content is recomputed and re-pushed by JS on
+every sync, not caught up natively; a gap without a resync just means stale content on an
+otherwise still-firing daily notification, matching this feature's original design from before
+the native migration. Streak-risk is the one kind that ever needs `cancelDailyDigest` (morning/
+evening always have *some* content, even "Nothing due today") — and unlike a plain resync,
+resolving a streak needs the *already-showing* notification actively removed, not just the next
+day's alarm skipped, since the alarm that would otherwise refresh/clear it isn't due for another
+24h. `cancelDailyDigest` therefore calls `NotificationManagerCompat.cancel(...)` in addition to
+clearing the store and the pending alarm, the same pattern `cancelGroupSummary`/`cancelSummary`
+already established — a gap in the first version of this method (it only cleared the store/alarm,
+leaving a resolved streak's notification visibly stuck until manually swiped) caught by writing
+`scripts/verify-daily-digest.mjs`'s cancel-when-resolved check before declaring this migration
+stage done, not after.
+
+### Persistent background-sync foreground service (`BackgroundSyncService.kt`)
+
+None of the computed notifications above (summary, streak-risk, digests) can be freshly computed
+by native code — they need SQLite completions data, and native code must never touch the app's
+DB directly (see above) — so their content is only ever as fresh as the last time JS actually
+ran `syncDynamicNotifications`. Before this service existed, that meant app-open and
+completion-change only; leaving the app running in the background for hours (without force-
+closing it, but also without interacting with it) produced stale digest/summary/streak-risk
+content, since nothing ever re-triggered a resync on its own.
+
+`BackgroundSyncService` is a low-priority, always-on foreground service — the same underlying
+mechanism as the workout timer below, applied to a different problem — that keeps the app
+process (and its JS engine) alive indefinitely once the app has been opened, and ticks every 15
+minutes (`TICK_INTERVAL_MS`, a `Handler(Looper.getMainLooper())` self-rescheduling
+`postDelayed` loop — no `WorkManager` needed, since the service itself is the long-lived
+context) to re-run the same JS sync an app-open already runs. Started unconditionally from
+`NativeNotificationsPlugin.load()` — which fires once per app-process/bridge lifecycle,
+independent of Activity foreground/background state, matching "as long as the app process is
+running" rather than being tied to one Activity instance the way starting it from
+`MainActivity.onCreate()` would be. `BackgroundSyncBridge` (a same-process singleton, the same
+`var onTick: (() -> Unit)?` idiom as `DueReminderBridge`/`WorkoutSessionBridge`) calls
+`notifyListeners("backgroundSyncTick", ..., true)` on every tick; `initBackgroundSyncListener`
+in `src/nativeNotifications.js` wires this to the exact same `refreshAll()` →
+`syncAllNotifications` → `syncDynamicNotifications` sequence App.jsx's own app-open effect
+already runs, in the same top-level `useEffect`.
+
+- **`specialUse`, not `dataSync`, as the foreground service type — confirmed against current
+  Android docs before implementation, not assumed.** `dataSync` looked like the obvious
+  semantic fit for "periodically sync data in the background," but Android 15+ (this app
+  targets SDK 36) caps `dataSync`/`mediaProcessing` foreground services at 6 cumulative hours
+  per 24-hour period while the app is backgrounded — after which the system calls
+  `Service.onTimeout()` and requires `stopSelf()` within seconds or throws a fatal
+  `RemoteServiceException`. That limit would have silently killed this exact feature (staying
+  alive for many hours while backgrounded, which is the entire point) a few hours into any day
+  the app isn't reopened. A first pass at researching this (a single `WebFetch` on Android's
+  timeout docs) came back with an incorrect summary ("no time limit for `dataSync`"); a
+  follow-up `WebSearch` for the same question surfaced a more literal excerpt confirming the
+  real 6-hour cap — this project has been burned twice before by trusting a single
+  confidently-wrong source on an Android platform-behavior question (the workout timer's
+  `ACTIVITY_RECOGNITION` crash and its "promoted" notification API that failed to compile), so
+  cross-checking a load-bearing platform claim against a second source before writing code
+  against it is now the standing practice, not a one-off. `specialUse` has no such execution
+  cap — Android's documented catch-all for foreground-service use cases that don't fit a
+  specific category — at the cost of a
+  `<property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="..."/>`
+  manifest declaration and the `FOREGROUND_SERVICE_SPECIAL_USE` permission (no runtime prompt),
+  plus (only relevant if this app ever ships to the Play Store, which it doesn't today — see
+  "Android build" above) Play Console justification-review friction.
+- **Notification and Stop action.** Ongoing, `onlyAlertOnce`, "Daily Routines" / "Keeping
+  reminders and summaries up to date", on its own `background-sync` channel
+  (`IMPORTANCE_MIN`, created by the service itself since only it ever posts to this channel —
+  unlike the other three channels, which live in the shared `createNotificationChannels()`
+  below). One "Stop" action (`BackgroundSyncActionReceiver` → `ServiceCompat.stopForeground(...,
+  STOP_FOREGROUND_REMOVE)` + `stopSelf()`, the same explicit-detach-before-stop pattern the
+  workout timer needed — see below for why `stopSelf()` alone isn't sufficient) gives the user
+  an escape hatch. Stopping is **session-scoped only** — there's no persisted "disabled" flag,
+  so reopening the app restarts it via `load()` again on the next cold start. Good enough for a
+  v1 opt-out; a user who wants it permanently off would need to force-stop the app itself
+  instead, which already fully prevents any background activity.
+- **Testability.** `triggerBackgroundSyncTick()` (`NativeNotificationsPlugin`) exists purely so
+  `scripts/verify-background-sync.mjs` can fire a tick on demand via `Runtime.evaluate` instead
+  of waiting a real 15 minutes in CI — it calls `BackgroundSyncBridge.onTick?.invoke()` directly,
+  bypassing the `Handler` loop entirely.
+
+**Same OEM-battery-optimization caveat as the due reminder applies here, arguably more so** —
+this is a long-lived foreground service, exactly the kind of thing aggressive OEM battery
+management (OnePlus/OxygenOS named specifically in Part B above) is most likely to kill outright
+regardless of `specialUse`'s lack of an OS-level execution cap. A `specialUse` foreground
+service with a visible notification is the strongest signal this app can give the OS that it
+should be left alone, but it's still a signal, not a guarantee — no app-level code fully
+overcomes an OEM that's decided to kill background processes aggressively.
+
+**Verification.** `scripts/verify-due-reminder.mjs` proves the due-reminder catch-up and
+reappear-on-dismiss behavior on a real emulator (see "Real-device verification" above) — its
+dismiss check needs an actual swipe gesture (`uiautomator dump` + `adb shell input swipe`, safe
+here since this notification has no chronometer-driven ticking text, unlike the workout timer
+below), not a broadcast straight to `DueReminderDismissReceiver` like the summary check gets,
+since the due reminder's delete-intent carries a per-task `taskId` extra this script has no way
+to know independently (the id is `crypto.randomUUID()`-generated inside the app and never
 exposed to the DOM or `dumpsys`). `scripts/verify-group-summary.mjs` covers the (unrelated)
-group-summary notification and the summary's own reappear-on-dismiss check, which *can* use
-a plain no-args broadcast since its delete-intent carries no per-instance extra. Both
-replace the older, single `verify-notification-catchup.mjs`.
+group-summary notification and the summary's own reappear-on-dismiss check, which *can* use a
+plain no-args broadcast since its delete-intent carries no per-instance extra.
+`scripts/verify-extra-reminder.mjs` solves the same per-task-id problem a different way: since
+extra reminders have no catch-up path to lean on (see Part C), it reads the app-generated task
+id directly off the app's own already-open SQLite connection via
+`window.Capacitor.Plugins.CapacitorSQLite.query(...)` (a page-JS-side read through the
+connection the app itself owns, not a second SQLite driver — see the workout session section
+below for why that distinction matters), then broadcasts straight to
+`ExtraReminderAlarmReceiver`/`ExtraReminderActionReceiver` to exercise the alarm-fire and
+Mark-done/Snooze paths deterministically. `scripts/verify-daily-digest.mjs` covers all 3 digest
+kinds, including streak-risk's cancel-when-resolved path (calling
+`NativeNotifications.scheduleDailyDigest`/`cancelDailyDigest` directly to simulate "at risk" and
+"resolved," rather than re-deriving real multi-day streak state through the UI just to exercise
+native plumbing already covered structurally by the mocked-Capacitor unit tests).
+`scripts/verify-background-sync.mjs` writes a completion directly through the SQLite plugin
+(bypassing `storage.js` and every JS path that would normally trigger a resync on its own) to
+isolate the tick's own effect, then calls `triggerBackgroundSyncTick()` and confirms the summary
+notification picks up the change, before confirming the Stop action removes the notification.
+All five replace the older, single `verify-notification-catchup.mjs` this project started with.
 
 ### Native Android workout session (`android/shared/`, `android/app/.../workout/`)
 

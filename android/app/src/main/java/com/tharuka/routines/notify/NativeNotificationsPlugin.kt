@@ -1,5 +1,6 @@
 package com.tharuka.routines.notify
 
+import android.app.NotificationManager
 import androidx.core.app.NotificationManagerCompat
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -164,6 +165,15 @@ class NativeNotificationsPlugin : Plugin() {
         call.resolve()
     }
 
+    /**
+     * Called when a task's reminder-time count shrinks (an excess slot is dropped, not just
+     * rescheduled) - cancels the pending alarm *and* whatever's already showing for this slot,
+     * matching cancelGroupSummary/cancelSummary/dismissDueReminderToday's already-established
+     * "cancel means fully retract, not just stop future recurrence" pattern elsewhere in this
+     * plugin. Without this, a since-removed reminder slot that had already fired once would
+     * linger in the shade indefinitely (autoCancel only clears it on a user tap, never
+     * automatically) even though nothing would ever schedule it again.
+     */
     @PluginMethod
     fun cancelExtraReminderSlot(call: PluginCall) {
         val taskId = call.getString("taskId")
@@ -173,6 +183,7 @@ class NativeNotificationsPlugin : Plugin() {
             return
         }
         ExtraReminderScheduler.cancel(context, taskId, slot)
+        NotificationManagerCompat.from(context).cancel(extraReminderNotificationId(taskId, slot))
         call.resolve()
     }
 
@@ -184,6 +195,10 @@ class NativeNotificationsPlugin : Plugin() {
             return
         }
         ExtraReminderScheduler.cancelAllForTask(context, taskId)
+        val notificationManager = NotificationManagerCompat.from(context)
+        for (slot in 0 until MAX_EXTRA_REMINDERS) {
+            notificationManager.cancel(extraReminderNotificationId(taskId, slot))
+        }
         call.resolve()
     }
 
@@ -250,6 +265,13 @@ class NativeNotificationsPlugin : Plugin() {
         call.resolve()
     }
 
+    /**
+     * Streak-risk is the one digest kind this is ever called for (see
+     * updateStreakRiskNotification in src/notifications.js) - once a streak is no longer at
+     * risk, this needs to actively remove whatever's currently showing, not just stop tomorrow's
+     * recurrence, since the alarm that would otherwise refresh/clear it isn't due for another
+     * 24h. Mirrors cancelGroupSummary/cancelSummary's already-established pattern.
+     */
     @PluginMethod
     fun cancelDailyDigest(call: PluginCall) {
         val kind = call.getString("kind")
@@ -258,6 +280,7 @@ class NativeNotificationsPlugin : Plugin() {
             return
         }
         DailyDigestScheduler.cancel(context, kind)
+        NotificationManagerCompat.from(context).cancel(dailyDigestNotificationId(kind))
         call.resolve()
     }
 
@@ -269,6 +292,32 @@ class NativeNotificationsPlugin : Plugin() {
     @PluginMethod
     fun triggerBackgroundSyncTick(call: PluginCall) {
         BackgroundSyncBridge.onTick?.invoke()
+        call.resolve()
+    }
+
+    /**
+     * Test-only hook for scripts/verify-workout-session-notification.mjs's swipe-resistance
+     * check - clears every currently-posted notification except the given channel (the workout
+     * timer's own "workout-session-timer" channel) so a blind coordinate-based swipe can't
+     * accidentally land on a leftover notification from another verify script's test routine and
+     * get mistaken for a swipe-resistance failure (this exact failure mode is documented in
+     * CLAUDE.md - it happened for real once, with a stray tap on a re-synced group-summary
+     * notification). This replaces the pre-migration cleanup call to the stock plugin's
+     * `LocalNotifications.removeAllDeliveredNotifications()`, which stopped clearing anything
+     * relevant once every notification in this app moved off that plugin.
+     * `NotificationManager.getActiveNotifications()` is a self-inspection API (no
+     * NotificationListenerService needed) - any app can enumerate its own currently-posted
+     * notifications this way.
+     */
+    @PluginMethod
+    fun clearAllExceptChannel(call: PluginCall) {
+        val keepChannelId = call.getString("channelId")
+        val manager = context.getSystemService(NotificationManager::class.java)
+        for (sbn in manager.activeNotifications) {
+            if (sbn.notification.channelId != keepChannelId) {
+                manager.cancel(sbn.id)
+            }
+        }
         call.resolve()
     }
 }
