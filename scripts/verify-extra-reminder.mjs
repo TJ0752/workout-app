@@ -321,9 +321,24 @@ async function main() {
   if (!taskId) fail('Could not find the created task\'s id via a direct SQLite query.');
   console.log('Resolved task id via SQLite query:', taskId);
 
+  // Ground-truth check: read ExtraReminderStore's SharedPreferences file directly (debug builds
+  // allow `run-as`) to tell apart "the entry was never persisted" (a JS/native scheduling bug)
+  // from "it was persisted but the broadcast/receiver didn't find it" (a broadcast-targeting
+  // bug) - a prior run failed here with no visible JS-side error and a clean
+  // "Broadcast completed: result=0", which is equally consistent with either cause.
+  const pidBeforeBroadcast = adbAllowFailure(`shell pidof ${PACKAGE}`).trim();
+  console.log('App pid before broadcast:', pidBeforeBroadcast);
+  console.log(
+    'ExtraReminderStore SharedPreferences before broadcast:',
+    adbAllowFailure(
+      `shell run-as ${PACKAGE} cat /data/data/${PACKAGE}/shared_prefs/native_notifications_extra_reminders.xml`
+    ) || '(empty/unreadable)'
+  );
+
   console.log('Broadcasting directly to ExtraReminderAlarmReceiver (slot 0) to fire the alarm...');
   const broadcastResult = adb(`shell am broadcast -n ${ALARM_RECEIVER} --es taskId "${taskId}" --ei slot 0`);
   console.log('Broadcast result:', broadcastResult.trim());
+  console.log('App pid after broadcast:', adbAllowFailure(`shell pidof ${PACKAGE}`).trim(), '(different from before means the process restarted)');
 
   const posted = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === CHANNEL_ID && r.title === TASK_TITLE && !r.ongoing),
@@ -331,6 +346,12 @@ async function main() {
     10000
   );
   if (!posted) {
+    console.log(
+      'ExtraReminderStore SharedPreferences after broadcast:',
+      adbAllowFailure(
+        `shell run-as ${PACKAGE} cat /data/data/${PACKAGE}/shared_prefs/native_notifications_extra_reminders.xml`
+      ) || '(empty/unreadable)'
+    );
     console.log(dumpOwnPackageForDebugging());
     fail('No plain (non-ongoing) routine-reminders notification appeared after broadcasting to ExtraReminderAlarmReceiver.');
   }
