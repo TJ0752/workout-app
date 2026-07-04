@@ -265,7 +265,7 @@ async function main() {
   const bgNotification = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === BG_SYNC_CHANNEL_ID),
     (r) => Boolean(r),
-    10000
+    20000
   );
   if (!bgNotification) {
     console.log(dumpOwnPackageForDebugging());
@@ -305,7 +305,7 @@ async function main() {
   const taskId = await pollFor(
     () => page.evaluate(`window.__test.queryTaskId(${JSON.stringify(TASK_TITLE)})`),
     (id) => Boolean(id),
-    10000
+    20000
   );
   if (!taskId) fail('Could not find the created task\'s id via a direct SQLite query.');
   console.log('Resolved task id via SQLite query:', taskId);
@@ -314,7 +314,7 @@ async function main() {
   const before = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === SUMMARY_CHANNEL_ID && r.text?.includes(staleLine)),
     (r) => Boolean(r),
-    10000
+    20000
   );
   if (!before) {
     console.log(dumpOwnPackageForDebugging());
@@ -347,7 +347,7 @@ async function main() {
   const after = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === SUMMARY_CHANNEL_ID && r.text?.includes(staleLine)),
     (r) => !r,
-    10000
+    20000
   );
   if (after) {
     console.log(dumpOwnPackageForDebugging());
@@ -365,7 +365,7 @@ async function main() {
   const stopped = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === BG_SYNC_CHANNEL_ID),
     (r) => !r,
-    10000
+    20000
   );
   if (stopped) {
     console.log(dumpOwnPackageForDebugging());

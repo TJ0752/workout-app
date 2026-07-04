@@ -340,10 +340,19 @@ async function main() {
   console.log('Broadcast result:', broadcastResult.trim());
   console.log('App pid after broadcast:', adbAllowFailure(`shell pidof ${PACKAGE}`).trim(), '(different from before means the process restarted)');
 
+  // 30s, not the usual 10s: ground-truth diagnostics from real failed CI runs (pid unchanged,
+  // ExtraReminderStore already holding the exact right entry both before and after the
+  // broadcast, zero crashes/exceptions in logcat) ruled out every code-level explanation - the
+  // one consistent factor across every failure was a PackageDexOptimizer/dex2oat recompilation
+  // job (BackgroundDexOptService, apparently triggered by this workflow's repeated `am
+  // force-stop`+relaunch cycles) running on the emulator during the exact poll window, which can
+  // starve the main thread long enough that onReceive() genuinely hadn't executed yet when a 10s
+  // poll gave up. `adb shell am broadcast`'s own "Broadcast completed" only confirms the intent
+  // was handed to the BroadcastQueue, not that the target's onReceive() has actually run.
   const posted = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === CHANNEL_ID && r.title === TASK_TITLE && !r.ongoing),
     (r) => Boolean(r),
-    10000
+    30000
   );
   if (!posted) {
     console.log(
@@ -376,7 +385,7 @@ async function main() {
   const completion = await pollFor(
     () => page.evaluate(`window.__test.queryCompletion(${JSON.stringify(taskId)}, ${JSON.stringify(todayKey)})`),
     (v) => v !== null,
-    10000
+    20000
   );
   if (completion === null) {
     console.log(dumpOwnPackageForDebugging());
@@ -391,7 +400,7 @@ async function main() {
   const remaining = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.title === TASK_TITLE),
     (r) => !r,
-    10000
+    20000
   );
   if (remaining) {
     console.log(dumpOwnPackageForDebugging());

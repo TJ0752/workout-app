@@ -223,7 +223,7 @@ async function main() {
   const morning = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === CHANNEL_ID && r.title === 'Good morning'),
     (r) => Boolean(r),
-    10000
+    20000
   );
   if (!morning) {
     console.log(dumpOwnPackageForDebugging());
@@ -236,7 +236,7 @@ async function main() {
   const evening = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === CHANNEL_ID && r.title === 'Evening wrap-up'),
     (r) => Boolean(r),
-    10000
+    20000
   );
   if (!evening) {
     console.log(dumpOwnPackageForDebugging());
@@ -255,7 +255,7 @@ async function main() {
   const atRisk = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === CHANNEL_ID && r.title === 'Your streak is at risk'),
     (r) => Boolean(r),
-    10000
+    20000
   );
   if (!atRisk) {
     console.log(dumpOwnPackageForDebugging());
@@ -269,7 +269,7 @@ async function main() {
   const cleared = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === CHANNEL_ID && r.title === 'Your streak is at risk'),
     (r) => !r,
-    10000
+    20000
   );
   if (cleared) {
     fail('The streak-risk notification was still showing after cancelDailyDigest - the resolved-streak cancel path did not remove it.');
