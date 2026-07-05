@@ -278,29 +278,51 @@ notification kind at a time as each turned out to need something the plugin coul
 almost entirely thin JS-side orchestration (compute content, decide what should be
 scheduled/cancelled, call the native plugin) rather than scheduling anything on its own.
 
-- **Per-task reminders** — the `task.time` due-by moment (`nativeScheduleDueReminder`) and each
-  of `task.reminderTimes`' extra nudge times (`nativeScheduleExtraReminder`, one call per slot,
-  capped at `MAX_EXTRA_REMINDERS`) are both scheduled as their own native alarm, each covering
-  every scheduled weekday with a single self-rescheduling `AlarmManager` entry rather than one
-  schedule per (day, slot) the way the stock plugin required. Extra-reminder slots are keyed by
-  array index, not the reminder's clock value, so `nativeCancelExtraReminderSlot` can always
-  sweep exactly the slots that could ever have been used, even after the user removes a reminder
-  and the old time is gone from the task object. `dismissTaskReminders` (called via
+- **Per-task reminders — merged into one notification per task.** The `task.time` due-by moment
+  (`nativeScheduleDueReminder`) and each of `task.reminderTimes`' extra nudge times
+  (`nativeScheduleExtraReminder`, one call per slot, capped at `MAX_EXTRA_REMINDERS`) are still
+  scheduled as separate native alarms (each covering every scheduled weekday with a single
+  self-rescheduling `AlarmManager` entry), but an extra reminder firing no longer posts a second,
+  visually distinct notification — it re-alerts (sound/vibration) the *same* due-reminder
+  notification that's already showing (or starts showing it, `awaitingCompletion = true`, if the
+  due moment itself hasn't happened yet). This was a deliberate UX fix: a task with 2-3 extra
+  nudges used to produce that many separate notifications stacking up for one task, which read as
+  "doubling," not "another reminder." See Part C below for the mechanics. Extra-reminder slots are
+  still keyed by array index, not the reminder's clock value, so `nativeCancelExtraReminderSlot`
+  can always sweep exactly the slots that could ever have been used, even after the user removes a
+  reminder and the old time is gone from the task object. `dismissTaskReminders` (called via
   `refreshTaskReminderVisibility` from every completion-changing path in `App.jsx`, including
   notification-action taps) clears whichever of these are currently showing for the task once
   it's marked done, via `nativeDismissDueReminderToday`/`nativeDismissExtraRemindersToday`, without
-  touching the underlying recurring schedule for future days. Multi-task routines' reminders
-  share a `group` string (passed straight to `NotificationCompat.Builder.setGroup()`) so
-  simultaneous pending reminders collapse together in the shade.
-  `updateRoutineGroupSummary(routine)` additionally posts a real native group-summary
-  notification (`nativeUpdateGroupSummary` — confirmed via `dumpsys notification` on a real
-  device that Android's `group`/`groupSummary` collapsing is a genuine OS behavior, not
-  cosmetic) whenever a routine has more than one active/scheduled task, cancelled
-  (`cancelRoutineGroupSummary`) the moment it drops back to ≤1 — deliberately **not**
-  reappear-on-dismiss like the reminders it groups, just plain and swipeable. Kept in sync from
-  every place a routine's active-task count can change: `scheduleTaskNotifications` (per-task
-  schedule/cancel), `handleToggleRoutineActive`, and `handleToggleTaskActive`'s deactivation
-  branch, plus cancelled outright in `handleDeleteRoutine`.
+  touching the underlying recurring schedule for future days. A quantity task's reminder body is
+  its **live progress** (`"3 / 10 reps"`, computed in `taskNotificationContent` from
+  `completions`) rather than a static blurb — `handleAddQuantity`/`handleSetQuantity` in `App.jsx`
+  call `scheduleTaskNotifications` again after every quick-add specifically so an already-showing
+  reminder's body refreshes immediately, not just whenever it happens to next re-fire naturally.
+  Every notification the app posts — reminders, group summary, summary, digests, background-sync —
+  shares one flat app-wide `APP_GROUP_KEY` (see "Native notifications" Part D/`AppGroupSummary.kt`)
+  so they always collapse together in the shade, replacing the old per-routine `group` string
+  scheme that only grouped *sometimes*.
+  `updateRoutineGroupSummary(routine, completions)` additionally posts a real, expandable native
+  group-summary notification (`nativeUpdateGroupSummary` — confirmed via `dumpsys notification` on
+  a real device that Android's `group` collapsing is a genuine OS behavior, not cosmetic) whenever
+  a routine has more than one active/scheduled task, listing every currently-pending task by title
+  (not just a count), cancelled (`cancelRoutineGroupSummary`) the moment it drops back to ≤1.
+  Deliberately **not** reappear-on-dismiss like the reminders it groups, just plain and swipeable.
+  Kept in sync from every place a routine's pending-task list can change — not just schedule/cancel
+  events (`scheduleTaskNotifications`, `handleToggleRoutineActive`, `handleToggleTaskActive`'s
+  deactivation branch) but also every completion-changing handler (`handleToggleComplete`,
+  `handleAddQuantity`, `handleSetQuantity`, `handleLogWorkoutSet`, and the notification-action-driven
+  Mark-done/`+N` handlers) — a routine with 3 tasks where the last one just got marked done needs
+  its pending list to drop immediately, not wait for the next full resync. Cancelled outright in
+  `handleDeleteRoutine`.
+- **Tap-to-open deep linking.** Every notification's body now carries a `setContentIntent()` (see
+  "Native notifications" below) that opens the app directly to the relevant task/routine on the
+  Today screen, instead of doing nothing (the pre-overhaul behavior — none of these builders set a
+  content intent at all). `initNotificationTapListener` in `nativeNotifications.js`, wired in
+  `App.jsx`'s top-level `useEffect`, switches to the Today tab and passes `focusTaskId`/
+  `focusRoutineId` down to `TodayView`, which expands the task's group if needed, scrolls to it,
+  and applies a brief `.today-item-focused` highlight (see `TodayView.jsx`'s two focus effects).
 - **Computed notifications** (`syncDynamicNotifications`) — the persistent daily summary, the
   streak-at-risk nudge, and the morning/evening digests, all posted natively
   (`nativeScheduleDailyDigest`/`nativeCancelDailyDigest` for the latter two;
@@ -313,7 +335,12 @@ scheduled/cancelled, call the native plugin) rather than scheduling anything on 
   correctly-firing digest. `updateSummaryNotification`'s title is a real overall percentage
   (`Math.round` of the average fraction across today's due routines, reusing the existing
   `getRoutineFraction` pipeline — no separate math), and its body lists each not-yet-100%
-  routine as `Title NN%` (`formatRoutineProgress`) rather than a plain done/not-done count.
+  routine as `Title NN%` (`formatRoutineProgress`) rather than a plain done/not-done count. Since
+  this runs on *every* app open regardless of whether anything changed, `showSummary` (and the
+  group summary above) now skip the repost entirely when content is identical to what's already
+  showing — see "Native notifications" below for why this matters: `NotificationCompat` re-alerts
+  on every `notify()` call by default, so without this check simply reopening the app with nothing
+  new would re-sound these notifications every time.
 
 `scheduleTaskNotifications(task, routine, completions)` is the single choke point that decides
 whether a task's reminders actually get scheduled — it checks `task.active`,
@@ -350,8 +377,7 @@ which is the one notification that's backed by a real running `Service` rather t
 Every notification in the app is posted by one native plugin, `NativeNotificationsPlugin`
 (`@CapacitorPlugin(name = "NativeNotifications")`,
 `android/app/src/main/java/com/tharuka/routines/notify/`, JS wrapper
-`src/nativeNotifications.js`). This wasn't a single migration — it happened in two passes, for
-two different reasons:
+`src/nativeNotifications.js`). This wasn't a single migration — it happened in three passes:
 
 1. **The persistent daily summary and the per-task due-by reminder** moved first, specifically
    to make both notifications **reappear immediately if swiped away before they're supposed to
@@ -365,6 +391,14 @@ two different reasons:
    specific missing capability — plus a new **persistent background-sync foreground service**
    (see below) that keeps the app process alive so all of this computed content can actually
    stay fresh without the user reopening the app.
+3. **A UX overhaul pass** (once everything was already native) fixed several rough edges found
+   after living with the fully-native design: extra reminders visually doubling up with the due
+   reminder instead of just re-alerting it, notifications from this app only grouping together
+   *sometimes* rather than always, the group summary showing a bare task count instead of the
+   actual pending list, no notification deep-linking anywhere (tapping one did nothing beyond
+   whatever `autoCancel` did), no live progress display for quantity tasks, and the persistent
+   summary/group-summary re-alerting every time the app was simply reopened even when nothing had
+   changed. Covered in Parts B-D and the two new subsections below.
 
 **"Reappear on dismiss," not true non-dismissibility — a real Android policy change, not a
 missing flag.** Android 13 made foreground-service notifications swipe-dismissible by
@@ -397,7 +431,9 @@ needs to be checked against this whole list by hand:
   `MORNING_DIGEST_ID = 900,000,002`, `EVENING_DIGEST_ID = 900,000,003`, `STREAK_RISK_ID =
   900,000,004` (fixed, not hashed — only ever these 3 digest kinds), and
   `BACKGROUND_SYNC_NOTIFICATION_ID = 950,000,001` (also fixed — exactly one background-sync
-  notification ever exists).
+  notification ever exists), and `APP_GROUP_SUMMARY_ID = 960,000,001` (`AppGroupSummary.kt`,
+  also fixed — the one notification flagged `setGroupSummary(true)` for the whole app, see
+  Part D).
 - `workout/`'s `WorkoutTimerService.NOTIFICATION_ID = 850,000,001` (see below) is a *second*,
   independently maintained id in a completely different package — **this is exactly the gap
   that caused a real collision**: `WorkoutTimerService` originally hardcoded `800000001` before
@@ -424,7 +460,15 @@ ordering is what lets `SummaryDismissReceiver` (the notification's real `setDele
 target) tell an organic user-swipe (entry still present → repost) apart from a legitimate
 JS-driven cancel (entry absent → no-op) without any race. No alarm is needed here: JS
 already reactively reposts this on every app open and completion change via
-`syncDynamicNotifications`.
+`syncDynamicNotifications`. `showSummary` now compares the incoming content against
+`SummaryNotificationStore.read()` first and no-ops (skips both the store write and the
+`notify()` call) if it's identical — added once it became clear `syncDynamicNotifications`
+running on every single app open, with no content changed, was re-sounding this persistent
+notification every time the user reopened the app (`NotificationCompat` re-alerts on every
+`notify()` call by default; nothing here previously suppressed that). This doesn't weaken the
+reappear-on-dismiss guarantee: an organic swipe still goes through `SummaryDismissReceiver`,
+which reposts unconditionally whenever `awaitingCompletion` is true, entirely independent of
+this equality check.
 
 **Part B — due-by reminder.** `DueReminderStore` holds one persisted entry per task
 (`{taskId, routineId, title, body, days, hour, minute, group, completionType,
@@ -491,6 +535,18 @@ same day-of-week conversion, is reused as-is by `ExtraReminderScheduler` (Part C
   handling — JS's `"dueReminderAction"` listener dispatches purely by `actionId`/`taskId`, with
   no notion of which native mechanism sent it, so no second JS listener was needed for extra
   reminders.
+- **Live quantity progress and tap-to-open.** `buildDueReminderNotification` sets a
+  `setContentIntent()` (`notificationTapPendingIntent`, see the "Tap-to-open deep linking"
+  subsection below) carrying `entry.taskId`/`entry.routineId`, and — for a `completionType ==
+  "quantity"` task — a body computed as live progress (`"3 / 10 reps"`,
+  `taskNotificationContent` in `src/notifications.js`) instead of a static blurb. Neither of
+  these needed a new native mechanism: the body is just whatever `entry.body` the JS caller
+  computed, already refreshed on every `scheduleTaskNotifications` call (including the ones
+  `handleAddQuantity`/`handleSetQuantity` in `App.jsx` now make after every quick-add
+  specifically so this repost happens immediately) and gated by `schedule()`'s own existing
+  content-equality/overdue logic above — a quick-add on an already-overdue (hence already
+  showing) reminder changes the body, which isn't content-unchanged, so `schedule()` reposts it
+  with the new progress the same way it would for any other content change.
 - **Boot survival.** `DueReminderBootReceiver` (manifest, `directBootAware="true"`, listens
   for `BOOT_COMPLETED`/`LOCKED_BOOT_COMPLETED`/`QUICKBOOT_POWERON`, needs
   `RECEIVE_BOOT_COMPLETED` added explicitly since the stock plugin's own manifest contract
@@ -513,15 +569,68 @@ parameter and no immediate-fire path. Same Mark-done/`+N`/Snooze actions as the 
 (reusing `dispatchDueReminderAction`, see Part B), but no delete-intent — swiping one away just
 dismisses it, same as it always did.
 
-**Part D — group summary.** The simplest of the bunch: no alarm, no persisted store at all.
-`buildAndPostGroupSummaryNotification(context, routineId, title, activeTaskCount)`
-(`GroupSummaryNotificationBuilder.kt`) builds and posts directly, the same "compute now, post
-now" shape as the summary notification's own `showSummary` — the caller (JS, via
-`updateRoutineGroupSummary`) already recomputes and re-calls this on every routine-active-task-
-count change, so there's nothing to reconcile against on a resync. Reuses the
-`routine-reminders` channel (the same one the due/extra reminders it groups use), and is
-deliberately plain/swipeable, not reappear-on-dismiss — see Part B's explanation of which
+**An extra reminder firing re-alerts the due reminder's own notification, it doesn't post a
+second one.** `ExtraReminderAlarmReceiver.onReceive()` reads `DueReminderStore` for the same
+task and, if an entry exists (the normal case — `scheduleTaskNotifications` always schedules a
+due reminder alongside any extra reminders), sets `awaitingCompletion = true` on it and calls
+`buildDueReminderNotification` + `NotificationManagerCompat.notify(dueReminderNotificationId(taskId),
+...)` — the *due reminder's* id, not the extra reminder's own. Since `NotificationCompat` re-alerts
+(sound/vibration) on every `notify()` call to an id by default, this makes an extra reminder read
+as exactly what it's meant to be: "another nudge toward the same task," reusing whatever's already
+pinned (or newly pinning it, if the due moment hasn't happened yet) rather than stacking a second,
+visually distinct notification for the same task — the pre-overhaul behavior, which read as
+"doubling." Every *other* task's notifications are untouched by this — only the firing task's own
+due-reminder id is touched. `ExtraReminderAlarmReceiver` only falls back to posting its own
+dedicated notification (`buildExtraReminderNotification`, the pre-merge behavior, still kept for
+this one case) if no `DueReminderStore` entry exists for the task at all — shouldn't normally
+happen, but keeps an extra reminder from being silently dropped if that invariant is ever
+violated.
+
+**Part D — group summary, and the app-wide group.** No alarm, and no *persisted* (SharedPreferences)
+store — but it does keep a small in-memory `lastPostedContent` map (`GroupSummaryNotificationBuilder.kt`,
+keyed by `routineId`) purely to skip a redundant repost, and thus a redundant re-alert, when
+nothing actually changed; more below. `buildAndPostGroupSummaryNotification(context, routineId,
+title, pendingTaskTitles)` builds and posts directly, the same "compute now, post now" shape as
+the summary notification's own `showSummary` — the caller (JS, via `updateRoutineGroupSummary`)
+already recomputes and re-calls this on every routine-active-task-count *and* completion change
+(see the "Notifications" section above), so there's nothing to reconcile against on a resync
+beyond the repost-suppression check. Renders as a real `NotificationCompat.InboxStyle`
+notification, one line per currently-pending task title (not just a count) — "N pending" /
+"All done for today 🎉" as the collapsed summary text, the full list visible once expanded.
+Reuses the `routine-reminders` channel (the same one the due/extra reminders it groups use), and
+is deliberately plain/swipeable, not reappear-on-dismiss — see Part B's explanation of which
 notifications actually need that behavior and which don't.
+
+- **Suppressing redundant re-alerts.** `lastPostedContent[routineId]` holds the last `(title,
+  pendingTaskTitles)` pair actually posted; `buildAndPostGroupSummaryNotification` no-ops
+  entirely (skips the `notify()` call) if the new content matches it exactly, and
+  `cancelGroupSummary` clears the entry so a routine that later regrows the exact same pending
+  list isn't silently skipped. In-memory rather than SharedPreferences-backed on purpose — this
+  cache only exists to avoid one process's redundant re-alerts, not to survive process death like
+  `DueReminderStore`/`DailyDigestStore` do; a cold start naturally treats its first post as
+  "changed from nothing," which is correct anyway. Added for the same reason as `showSummary`'s
+  equality check in Part A: this gets called on every app open and background-sync tick
+  regardless of whether the pending list changed, and `NotificationCompat` re-alerts on every
+  `notify()` by default.
+- **`APP_GROUP_KEY` and the real OS group summary (`AppGroupSummary.kt`).** Every notification
+  this app posts (due/extra reminders, the group summary above, the daily summary, digests,
+  background-sync) shares one flat `APP_GROUP_KEY` string, and `postAppGroupSummary` (called once
+  per app-process/bridge start, from `NativeNotificationsPlugin.load()`) posts the single
+  notification flagged `setGroupSummary(true)` (`APP_GROUP_SUMMARY_ID = 960,000,001`) — the
+  Android-required anchor for reliable, launcher-independent collapsing (without an explicit
+  summary, some launchers only auto-generate a collapsed view once 4+ notifications share a
+  group). This replaced an earlier per-routine `group` string scheme (`"routine-$routineId"`,
+  still passed through from JS as harmless dead weight in some payloads) that left several
+  notification kinds — the daily summary, digests, background-sync — with no group key at all,
+  which is exactly why "everything from this app groups together" only used to happen
+  *sometimes*. A single flat app-wide group, not a per-routine one, is deliberate: Android has no
+  concept of nested groups, so "stack everything from this app together" and "stack this
+  routine's own tasks together" can't both be true with per-routine keys — routine identity is
+  still communicated via each notification's own title (`taskNotificationContent`'s
+  `"{routine} · {task}"` format), not a separate OS-level grouping tier.
+  `postAppGroupSummary` sets `setOnlyAlertOnce(true)` since its content never changes and it's
+  only ever (re)posted once per process start, not on a resync path like the summary/group
+  summary above.
 
 **Part E — daily digests.** Morning digest, evening digest, and streak-risk are structurally
 identical (single computed title/body, fires once a day at one hour:minute, no actions, plain
@@ -543,6 +652,46 @@ already established — a gap in the first version of this method (it only clear
 leaving a resolved streak's notification visibly stuck until manually swiped) caught by writing
 `scripts/verify-daily-digest.mjs`'s cancel-when-resolved check before declaring this migration
 stage done, not after.
+
+**Tap-to-open deep linking (`NotificationTapIntent.kt`, `NotificationTapBridge.kt`).** Every
+builder above now calls `notificationTapPendingIntent(context, requestCode, taskId, routineId)`
+and attaches the result via `setContentIntent()` — before this, none of these builders set a
+content intent at all, so tapping a notification's body did nothing beyond whatever
+`setAutoCancel` did. `taskId`/`routineId` are both nullable: a due/extra reminder carries both,
+the group summary carries only `routineId`, and the summary/digests/background-sync carry
+neither (they just bring the app to the foreground with nothing specific to focus).
+`requestCode` is always the same id already used for the notification itself
+(`dueReminderNotificationId`, `groupSummaryNotificationId`, etc.) — this matters because
+`PendingIntent.FLAG_UPDATE_CURRENT` overwrites an existing PendingIntent's extras whenever its
+`requestCode` + Intent-filter already matches one, so a colliding `requestCode` across two
+different tasks' content intents would let one task's already-posted notification silently
+start opening a *different* task the moment the second is built.
+
+- **Cold start vs. warm start.** `MainActivity` is declared `android:launchMode="singleTask"` in
+  the manifest, so `FLAG_ACTIVITY_NEW_TASK` on the content intent reuses the existing Activity
+  instance (routed through `onNewIntent`) when the app process is already alive, rather than
+  creating a second one. Cold start (process not alive) is handled the same way the existing
+  pending-due-reminder-action mechanism (Part B) already was: `NativeNotificationsPlugin.load()`
+  reads `EXTRA_OPEN_TASK_ID`/`EXTRA_OPEN_ROUTINE_ID` straight off the launch `Intent` once the
+  bridge is ready and fires `notifyListeners("notificationTapped", ...)`. Warm start needs a
+  different path, since a running Activity's original launch intent is long gone by the time a
+  new one arrives — `MainActivity.onNewIntent()` (Java) calls
+  `NotificationTapBridgeKt.dispatchNotificationTapFromIntent(intent)`, a top-level Kotlin
+  function (deliberately *not* `internal` — Kotlin mangles internal member names on the JVM
+  specifically to discourage direct Java access, which would make this awkward to call from
+  Java) that reads the same extras and invokes `NotificationTapBridge.onOpenTarget` (the same
+  same-process-singleton idiom as `DueReminderBridge`/`WorkoutSessionBridge`), wired in
+  `NativeNotificationsPlugin.load()` to the identical `notifyListeners("notificationTapped",
+  ...)` call. JS sees one event (`initNotificationTapListener` in `nativeNotifications.js`)
+  regardless of which path fired it.
+- **JS/UI side.** `App.jsx`'s listener switches to the Today tab and stores `{taskId,
+  routineId}` in a `focusTarget` state; `TodayView.jsx` receives `focusTaskId`/`focusRoutineId`
+  props and runs two effects — one that jumps to today's date and expands the task's group if
+  it's collapsed (so the target element actually exists in the DOM), and a second, dependent on
+  the first's result, that finds the element by id (`today-task-{taskId}` or
+  `today-routine-{routineId}`, added to the relevant `<li>`s), scrolls it into view, and applies
+  a temporary `.today-item-focused` outline (`App.css`) before calling `onFocusHandled` to clear
+  the state.
 
 ### Persistent background-sync foreground service (`BackgroundSyncService.kt`)
 
