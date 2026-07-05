@@ -52,22 +52,28 @@ jobs:
           arch: x86_64
           profile: pixel_5
           disable-animations: true
+          # No `adb shell am force-stop` between scripts (relaunching via `am start` alone is
+          # enough to get a fresh Activity/WebView for the next script) - a real regression found
+          # via dumpsys activity broadcasts: force-stopping puts the app into Android's "stopped
+          # package" state, and adb's own `am broadcast -n <receiver>` (used by
+          # verify-extra-reminder.mjs/verify-daily-digest.mjs/verify-background-sync.mjs/
+          # verify-group-summary.mjs to fire alarm/action receivers on demand instead of waiting
+          # on AlarmManager's real clock) silently gets skipped for a stopped package even when
+          # explicitly targeted by component name - confirmed via dumpsys, and not fixed by also
+          # passing `--include-stopped-packages` (the documented flag for exactly this case,
+          # which didn't resolve it on this emulator image for reasons not fully understood).
+          # Removing the earlier force-stop avoids the stopped state entirely.
           script: |
             adb install -r android/app/build/outputs/apk/debug/app-debug.apk
             adb shell am start -n com.tharuka.routines/.MainActivity
             node scripts/verify-due-reminder.mjs
-            adb shell am force-stop com.tharuka.routines
             adb shell am start -n com.tharuka.routines/.MainActivity
             node scripts/verify-extra-reminder.mjs
-            adb shell am force-stop com.tharuka.routines
             adb shell am start -n com.tharuka.routines/.MainActivity
             node scripts/verify-group-summary.mjs
-            adb shell am force-stop com.tharuka.routines
             adb shell am start -n com.tharuka.routines/.MainActivity
             node scripts/verify-daily-digest.mjs
-            adb shell am force-stop com.tharuka.routines
             adb shell am start -n com.tharuka.routines/.MainActivity
             node scripts/verify-background-sync.mjs
-            adb shell am force-stop com.tharuka.routines
             adb shell am start -n com.tharuka.routines/.MainActivity
             node scripts/verify-workout-session-notification.mjs
