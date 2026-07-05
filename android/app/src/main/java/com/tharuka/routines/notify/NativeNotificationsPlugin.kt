@@ -21,8 +21,10 @@ class NativeNotificationsPlugin : Plugin() {
     override fun load() {
         super.load()
         createNotificationChannels(context)
+        postAppGroupSummary(context)
 
         DueReminderBridge.onAction = { data -> notifyListeners("dueReminderAction", data, true) }
+        NotificationTapBridge.onOpenTarget = { data -> notifyListeners("notificationTapped", data, true) }
 
         // Fires once per app-process/bridge lifecycle, independent of Activity
         // foreground/background state - matches "as long as the app is running," not tied to
@@ -30,11 +32,24 @@ class NativeNotificationsPlugin : Plugin() {
         BackgroundSyncBridge.onTick = { notifyListeners("backgroundSyncTick", JSObject(), true) }
         BackgroundSyncService.start(context)
 
+        val launchIntent = activity.intent
+
+        // Cold-start deep-link case: the notification's content intent launched MainActivity
+        // (and this bridge/plugin) fresh, rather than delivering to an already-running instance
+        // via onNewIntent - consume the extras here once, the same moment a warm start would have
+        // dispatched via NotificationTapBridge.
+        val openTaskId = launchIntent.getStringExtra(EXTRA_OPEN_TASK_ID)
+        val openRoutineId = launchIntent.getStringExtra(EXTRA_OPEN_ROUTINE_ID)
+        if (openTaskId != null || openRoutineId != null) {
+            launchIntent.removeExtra(EXTRA_OPEN_TASK_ID)
+            launchIntent.removeExtra(EXTRA_OPEN_ROUTINE_ID)
+            notifyListeners("notificationTapped", buildNotificationTapData(openTaskId, openRoutineId), true)
+        }
+
         // Cold-start case: DueReminderActionReceiver relaunched MainActivity because the app
         // process (and this bridge) wasn't alive to dispatch directly - the action arrived as
         // plain typed extras on the launch intent rather than through DueReminderBridge. Consume
         // them once here so a later config-change recreate doesn't refire the same action.
-        val launchIntent = activity.intent
         val taskId = launchIntent.getStringExtra(EXTRA_PENDING_TASK_ID) ?: return
         val actionId = launchIntent.getStringExtra(EXTRA_PENDING_ACTION_ID) ?: return
         val amount = if (launchIntent.hasExtra(EXTRA_PENDING_AMOUNT)) {
@@ -48,6 +63,14 @@ class NativeNotificationsPlugin : Plugin() {
         notifyListeners("dueReminderAction", buildDueReminderActionData(taskId, actionId, amount), true)
     }
 
+    /**
+     * No-ops (skips both the SharedPreferences write and the notify() call) if the content is
+     * identical to what's already posted - this is what's called on every app open, every
+     * completion change, and every ~15min background-sync tick (see updateSummaryNotification in
+     * src/notifications.js), and NotificationCompat re-alerts (sound/vibration) on every notify()
+     * call by default - without this check, simply reopening the app with nothing actually
+     * changed would re-sound the persistent summary notification every single time.
+     */
     @PluginMethod
     fun showSummary(call: PluginCall) {
         val title = call.getString("title")
@@ -58,6 +81,10 @@ class NativeNotificationsPlugin : Plugin() {
         }
         val ongoing = call.getBoolean("ongoing", false) ?: false
         val content = SummaryContent(title, body, ongoing)
+        if (SummaryNotificationStore.read(context) == content) {
+            call.resolve()
+            return
+        }
         SummaryNotificationStore.save(context, content)
         buildAndPostSummaryNotification(context, content)
         call.resolve()
@@ -229,12 +256,13 @@ class NativeNotificationsPlugin : Plugin() {
     fun updateGroupSummary(call: PluginCall) {
         val routineId = call.getString("routineId")
         val title = call.getString("title")
-        val activeTaskCount = call.getInt("activeTaskCount")
-        if (routineId == null || title == null || activeTaskCount == null) {
-            call.reject("routineId, title, and activeTaskCount are required")
+        val pendingTitlesArray = call.getArray("pendingTaskTitles")
+        if (routineId == null || title == null || pendingTitlesArray == null) {
+            call.reject("routineId, title, and pendingTaskTitles are required")
             return
         }
-        buildAndPostGroupSummaryNotification(context, routineId, title, activeTaskCount)
+        val pendingTaskTitles = (0 until pendingTitlesArray.length()).map { pendingTitlesArray.getString(it) }
+        buildAndPostGroupSummaryNotification(context, routineId, title, pendingTaskTitles)
         call.resolve()
     }
 
@@ -245,6 +273,7 @@ class NativeNotificationsPlugin : Plugin() {
             call.reject("routineId is required")
             return
         }
+        clearGroupSummaryContentCache(routineId)
         NotificationManagerCompat.from(context).cancel(groupSummaryNotificationId(routineId))
         call.resolve()
     }

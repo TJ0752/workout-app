@@ -9,8 +9,18 @@ import android.content.Intent
  * exact same dispatchDueReminderAction path (and the same "dueReminderAction" JS event) the
  * due-by reminder's own action receiver uses - JS's handler dispatches purely by
  * actionId/taskId, it has no notion of which native mechanism sent it, so no new JS listener is
- * needed. Snooze re-arms this specific (task, slot) alarm 15 minutes out, same pattern as the
- * due reminder's own snooze.
+ * needed.
+ *
+ * Snooze re-arms the *due-by reminder's own* alarm slot (DueReminderScheduler.armAt), not this
+ * (task, slot)'s own extra-reminder alarm - since the merged notification (see
+ * ExtraReminderAlarmReceiver) is now always built from DueReminderStore's content and posted
+ * under the due reminder's own id, "snooze this" means "re-alert the one notification for this
+ * task in 15 minutes," a single concept independent of whichever nudge happened to be showing
+ * when it was tapped. This specific (task, slot)'s own regular extra-reminder schedule is left
+ * completely untouched and keeps firing at its configured time regardless of any snooze -
+ * DueReminderAlarmReceiver already self-corrects back to the real next due-by occurrence the
+ * moment the snoozed alarm fires (see DueReminderScheduler.arm()), so temporarily reusing its
+ * PendingIntent slot for an earlier one-off fire has no lasting effect on the due-by schedule.
  */
 class ExtraReminderActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -25,7 +35,7 @@ class ExtraReminderActionReceiver : BroadcastReceiver() {
             }
             ACTION_SNOOZE -> {
                 val triggerAtMillis = System.currentTimeMillis() + SNOOZE_MINUTES * 60_000L
-                ExtraReminderScheduler.armAt(context, taskId, slot, triggerAtMillis)
+                DueReminderScheduler.armAt(context, taskId, triggerAtMillis)
             }
         }
     }

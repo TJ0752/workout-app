@@ -1,6 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
-import { calcRoutineStreak, getRoutineFraction } from './utils/date';
+import { calcRoutineStreak, getRoutineFraction, todayKey } from './utils/date';
 import { quickAddAmountsFor, isTaskDoneToday, MAX_EXTRA_REMINDERS } from './utils/tasks';
 import {
   showSummaryNotification,
@@ -73,35 +73,46 @@ export async function refreshTaskReminderVisibility(task, completions) {
   await dismissTaskReminders(task);
 }
 
-function taskNotificationContent(task, routine) {
+/**
+ * `completions` drives the one piece of content that needs to be *live*, not just recomputed
+ * on the next natural fire: a quantity task's body is its current progress (matching the
+ * "actual / target unit" format TodayView's own QuantityControl already shows), not a static
+ * blurb - so a quick-add can refresh an already-pinned reminder in place (see
+ * scheduleTaskNotifications' callers in App.jsx) instead of only updating once the reminder
+ * happens to re-fire on its own.
+ */
+function taskNotificationContent(task, routine, completions = {}) {
   const title = routine && routine.title !== task.title ? `${routine.title} · ${task.title}` : task.title;
-  const body = (routine && routine.notes) || 'Time to complete your task';
+  let body = (routine && routine.notes) || 'Time to complete your task';
+  if (task.completionType === 'quantity') {
+    const actual = completions[task.id]?.[todayKey()] || 0;
+    const target = task.target || 0;
+    body = `${actual} / ${target}${task.unit ? ` ${task.unit}` : ''}`;
+  }
   const group = routine && routine.tasks.length > 1 ? `routine-${routine.id}` : undefined;
   return { title, body, group };
 }
 
 /**
- * A genuine Android group-summary notification (`groupSummary: true`,
- * plugin support confirmed in LocalNotificationManager.java - not just
- * cosmetic `group` tagging) for a multi-task routine, so its individual due
- * reminders collapse into one expandable "N tasks" entry in the shade
- * instead of appearing as separate top-level notifications. Recomputed
- * every time any of the routine's tasks reschedule (see
- * scheduleTaskNotifications) - cheap and idempotent, so it's simplest to
- * just always call it rather than track every place that could change the
- * routine's active-task count.
+ * A real, expandable Android group-summary notification (InboxStyle, one line per
+ * currently-pending task) for a multi-task routine, so its individual due reminders collapse
+ * into one expandable entry in the shade that always lists exactly which tasks are still
+ * pending right now - not just a stale count. Recomputed on every schedule change AND on every
+ * completion change (see refreshTaskReminderVisibility's callers in App.jsx), so the pending
+ * list is always current.
  */
-export async function updateRoutineGroupSummary(routine) {
+export async function updateRoutineGroupSummary(routine, completions = {}) {
   if (!Capacitor.isNativePlatform() || !routine) return;
-  const activeTaskCount = routine.tasks.filter((t) => t.active && t.days.length > 0).length;
+  const activeTasks = routine.tasks.filter((t) => t.active && t.days.length > 0);
   // Only worth a group summary once there are 2+ *active* tasks to collapse -
   // routine.tasks.length alone (used for the `group` tag on individual
   // reminders) undercounts a routine that's mostly paused down to one task.
-  if (!routine.active || activeTaskCount <= 1) {
+  if (!routine.active || activeTasks.length <= 1) {
     await cancelRoutineGroupSummary(routine.id);
     return;
   }
-  await nativeUpdateGroupSummary(routine.id, routine.title, activeTaskCount);
+  const pendingTaskTitles = activeTasks.filter((t) => !isTaskDoneToday(t, completions)).map((t) => t.title);
+  await nativeUpdateGroupSummary(routine.id, routine.title, pendingTaskTitles);
 }
 
 export async function cancelRoutineGroupSummary(routineId) {
@@ -114,11 +125,11 @@ export async function scheduleTaskNotifications(task, routine, completions = {})
   if (!task.active || task.days.length === 0 || routine?.active === false) {
     await nativeCancelDueReminder(task.id);
     await nativeCancelExtraReminders(task.id);
-    if (routine) await updateRoutineGroupSummary(routine);
+    if (routine) await updateRoutineGroupSummary(routine, completions);
     return;
   }
 
-  const { title, body, group } = taskNotificationContent(task, routine);
+  const { title, body, group } = taskNotificationContent(task, routine, completions);
   const [hour, minute] = task.time.split(':').map(Number);
 
   // The due-by reminder and its extra nudge times are both scheduled natively - one
@@ -164,7 +175,7 @@ export async function scheduleTaskNotifications(task, routine, completions = {})
     // DueReminderScheduler.schedule's isDoneToday param for why this can't be computed natively.
     isDoneToday: isTaskDoneToday(task, completions),
   });
-  if (routine) await updateRoutineGroupSummary(routine);
+  if (routine) await updateRoutineGroupSummary(routine, completions);
 }
 
 export async function syncAllNotifications(routines, completions = {}) {

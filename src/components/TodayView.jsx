@@ -202,6 +202,9 @@ export default function TodayView({
   onAddQuantity,
   onSetQuantity,
   onStartWorkout,
+  focusTaskId,
+  focusRoutineId,
+  onFocusHandled,
 }) {
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [now, setNow] = useState(() => new Date());
@@ -211,6 +214,42 @@ export default function TodayView({
     const interval = setInterval(() => setNow(new Date()), 60000);
     return () => clearInterval(interval);
   }, []);
+
+  // A tapped notification always deep-links into *today's* view of the task/routine (every
+  // native notification is about today), and needs its group expanded if it's collapsed -
+  // otherwise the element being scrolled to doesn't exist in the DOM at all.
+  useEffect(() => {
+    if (!focusTaskId && !focusRoutineId) return;
+    setSelectedDate(startOfDay(new Date()));
+    if (focusRoutineId) {
+      setCollapsed((prev) => {
+        if (!prev.has(focusRoutineId)) return prev;
+        const next = new Set(prev);
+        next.delete(focusRoutineId);
+        return next;
+      });
+    }
+  }, [focusTaskId, focusRoutineId]);
+
+  // Runs after the (possibly just-expanded) DOM has settled, so the target element actually
+  // exists to scroll to - separate from the effect above, which only handles date/collapse state.
+  useEffect(() => {
+    if (!focusTaskId && !focusRoutineId) return;
+    const elementId = focusTaskId ? `today-task-${focusTaskId}` : `today-routine-${focusRoutineId}`;
+    const el = document.getElementById(elementId);
+    if (!el) {
+      onFocusHandled?.();
+      return;
+    }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('today-item-focused');
+    const timeout = setTimeout(() => {
+      el.classList.remove('today-item-focused');
+      onFocusHandled?.();
+    }, 2500);
+    return () => clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusTaskId, focusRoutineId, collapsed]);
 
   const dateKey = dateToKey(selectedDate);
   const isToday = dateKey === todayKey();
@@ -271,7 +310,7 @@ export default function TodayView({
             const task = dueTasks[0];
             if (task.completionType === 'quantity') {
               return (
-                <li key={routine.id} className="today-item">
+                <li key={routine.id} id={`today-task-${task.id}`} className="today-item">
                   <div className="row" style={{ alignItems: 'flex-start' }}>
                     <span className="icon-badge">
                       <RoutineIcon size={18} />
@@ -292,7 +331,7 @@ export default function TodayView({
             }
             if (task.completionType === 'workout') {
               return (
-                <li key={routine.id} className="today-item">
+                <li key={routine.id} id={`today-task-${task.id}`} className="today-item">
                   <div className="row" style={{ alignItems: 'flex-start' }}>
                     <span className="icon-badge">
                       <RoutineIcon size={18} />
@@ -312,7 +351,7 @@ export default function TodayView({
             }
             const done = Boolean(completions[task.id]?.[dateKey]);
             return (
-              <li key={routine.id} className={`today-item ${done ? 'done' : ''}`}>
+              <li key={routine.id} id={`today-task-${task.id}`} className={`today-item ${done ? 'done' : ''}`}>
                 <label className="row">
                   <input
                     type="checkbox"
@@ -345,7 +384,7 @@ export default function TodayView({
           const isCollapsed = collapsed.has(routine.id);
 
           return (
-            <li key={routine.id} className="routine-group">
+            <li key={routine.id} id={`today-routine-${routine.id}`} className="routine-group">
               <div className="group-header" onClick={() => toggleCollapsed(routine.id)}>
                 <span className="icon-badge">
                   <RoutineIcon size={18} />
@@ -372,7 +411,7 @@ export default function TodayView({
                   {dueTasks.map((task) => {
                     if (task.completionType === 'quantity') {
                       return (
-                        <li className="task-row" key={task.id} style={{ alignItems: 'flex-start' }}>
+                        <li className="task-row" key={task.id} id={`today-task-${task.id}`} style={{ alignItems: 'flex-start' }}>
                           <QuantityControl
                             task={task}
                             completions={completions}
@@ -387,7 +426,7 @@ export default function TodayView({
                     }
                     if (task.completionType === 'workout') {
                       return (
-                        <li className="task-row" key={task.id} style={{ alignItems: 'flex-start' }}>
+                        <li className="task-row" key={task.id} id={`today-task-${task.id}`} style={{ alignItems: 'flex-start' }}>
                           <WorkoutTaskCard
                             task={task}
                             routine={routine}
@@ -401,7 +440,7 @@ export default function TodayView({
                     }
                     const done = Boolean(completions[task.id]?.[dateKey]);
                     return (
-                      <li className="task-row" key={task.id}>
+                      <li className="task-row" key={task.id} id={`today-task-${task.id}`}>
                         <span className="dot" />
                         <span
                           className="task-title"

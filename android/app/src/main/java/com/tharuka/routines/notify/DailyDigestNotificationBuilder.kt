@@ -15,5 +15,7 @@ internal fun buildDailyDigestNotification(context: Context, entry: DailyDigestEn
         .setContentTitle(entry.title)
         .setContentText(entry.body)
         .setAutoCancel(true)
+        .setGroup(APP_GROUP_KEY)
+        .setContentIntent(notificationTapPendingIntent(context, dailyDigestNotificationId(entry.kind)))
         .build()
 }

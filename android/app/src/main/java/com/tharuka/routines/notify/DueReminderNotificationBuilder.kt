@@ -40,7 +40,8 @@ internal fun buildDueReminderNotification(context: Context, entry: DueReminderEn
         .setOngoing(true)
         .setAutoCancel(false)
         .setDeleteIntent(deletePendingIntent)
-    if (entry.group != null) builder.setGroup(entry.group)
+        .setGroup(APP_GROUP_KEY)
+        .setContentIntent(notificationTapPendingIntent(context, notificationId, entry.taskId, entry.routineId))
 
     if (entry.completionType == "quantity") {
         for (amount in entry.quickAddAmounts) {

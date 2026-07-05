@@ -112,6 +112,8 @@ class BackgroundSyncService : Service() {
             .setContentText("Keeping reminders and summaries up to date")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setGroup(APP_GROUP_KEY)
+            .setContentIntent(notificationTapPendingIntent(this, NOTIFICATION_ID))
             .addAction(0, "Stop", stopPendingIntent)
             .build()
     }

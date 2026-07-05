@@ -34,6 +34,8 @@ internal fun buildAndPostSummaryNotification(context: Context, content: SummaryC
         .setOngoing(content.ongoing)
         .setAutoCancel(false)
         .setDeleteIntent(deletePendingIntent)
+        .setGroup(APP_GROUP_KEY)
+        .setContentIntent(notificationTapPendingIntent(context, SUMMARY_NOTIFICATION_ID))
         .build()
     NotificationManagerCompat.from(context).notify(SUMMARY_NOTIFICATION_ID, notification)
 }

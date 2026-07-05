@@ -312,6 +312,14 @@
   box-shadow: none;
 }
 
+/* Applied briefly (see TodayView.jsx's focus effect) when a tapped notification deep-links to a
+   specific task/routine, so the user can actually spot which item it meant among a full list. */
+.today-item-focused {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  transition: outline-color 0.3s ease;
+}
+
 .today-item.done .today-item-title {
   text-decoration: line-through;
   opacity: 0.5;

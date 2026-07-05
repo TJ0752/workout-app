@@ -90,12 +90,13 @@ export async function nativeDismissExtraRemindersToday(taskId) {
 
 /**
  * Immediately builds and posts the multi-task routine group summary (see
- * GroupSummaryNotificationBuilder.kt) - plain and swipeable by design, no reappear-on-dismiss,
+ * GroupSummaryNotificationBuilder.kt) as an expandable InboxStyle notification listing every
+ * currently-pending task by title - plain and swipeable by design, no reappear-on-dismiss,
  * unlike the per-task reminders it groups.
  */
-export async function nativeUpdateGroupSummary(routineId, title, activeTaskCount) {
+export async function nativeUpdateGroupSummary(routineId, title, pendingTaskTitles) {
   if (!NativeNotifications) return;
-  await NativeNotifications.updateGroupSummary({ routineId, title, activeTaskCount });
+  await NativeNotifications.updateGroupSummary({ routineId, title, pendingTaskTitles });
 }
 
 export async function nativeCancelGroupSummary(routineId) {
@@ -118,6 +119,25 @@ export async function nativeScheduleDailyDigest(kind, title, body, hour, minute)
 export async function nativeCancelDailyDigest(kind) {
   if (!NativeNotifications) return;
   await NativeNotifications.cancelDailyDigest({ kind });
+}
+
+/**
+ * Listens for a tap on any native notification's body (see NotificationTapIntent.kt /
+ * NotificationTapBridge.kt) - every notification in the app now deep-links here instead of just
+ * opening to whatever screen the app was last on. `taskId`/`routineId` are both optional: a
+ * task-specific notification (due/extra reminder) carries both, the group summary carries only
+ * `routineId`, and the daily summary/digests/background-sync notification carry neither (they
+ * just bring the app to the foreground on the Today tab with nothing specific to focus). Covers
+ * both cold start (MainActivity relaunched fresh - NativeNotificationsPlugin.load() reads the
+ * launch intent's extras) and warm start (MainActivity already running, singleTask - Kotlin's
+ * onNewIntent dispatches through NotificationTapBridge instead) transparently; JS sees the same
+ * event either way.
+ */
+export function initNotificationTapListener(onOpenTarget) {
+  if (!NativeNotifications) return null;
+  return NativeNotifications.addListener('notificationTapped', (event) => {
+    onOpenTarget?.(event.taskId ?? null, event.routineId ?? null);
+  });
 }
 
 /**

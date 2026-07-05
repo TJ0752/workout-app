@@ -13,7 +13,11 @@ import {
   startNativeWorkoutSession,
   initWorkoutSetListener,
 } from './nativeWorkoutSession';
-import { initDueReminderActionListener, initBackgroundSyncListener } from './nativeNotifications';
+import {
+  initDueReminderActionListener,
+  initBackgroundSyncListener,
+  initNotificationTapListener,
+} from './nativeNotifications';
 import {
   getRoutines,
   upsertRoutine,
@@ -48,6 +52,10 @@ function findTask(routines, taskId) {
   return null;
 }
 
+function findRoutineForTask(routines, taskId) {
+  return routines.find((routine) => routine.tasks.some((t) => t.id === taskId)) || null;
+}
+
 const TABS = [
   { id: 'today', label: 'Today', Icon: Sun },
   { id: 'routines', label: 'Routines', Icon: ListTodo },
@@ -63,6 +71,7 @@ function App() {
   const [workoutLogsByTask, setWorkoutLogsByTask] = useState({});
   const [loading, setLoading] = useState(true);
   const [activeSession, setActiveSession] = useState(null);
+  const [focusTarget, setFocusTarget] = useState(null);
   const handleLogWorkoutSetRef = useRef(null);
 
   const refreshAll = async () => {
@@ -99,19 +108,37 @@ function App() {
       await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
       const task = findTask(state.routines, taskId);
       if (task) await refreshTaskReminderVisibility(task, state.completions);
+      const routine = findRoutineForTask(state.routines, taskId);
+      if (routine) await updateRoutineGroupSummary(routine, state.completions);
     };
     const handleAddQuantity = async (taskId, amount) => {
       await addToCompletion(taskId, todayKey(), amount);
       const state = await refreshAll();
       await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
       const task = findTask(state.routines, taskId);
+      const routine = findRoutineForTask(state.routines, taskId);
+      // Refreshes the reminder's own body with the new live progress (see
+      // taskNotificationContent) if it's already pinned/showing - a partial quick-add from the
+      // notification itself is the clearest case where the user needs to see this update
+      // immediately, not on the next natural re-fire.
+      if (task) await scheduleTaskNotifications(task, routine, state.completions);
       if (task) await refreshTaskReminderVisibility(task, state.completions);
+      if (routine) await updateRoutineGroupSummary(routine, state.completions);
     };
 
     // Native due-reminder and extra-reminder Mark-done/+N action buttons both feed this one
     // listener (see src/nativeNotifications.js and android/.../notify/) - every notification
     // action in the app is native now, there's no stock-plugin listener left to wire.
     const dueReminderListenerPromise = initDueReminderActionListener(handleMarkDone, handleAddQuantity);
+
+    // Tapping any native notification's body (see NotificationTapIntent.kt) lands here, whether
+    // the app process was cold or already running - see initNotificationTapListener's own
+    // comment for why both starts funnel into the same JS event. Switches to Today and hands the
+    // target down so TodayView can scroll to and highlight the exact task/routine.
+    const notificationTapListenerPromise = initNotificationTapListener((taskId, routineId) => {
+      setTab('today');
+      setFocusTarget({ taskId, routineId });
+    });
 
     const workoutListenerPromise = initWorkoutSetListener(async (taskId, dateKey, exercise, setIndex, values) => {
       const state = await refreshAll();
@@ -131,6 +158,7 @@ function App() {
 
     return () => {
       dueReminderListenerPromise?.then((handle) => handle.remove());
+      notificationTapListenerPromise?.then((handle) => handle.remove());
       workoutListenerPromise?.then((handle) => handle.remove());
       backgroundSyncListenerPromise?.then((handle) => handle.remove());
     };
@@ -173,7 +201,7 @@ function App() {
         await cancelTaskNotifications(task);
       }
     }
-    if (savedRoutine) await updateRoutineGroupSummary(savedRoutine);
+    if (savedRoutine) await updateRoutineGroupSummary(savedRoutine, state.completions);
     await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
   };
 
@@ -186,7 +214,7 @@ function App() {
       await scheduleTaskNotifications(savedTask, savedRoutine, state.completions);
     } else {
       await cancelTaskNotifications(task);
-      if (savedRoutine) await updateRoutineGroupSummary(savedRoutine);
+      if (savedRoutine) await updateRoutineGroupSummary(savedRoutine, state.completions);
     }
     await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
   };
@@ -197,6 +225,8 @@ function App() {
     if (dateKey === todayKey()) {
       await syncDynamicNotifications(routines, taskVersionsMap, next);
       await refreshTaskReminderVisibility(task, next);
+      const routine = findRoutineForTask(routines, task.id);
+      if (routine) await updateRoutineGroupSummary(routine, next);
     }
   };
 
@@ -205,7 +235,12 @@ function App() {
     setCompletions(next);
     if (dateKey === todayKey()) {
       await syncDynamicNotifications(routines, taskVersionsMap, next);
+      const routine = findRoutineForTask(routines, task.id);
+      // Refreshes the reminder's live progress body in place (see taskNotificationContent) -
+      // a quick-add should never wait for the reminder's next natural fire to reflect it.
+      await scheduleTaskNotifications(task, routine, next);
       await refreshTaskReminderVisibility(task, next);
+      if (routine) await updateRoutineGroupSummary(routine, next);
     }
   };
 
@@ -214,7 +249,10 @@ function App() {
     setCompletions(next);
     if (dateKey === todayKey()) {
       await syncDynamicNotifications(routines, taskVersionsMap, next);
+      const routine = findRoutineForTask(routines, task.id);
+      await scheduleTaskNotifications(task, routine, next);
       await refreshTaskReminderVisibility(task, next);
+      if (routine) await updateRoutineGroupSummary(routine, next);
     }
   };
 
@@ -241,6 +279,8 @@ function App() {
     if (dateKey === todayKey()) {
       await syncDynamicNotifications(routines, taskVersionsMap, nextCompletions);
       await refreshTaskReminderVisibility(task, nextCompletions);
+      const routine = findRoutineForTask(routines, task.id);
+      if (routine) await updateRoutineGroupSummary(routine, nextCompletions);
     }
   };
   handleLogWorkoutSetRef.current = handleLogWorkoutSet;
@@ -285,6 +325,9 @@ function App() {
             onAddQuantity={handleAddQuantity}
             onSetQuantity={handleSetQuantity}
             onStartWorkout={handleStartWorkout}
+            focusTaskId={focusTarget?.taskId}
+            focusRoutineId={focusTarget?.routineId}
+            onFocusHandled={() => setFocusTarget(null)}
           />
         )}
         {tab === 'routines' && (

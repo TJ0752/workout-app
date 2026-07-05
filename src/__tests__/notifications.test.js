@@ -144,7 +144,7 @@ describe('routine group summary', () => {
     expect(calls.groupSummaryUpdated).toContainEqual({
       routineId: 'routine-1',
       title: 'Morning',
-      activeTaskCount: 2,
+      pendingTaskTitles: ['Stretch', 'Water'],
     });
   });
 
