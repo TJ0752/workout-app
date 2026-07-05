@@ -94,7 +94,9 @@ function dumpOwnPackageForDebugging() {
   // script's own test window, making an unbounded post-clear dump both safe and complete.
   const logcat = adbAllowFailure(`shell logcat -d`)
     .split('\n')
-    .filter((l) => l.includes(PACKAGE) || l.includes('FATAL EXCEPTION') || l.includes('AndroidRuntime'))
+    .filter(
+      (l) => l.includes(PACKAGE) || l.includes('FATAL EXCEPTION') || l.includes('AndroidRuntime') || l.includes('ExtraReminderDiag')
+    )
     .join('\n');
   return `--- ${PACKAGE}'s own notification records ---\n${notificationSection}\n--- logcat since last clear mentioning ${PACKAGE} ---\n${logcat || '(nothing matched)'}`;
 }
@@ -373,6 +375,17 @@ async function main() {
       .sort((a, b) => a - b)
       .map((i) => broadcastHistoryLines[i])
       .join('\n') || '(no matching lines found in broadcast history)'
+  );
+  // Ground truth #2, unconditional (not just on failure): a TEMPORARY Log.i() added directly
+  // inside ExtraReminderAlarmReceiver.onReceive() (tag "ExtraReminderDiag") - settles definitively
+  // whether the receiver's code ever actually runs, independent of how dumpsys's own dump-format
+  // terminology ("Skipped (manifest)") should be interpreted.
+  console.log(
+    'ExtraReminderDiag logcat lines (proves whether onReceive() actually ran):',
+    adbAllowFailure(`shell logcat -d`)
+      .split('\n')
+      .filter((l) => l.includes('ExtraReminderDiag'))
+      .join('\n') || '(no ExtraReminderDiag lines found - onReceive() was never entered)'
   );
 
   // Control broadcast: `adb shell am broadcast`'s own "Broadcast completed: result=0" is printed
