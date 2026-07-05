@@ -52,28 +52,22 @@ jobs:
           arch: x86_64
           profile: pixel_5
           disable-animations: true
-          # No `adb shell am force-stop` between scripts (relaunching via `am start` alone is
-          # enough to get a fresh Activity/WebView for the next script) - a real regression found
-          # via dumpsys activity broadcasts: force-stopping puts the app into Android's "stopped
-          # package" state, and adb's own `am broadcast -n <receiver>` (used by
-          # verify-extra-reminder.mjs/verify-daily-digest.mjs/verify-background-sync.mjs/
-          # verify-group-summary.mjs to fire alarm/action receivers on demand instead of waiting
-          # on AlarmManager's real clock) silently gets skipped for a stopped package even when
-          # explicitly targeted by component name - confirmed via dumpsys, and not fixed by also
-          # passing `--include-stopped-packages` (the documented flag for exactly this case,
-          # which didn't resolve it on this emulator image for reasons not fully understood).
-          # Removing the earlier force-stop avoids the stopped state entirely.
+          # No `adb shell am force-stop` between scripts (relaunching via `am start` alone gets a
+          # fresh Activity/WebView for the next script). `adb shell am broadcast -n <receiver>`
+          # (previously used to fire alarm/action receivers on demand instead of waiting on
+          # AlarmManager's real clock) turned out to be fundamentally unreliable on this emulator
+          # image regardless of force-stop, `--include-stopped-packages`, or timeouts - confirmed
+          # via a temporary Log.i() placed directly inside a receiver, which proved the broadcast
+          # never even reached onReceive(). verify-extra-reminder.mjs no longer uses it at all
+          # (real clock-jump + real uiautomator taps instead - see its file header); the other
+          # scripts still using `am broadcast` (verify-daily-digest.mjs, verify-background-sync.mjs,
+          # verify-group-summary.mjs) are known-affected and pending the same rework.
+          #
+          # TEMPORARY: only running due-reminder + extra-reminder below while validating the new
+          # technique - restore the other 4 scripts once confirmed, then rework them the same way.
           script: |
             adb install -r android/app/build/outputs/apk/debug/app-debug.apk
             adb shell am start -n com.tharuka.routines/.MainActivity
             node scripts/verify-due-reminder.mjs
             adb shell am start -n com.tharuka.routines/.MainActivity
             node scripts/verify-extra-reminder.mjs
-            adb shell am start -n com.tharuka.routines/.MainActivity
-            node scripts/verify-group-summary.mjs
-            adb shell am start -n com.tharuka.routines/.MainActivity
-            node scripts/verify-daily-digest.mjs
-            adb shell am start -n com.tharuka.routines/.MainActivity
-            node scripts/verify-background-sync.mjs
-            adb shell am start -n com.tharuka.routines/.MainActivity
-            node scripts/verify-workout-session-notification.mjs

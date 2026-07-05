@@ -7,37 +7,48 @@
  * sibling native notification introduced in the same migration (see CLAUDE.md's "Native
  * notifications" section).
  *
- * Unlike the due-by reminder, extra reminders have no catch-up/overdue-today logic (they're
- * plain nudges leading up to the real due time, not the due moment itself - see
- * ExtraReminderScheduler's doc comment) - so this script can't rely on "schedule something a
- * few minutes in the past and expect an immediate post" the way verify-due-reminder.mjs does.
- * Instead it broadcasts directly to ExtraReminderAlarmReceiver/ExtraReminderActionReceiver -
- * exactly the technique verify-group-summary.mjs already uses for SummaryDismissReceiver - which
- * is deterministic and still exercises the real registered receivers, the real persisted
- * ExtraReminderStore entry, and the real notification-building/action-dispatch code, without
- * waiting on AlarmManager's own clock.
+ * This does NOT use `adb shell am broadcast -n <receiver>` to fake the alarm/action firing -
+ * an earlier version did, and it failed identically across many real-device runs even with
+ * `--include-stopped-packages` and with `am force-stop` removed entirely from the workflow
+ * between scripts. A temporary Log.i() placed directly inside
+ * ExtraReminderAlarmReceiver.onReceive() proved the receiver's code never ran at all - `adb
+ * shell am broadcast -n` simply does not reach this app's manifest-declared receivers on this
+ * emulator image, for reasons that were never fully root-caused (dumpsys activity broadcasts
+ * reported the intent as "Skipped (manifest)" every time, with an unexplained
+ * flg=0x400030 - both FLAG_INCLUDE_STOPPED_PACKAGES and FLAG_EXCLUDE_STOPPED_PACKAGES bits set
+ * simultaneously). A control broadcast to the unrelated, much simpler
+ * BackgroundSyncActionReceiver failed identically, confirming this wasn't specific to extra
+ * reminders.
  *
- * The one piece this script needs that isn't visible anywhere in the DOM or dumpsys - the
- * app-generated task id (crypto.randomUUID(), see CLAUDE.md) - is read directly off the app's
- * real SQLite connection via `window.Capacitor.Plugins.CapacitorSQLite.query(...)`, the exact
- * same native plugin call storage.js's own db.js wraps (see DB_NAME='routines' in db.js). This
- * is a page-JS-side read through the app's already-open connection, not a second SQLite driver
- * opening the file - the same constraint that rules out this script (or any native code) opening
- * the DB file itself still applies; the point here is that it doesn't need to, because the CDP
- * bridge already gives this script full access to run JS inside the real app.
+ * Instead, this script exercises the real underlying Android mechanisms directly, the same
+ * ones the shipped feature actually depends on in production, with no synthetic broadcast
+ * anywhere:
+ *   - The alarm fire itself: schedule an extra reminder a few minutes in the future, then
+ *     advance the emulator's system clock past that time with `adb shell date` (root is
+ *     available on non-Play-Store `google_apis` system images). Android's real AlarmManager
+ *     re-evaluates pending alarms on `ACTION_TIME_CHANGED` and fires the genuine
+ *     `PendingIntent` - this is a real end-to-end test of arm()/armAt(), not a shortcut around
+ *     it, and sidesteps the broadcast-delivery mystery entirely since nothing here sends an
+ *     ad-hoc `am broadcast`.
+ *   - The Snooze/Mark-done actions: real `uiautomator` taps on the actual notification action
+ *     buttons (the same technique verify-due-reminder.mjs already uses for its swipe-dismiss
+ *     check, safe here since this notification has no chronometer-driven ticking text - see
+ *     CLAUDE.md). Tapping a real notification action button routes through the OS's own
+ *     PendingIntent-delivery path, which the app that posted the notification always receives
+ *     regardless of any adb-broadcast quirk, since it's a completely different code path from
+ *     `ActivityManagerService.broadcastIntent()`.
+ *
+ * The app-generated task id (crypto.randomUUID(), see CLAUDE.md) - needed to query completions
+ * afterward - is read directly off the app's real SQLite connection via
+ * `window.Capacitor.Plugins.CapacitorSQLite.query(...)`, the exact same native plugin call
+ * storage.js's own db.js wraps. This is a page-JS-side read through the app's already-open
+ * connection, not a second SQLite driver opening the file.
  */
 import { execSync } from 'node:child_process';
 
 const PACKAGE = 'com.tharuka.routines';
 const CHANNEL_ID = 'routine-reminders';
 const TASK_TITLE = 'Emulator Extra Reminder Test';
-const ALARM_RECEIVER = `${PACKAGE}/com.tharuka.routines.notify.ExtraReminderAlarmReceiver`;
-const ACTION_RECEIVER = `${PACKAGE}/com.tharuka.routines.notify.ExtraReminderActionReceiver`;
-const ACTION_MARK_DONE = 'com.tharuka.routines.notify.action.MARK_DONE';
-const ACTION_SNOOZE = 'com.tharuka.routines.notify.action.SNOOZE';
-// Control receiver for a sanity check unrelated to extras/store content - see the "control
-// broadcast" step below.
-const BG_SYNC_STOP_RECEIVER = `${PACKAGE}/com.tharuka.routines.notify.BackgroundSyncActionReceiver`;
 
 function adb(cmd) {
   return execSync(`adb ${cmd}`, { encoding: 'utf8' });
@@ -76,8 +87,9 @@ function dumpNotifications() {
  * A full `dumpsys notification` includes every app on the device's channels/records (hundreds of
  * KB) - printing that wholesale on a failure both drowns out the one signal that actually matters
  * and risks blowing past CI log/tool size limits. This prints only this package's own record
- * blocks (still their full text, not findAppRecords' truncated `raw` slice) plus a logcat tail
- * filtered to this package, so a future failure is actually diagnosable from the CI log alone.
+ * blocks plus a full logcat capture (cleared right before the alarm-triggering clock jump, see
+ * main()) filtered to this package, so a future failure is actually diagnosable from the CI log
+ * alone without hunting through unrelated system noise.
  */
 function dumpOwnPackageForDebugging() {
   const dump = dumpNotifications();
@@ -86,17 +98,9 @@ function dumpOwnPackageForDebugging() {
     blocks.length === 0
       ? `(no NotificationRecord blocks found for ${PACKAGE})`
       : blocks.map((b) => 'NotificationRecord(' + b.split('\n\n')[0]).join('\n---\n');
-  // No `-t <n>` line cap here on purpose: an earlier version tailed the last 500 lines of the
-  // *entire device's* logcat, which on a system this chatty (dex2oat/installd/PackageManager
-  // noise from every app, not just this one) could genuinely push a real crash for this package
-  // out of the tail window before this even runs. `logcat -c` is called right before the
-  // broadcast this backs (see main()) so the buffer only contains what happened during this
-  // script's own test window, making an unbounded post-clear dump both safe and complete.
   const logcat = adbAllowFailure(`shell logcat -d`)
     .split('\n')
-    .filter(
-      (l) => l.includes(PACKAGE) || l.includes('FATAL EXCEPTION') || l.includes('AndroidRuntime') || l.includes('ExtraReminderDiag')
-    )
+    .filter((l) => l.includes(PACKAGE) || l.includes('FATAL EXCEPTION') || l.includes('AndroidRuntime'))
     .join('\n');
   return `--- ${PACKAGE}'s own notification records ---\n${notificationSection}\n--- logcat since last clear mentioning ${PACKAGE} ---\n${logcat || '(nothing matched)'}`;
 }
@@ -121,6 +125,96 @@ function findAppRecords(dump) {
         text: textMatch?.[1],
       };
     });
+}
+
+function getScreenSize() {
+  const out = adb(`shell wm size`);
+  const match = out.match(/(?:Override|Physical) size: (\d+)x(\d+)/);
+  if (!match) return null;
+  return { width: Number(match[1]), height: Number(match[2]) };
+}
+
+/** See verify-due-reminder.mjs's identical helper - safe here for the same reason (no chronometer-driven ticking text on this notification). */
+function uiDump() {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    adbAllowFailure(`shell rm -f /sdcard/window_dump.xml`);
+    adbAllowFailure(`shell uiautomator dump /sdcard/window_dump.xml`);
+    const out = adbAllowFailure(`shell cat /sdcard/window_dump.xml`);
+    if (out && out.includes('<hierarchy')) return out;
+    execSync('sleep 1');
+  }
+  return '';
+}
+
+/** Compose/View text can surface via content-desc instead of text - search both, loosely. */
+function findNodeByLooseText(xml, text) {
+  const nodes = xml.match(/<node\b[^>]*\/>/g) || [];
+  for (const node of nodes) {
+    const textMatch = node.match(/\btext="([^"]*)"/);
+    const descMatch = node.match(/\bcontent-desc="([^"]*)"/);
+    if ((textMatch && textMatch[1].includes(text)) || (descMatch && descMatch[1].includes(text))) {
+      const boundsMatch = node.match(/\bbounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
+      if (boundsMatch) {
+        const [x1, y1, x2, y2] = boundsMatch.slice(1).map(Number);
+        return { x1, y1, x2, y2 };
+      }
+    }
+  }
+  return null;
+}
+
+function tapNodeCenter(bounds) {
+  const x = Math.floor((bounds.x1 + bounds.x2) / 2);
+  const y = Math.floor((bounds.y1 + bounds.y2) / 2);
+  adb(`shell input tap ${x} ${y}`);
+}
+
+/** Taps a notification action button by its visible label, expanding/collapsing the shade around it. */
+function tapNotificationAction(label) {
+  adb(`shell cmd statusbar expand-notifications`);
+  execSync('sleep 1');
+  const xml = uiDump();
+  if (!xml) {
+    adbAllowFailure(`shell cmd statusbar collapse`);
+    fail(`uiautomator dump did not produce a UI tree while looking for the "${label}" action.`);
+  }
+  const bounds = findNodeByLooseText(xml, label);
+  if (!bounds) {
+    adbAllowFailure(`shell cmd statusbar collapse`);
+    fail(`Could not find a "${label}" action button in the notification shade.`);
+  }
+  tapNodeCenter(bounds);
+  execSync('sleep 1'); // let the tap's PendingIntent dispatch before we collapse the shade
+  adbAllowFailure(`shell cmd statusbar collapse`);
+}
+
+const pad = (n) => String(n).padStart(2, '0');
+
+/** Reads the emulator's own wall-clock fields directly, rather than the CI runner's - the two are not guaranteed to agree, and every alarm-scheduling decision (arm()'s day-of-week math, computeNextOccurrenceDaysFromNow) is keyed off the device's own clock. */
+function deviceDateTimeFields() {
+  const out = adb(`shell date +"%m %d %Y %H %M %S %w"`).trim();
+  const [month, day, year, hour, minute, second, weekday] = out.split(/\s+/).map(Number);
+  return { month, day, year, hour, minute, second, weekday };
+}
+
+/** Adds minutes to a device-time fields object, handling hour/day rollover (not month/year - acceptable here since this only ever advances a few minutes at a time, matching the level of care already accepted elsewhere in these scripts for similar day-boundary edge cases). */
+function addMinutes(fields, deltaMinutes) {
+  let totalMinutes = fields.hour * 60 + fields.minute + deltaMinutes;
+  const dayOverflow = Math.floor(totalMinutes / (24 * 60));
+  totalMinutes = ((totalMinutes % (24 * 60)) + 24 * 60) % (24 * 60);
+  return {
+    ...fields,
+    hour: Math.floor(totalMinutes / 60),
+    minute: totalMinutes % 60,
+    day: fields.day + dayOverflow,
+    weekday: (fields.weekday + dayOverflow + 7) % 7,
+  };
+}
+
+/** Sets the emulator's system clock via toybox date's classic positional SET format (MMDDhhmm[[CC]YY][.ss]) - requires root, which non-Play-Store `google_apis` emulator images grant to the adb shell by default. Setting the clock fires ACTION_TIME_CHANGED, which AlarmManager listens for to re-evaluate and fire any now-overdue alarms - this is what lets the real (not synthetic) extra-reminder alarm fire on demand in CI. */
+function setDeviceTime(fields) {
+  const value = `${pad(fields.month)}${pad(fields.day)}${pad(fields.hour)}${pad(fields.minute)}${fields.year}.${pad(fields.second)}`;
+  adb(`shell date ${value}`);
 }
 
 class CdpPage {
@@ -239,7 +333,7 @@ async function waitFor(page, jsCondition, timeoutMs = 15000) {
   return false;
 }
 
-async function pollFor(fn, predicate, timeoutMs = 10000, intervalMs = 500) {
+async function pollFor(fn, predicate, timeoutMs = 20000, intervalMs = 500) {
   const start = Date.now();
   let last;
   while (Date.now() - start < timeoutMs) {
@@ -284,10 +378,15 @@ async function main() {
     return ok;
   }
 
-  const weekday = Number(adb(`shell date +%w`).trim());
   const todayKey = adb(`shell date +%Y-%m-%d`).trim();
+  const baseline = deviceDateTimeFields();
+  // A few minutes out is enough buffer for the UI flow below (routine creation, native
+  // scheduling) to finish in real time before we jump the clock forward to meet it.
+  const reminderTarget = addMinutes(baseline, 3);
+  const reminderTimeStr = `${pad(reminderTarget.hour)}:${pad(reminderTarget.minute)}`;
   const labelOrder = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const targetLabel = labelOrder[weekday];
+  const targetLabel = labelOrder[baseline.weekday];
+  console.log(`Device time is ${pad(baseline.hour)}:${pad(baseline.minute)} (weekday ${targetLabel}). Extra reminder will be set for ${reminderTimeStr} today.`);
 
   console.log('Creating a task with an extra reminder time...');
   await mustEval(`window.__test.clickByText('.app-tabbar button', 'Routines')`, 'click Routines tab');
@@ -301,14 +400,13 @@ async function main() {
   // Due by (index 1, after "Starts at" at index 0) is set late in the day so the due-by
   // reminder's own overdue-today catch-up (see verify-due-reminder.mjs) doesn't also fire and
   // complicate this script's assertions - this script only cares about the extra reminder.
-  await mustEval(
-    `window.__test.setValue('.routine-form input[type="time"]', '23:55', 1)`,
-    'set due time to 23:55'
-  );
+  await mustEval(`window.__test.setValue('.routine-form input[type="time"]', '23:55', 1)`, 'set due time to 23:55');
   // The reminder-row's own time input is the 3rd type="time" input on the page (index 2, after
-  // "Starts at"/"Due by") - value itself doesn't matter since this script fires the alarm
-  // receiver directly rather than waiting on AlarmManager (see file header).
-  await mustEval(`window.__test.setValue('.routine-form input[type="time"]', '09:00', 2)`, 'set extra reminder draft time');
+  // "Starts at"/"Due by").
+  await mustEval(
+    `window.__test.setValue('.routine-form input[type="time"]', ${JSON.stringify(reminderTimeStr)}, 2)`,
+    'set extra reminder time'
+  );
   await mustEval(`window.__test.clickByText('button', '+ Add reminder')`, 'click + Add reminder');
   await sleep(200);
 
@@ -332,126 +430,66 @@ async function main() {
   if (!taskId) fail('Could not find the created task\'s id via a direct SQLite query.');
   console.log('Resolved task id via SQLite query:', taskId);
 
-  // Ground-truth check: read ExtraReminderStore's SharedPreferences file directly (debug builds
-  // allow `run-as`) to tell apart "the entry was never persisted" (a JS/native scheduling bug)
-  // from "it was persisted but the broadcast/receiver didn't find it" (a broadcast-targeting
-  // bug) - a prior run failed here with no visible JS-side error and a clean
-  // "Broadcast completed: result=0", which is equally consistent with either cause.
-  const pidBeforeBroadcast = adbAllowFailure(`shell pidof ${PACKAGE}`).trim();
-  console.log('App pid before broadcast:', pidBeforeBroadcast);
-  console.log(
-    'ExtraReminderStore SharedPreferences before broadcast:',
-    adbAllowFailure(
-      `shell run-as ${PACKAGE} cat /data/data/${PACKAGE}/shared_prefs/native_notifications_extra_reminders.xml`
-    ) || '(empty/unreadable)'
-  );
-
-  // Clear the device's logcat buffer right before broadcasting so a post-failure dump (see
-  // dumpOwnPackageForDebugging) only has to cover this test's own narrow window and can be read
-  // in full, rather than tailing the last N lines of the *entire device's* log and risking a
-  // real crash for this package getting pushed out by unrelated system noise (this device is
-  // very chatty - dex2oat/installd/PackageManager activity from every app, not just this one).
+  // --- Fire the alarm for real: jump the emulator's clock past the scheduled time and let
+  // AlarmManager do its own thing, rather than faking a broadcast (see file header for why).
+  console.log('Clearing logcat, then advancing the device clock to fire the real alarm...');
   adbAllowFailure(`shell logcat -c`);
-
-  console.log('Broadcasting directly to ExtraReminderAlarmReceiver (slot 0) to fire the alarm...');
-  const broadcastResult = adb(`shell am broadcast --include-stopped-packages -n ${ALARM_RECEIVER} --es taskId "${taskId}" --ei slot 0`);
-  console.log('Broadcast result:', broadcastResult.trim());
-  console.log('App pid after broadcast:', adbAllowFailure(`shell pidof ${PACKAGE}`).trim(), '(different from before means the process restarted)');
-  // Ground truth from Android's own broadcast dispatcher, not just adb's "completed" echo -
-  // shows per-receiver delivery status (delivered/skipped/blocked) and why, e.g. a "stopped
-  // package" skip that `am broadcast`'s own generic result code would never surface. Keep a
-  // window of context around each match, not just the matching line, since the actual
-  // delivered/skipped verdict is usually on a nearby line, not the one naming the receiver.
-  const broadcastHistoryLines = adbAllowFailure(`shell dumpsys activity broadcasts`).split('\n');
-  const contextWindow = new Set();
-  broadcastHistoryLines.forEach((l, i) => {
-    if (l.includes('ExtraReminderAlarmReceiver') || l.includes(taskId)) {
-      for (let j = Math.max(0, i - 3); j <= Math.min(broadcastHistoryLines.length - 1, i + 5); j++) contextWindow.add(j);
-    }
-  });
-  console.log(
-    'dumpsys activity broadcasts around ExtraReminderAlarmReceiver:',
-    [...contextWindow]
-      .sort((a, b) => a - b)
-      .map((i) => broadcastHistoryLines[i])
-      .join('\n') || '(no matching lines found in broadcast history)'
-  );
-  // Ground truth #2, unconditional (not just on failure): a TEMPORARY Log.i() added directly
-  // inside ExtraReminderAlarmReceiver.onReceive() (tag "ExtraReminderDiag") - settles definitively
-  // whether the receiver's code ever actually runs, independent of how dumpsys's own dump-format
-  // terminology ("Skipped (manifest)") should be interpreted.
-  console.log(
-    'ExtraReminderDiag logcat lines (proves whether onReceive() actually ran):',
-    adbAllowFailure(`shell logcat -d`)
-      .split('\n')
-      .filter((l) => l.includes('ExtraReminderDiag'))
-      .join('\n') || '(no ExtraReminderDiag lines found - onReceive() was never entered)'
-  );
-
-  // Control broadcast: `adb shell am broadcast`'s own "Broadcast completed: result=0" is printed
-  // even when nothing actually handled the intent, so it can't by itself confirm
-  // ExtraReminderAlarmReceiver's onReceive() ran. BackgroundSyncActionReceiver is a much simpler,
-  // already-shipped receiver (no extras, single side effect: stops the always-on background-sync
-  // service and removes its persistent notification) - broadcasting to it here and checking
-  // whether that notification disappears tells apart "explicit broadcasts to this app's manifest
-  // receivers aren't working on this run at all" from "something specific to
-  // ExtraReminderAlarmReceiver/its extras is the problem".
-  const bgSyncShowingBefore = Boolean(findAppRecords(dumpNotifications()).find((r) => r.channel === 'background-sync'));
-  console.log('Control check: background-sync notification showing before control broadcast:', bgSyncShowingBefore);
-  adb(`shell am broadcast --include-stopped-packages -n ${BG_SYNC_STOP_RECEIVER}`);
-  const bgSyncStopped = await pollFor(
-    () => findAppRecords(dumpNotifications()).find((r) => r.channel === 'background-sync'),
-    (r) => !r,
-    10000
-  );
-  console.log(
-    'Control check result: background-sync notification gone after broadcasting to BackgroundSyncActionReceiver:',
-    !bgSyncStopped,
-    '(false here would mean explicit broadcasts to this app are not being delivered/handled at all right now, unrelated to ExtraReminderAlarmReceiver specifically)'
-  );
+  setDeviceTime({ ...reminderTarget, second: 10 });
+  console.log('Device time is now:', adb(`shell date`).trim());
 
   const posted = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === CHANNEL_ID && r.title === TASK_TITLE && !r.ongoing),
-    (r) => Boolean(r),
-    30000
+    (r) => Boolean(r)
   );
   if (!posted) {
-    console.log(
-      'ExtraReminderStore SharedPreferences after broadcast:',
-      adbAllowFailure(
-        `shell run-as ${PACKAGE} cat /data/data/${PACKAGE}/shared_prefs/native_notifications_extra_reminders.xml`
-      ) || '(empty/unreadable)'
-    );
     console.log(dumpOwnPackageForDebugging());
-    fail('No plain (non-ongoing) routine-reminders notification appeared after broadcasting to ExtraReminderAlarmReceiver.');
+    fail('No plain (non-ongoing) routine-reminders notification appeared after the clock reached the scheduled reminder time.');
   }
   console.log('Extra reminder notification posted:', { title: posted.title, text: posted.text, ongoing: posted.ongoing });
   if (!posted.raw.includes('Mark done') || !posted.raw.includes('Snooze 15m')) {
     fail(`Extra reminder notification is missing expected action titles. Raw record: ${posted.raw}`);
   }
-  console.log('PASS: extra reminder fired via the native alarm receiver with Mark-done/Snooze actions intact.');
+  console.log('PASS: extra reminder fired via a real AlarmManager alarm with Mark-done/Snooze actions intact.');
 
-  console.log('Broadcasting a Snooze action for slot 0...');
-  console.log('Broadcast result:', adb(`shell am broadcast --include-stopped-packages -n ${ACTION_RECEIVER} -a ${ACTION_SNOOZE} --es taskId "${taskId}" --ei slot 0`).trim());
-  await sleep(1000);
+  // --- Snooze: a real tap on the actual notification button.
+  console.log('Tapping the real "Snooze 15m" notification action...');
+  tapNotificationAction('Snooze 15m');
   const completionAfterSnooze = await page.evaluate(`window.__test.queryCompletion(${JSON.stringify(taskId)}, ${JSON.stringify(todayKey)})`);
   if (completionAfterSnooze !== null) {
     fail(`Snooze unexpectedly wrote a completion (value=${completionAfterSnooze}) - it should only re-arm the alarm, never touch completions.`);
   }
   console.log('PASS: Snooze re-armed without touching completions.');
 
-  console.log('Broadcasting a Mark-done action for slot 0...');
-  console.log('Broadcast result:', adb(`shell am broadcast --include-stopped-packages -n ${ACTION_RECEIVER} -a ${ACTION_MARK_DONE} --es taskId "${taskId}" --ei slot 0`).trim());
+  // --- Confirm the snooze's re-arm is real: jump the clock another 15 minutes and see it
+  // actually reappear via a genuine AlarmManager fire, not just trust that armAt() was called.
+  console.log('Advancing the device clock 15 more minutes to confirm the snoozed alarm actually re-fires...');
+  const snoozeTarget = addMinutes(reminderTarget, 15);
+  setDeviceTime({ ...snoozeTarget, second: 10 });
+  console.log('Device time is now:', adb(`shell date`).trim());
+
+  const repostedAfterSnooze = await pollFor(
+    () => findAppRecords(dumpNotifications()).find((r) => r.channel === CHANNEL_ID && r.title === TASK_TITLE && !r.ongoing),
+    (r) => Boolean(r)
+  );
+  if (!repostedAfterSnooze) {
+    console.log(dumpOwnPackageForDebugging());
+    fail('The snoozed extra reminder did not reappear 15 minutes later - the Snooze action\'s armAt() re-arm is broken.');
+  }
+  console.log('PASS: the snoozed extra reminder reappeared via a real alarm fire 15 minutes later.');
+
+  // --- Mark done: another real tap, this time on "Mark done".
+  console.log('Tapping the real "Mark done" notification action...');
+  tapNotificationAction('Mark done');
 
   const completion = await pollFor(
     () => page.evaluate(`window.__test.queryCompletion(${JSON.stringify(taskId)}, ${JSON.stringify(todayKey)})`),
     (v) => v !== null,
-    20000
+    15000
   );
   if (completion === null) {
     console.log(dumpOwnPackageForDebugging());
     fail(
-      'No completion row appeared for this task after broadcasting Mark-done - the ' +
+      'No completion row appeared for this task after tapping Mark-done - the ' +
         'ExtraReminderActionReceiver -> dispatchDueReminderAction -> DueReminderBridge -> JS ' +
         '"dueReminderAction" pipeline did not actually mark the task done.'
     );
@@ -461,7 +499,7 @@ async function main() {
   const remaining = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.title === TASK_TITLE),
     (r) => !r,
-    20000
+    15000
   );
   if (remaining) {
     console.log(dumpOwnPackageForDebugging());
