@@ -219,7 +219,7 @@ async function main() {
   await sleep(3000);
 
   console.log('Broadcasting kind=morning to DailyDigestAlarmReceiver...');
-  console.log('Broadcast result:', adb(`shell am broadcast -n ${ALARM_RECEIVER} --es kind morning`).trim());
+  console.log('Broadcast result:', adb(`shell am broadcast --include-stopped-packages -n ${ALARM_RECEIVER} --es kind morning`).trim());
   const morning = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === CHANNEL_ID && r.title === 'Good morning'),
     (r) => Boolean(r),
@@ -232,7 +232,7 @@ async function main() {
   console.log('PASS: morning digest fired with real content.', { text: morning.text });
 
   console.log('Broadcasting kind=evening to DailyDigestAlarmReceiver...');
-  console.log('Broadcast result:', adb(`shell am broadcast -n ${ALARM_RECEIVER} --es kind evening`).trim());
+  console.log('Broadcast result:', adb(`shell am broadcast --include-stopped-packages -n ${ALARM_RECEIVER} --es kind evening`).trim());
   const evening = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === CHANNEL_ID && r.title === 'Evening wrap-up'),
     (r) => Boolean(r),
@@ -251,7 +251,7 @@ async function main() {
     `window.__test.scheduleNativeDigest('streak-risk', 'Your streak is at risk', 'Finish "Test Routine" today to keep your streak alive.', 19, 0)`
   );
   await sleep(500);
-  console.log('Broadcast result:', adb(`shell am broadcast -n ${ALARM_RECEIVER} --es kind streak-risk`).trim());
+  console.log('Broadcast result:', adb(`shell am broadcast --include-stopped-packages -n ${ALARM_RECEIVER} --es kind streak-risk`).trim());
   const atRisk = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === CHANNEL_ID && r.title === 'Your streak is at risk'),
     (r) => Boolean(r),
@@ -277,7 +277,7 @@ async function main() {
   console.log('PASS: cancelDailyDigest actively removed the shown streak-risk notification.');
 
   console.log('Re-firing kind=streak-risk after cancellation to confirm the persisted entry was actually cleared (not just the alarm)...');
-  console.log('Broadcast result:', adb(`shell am broadcast -n ${ALARM_RECEIVER} --es kind streak-risk`).trim());
+  console.log('Broadcast result:', adb(`shell am broadcast --include-stopped-packages -n ${ALARM_RECEIVER} --es kind streak-risk`).trim());
   await sleep(2000);
   const repostedAfterCancel = findAppRecords(dumpNotifications()).find(
     (r) => r.channel === CHANNEL_ID && r.title === 'Your streak is at risk'

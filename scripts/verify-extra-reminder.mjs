@@ -352,7 +352,7 @@ async function main() {
   adbAllowFailure(`shell logcat -c`);
 
   console.log('Broadcasting directly to ExtraReminderAlarmReceiver (slot 0) to fire the alarm...');
-  const broadcastResult = adb(`shell am broadcast -n ${ALARM_RECEIVER} --es taskId "${taskId}" --ei slot 0`);
+  const broadcastResult = adb(`shell am broadcast --include-stopped-packages -n ${ALARM_RECEIVER} --es taskId "${taskId}" --ei slot 0`);
   console.log('Broadcast result:', broadcastResult.trim());
   console.log('App pid after broadcast:', adbAllowFailure(`shell pidof ${PACKAGE}`).trim(), '(different from before means the process restarted)');
   // Ground truth from Android's own broadcast dispatcher, not just adb's "completed" echo -
@@ -385,7 +385,7 @@ async function main() {
   // ExtraReminderAlarmReceiver/its extras is the problem".
   const bgSyncShowingBefore = Boolean(findAppRecords(dumpNotifications()).find((r) => r.channel === 'background-sync'));
   console.log('Control check: background-sync notification showing before control broadcast:', bgSyncShowingBefore);
-  adb(`shell am broadcast -n ${BG_SYNC_STOP_RECEIVER}`);
+  adb(`shell am broadcast --include-stopped-packages -n ${BG_SYNC_STOP_RECEIVER}`);
   const bgSyncStopped = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === 'background-sync'),
     (r) => !r,
@@ -419,7 +419,7 @@ async function main() {
   console.log('PASS: extra reminder fired via the native alarm receiver with Mark-done/Snooze actions intact.');
 
   console.log('Broadcasting a Snooze action for slot 0...');
-  console.log('Broadcast result:', adb(`shell am broadcast -n ${ACTION_RECEIVER} -a ${ACTION_SNOOZE} --es taskId "${taskId}" --ei slot 0`).trim());
+  console.log('Broadcast result:', adb(`shell am broadcast --include-stopped-packages -n ${ACTION_RECEIVER} -a ${ACTION_SNOOZE} --es taskId "${taskId}" --ei slot 0`).trim());
   await sleep(1000);
   const completionAfterSnooze = await page.evaluate(`window.__test.queryCompletion(${JSON.stringify(taskId)}, ${JSON.stringify(todayKey)})`);
   if (completionAfterSnooze !== null) {
@@ -428,7 +428,7 @@ async function main() {
   console.log('PASS: Snooze re-armed without touching completions.');
 
   console.log('Broadcasting a Mark-done action for slot 0...');
-  console.log('Broadcast result:', adb(`shell am broadcast -n ${ACTION_RECEIVER} -a ${ACTION_MARK_DONE} --es taskId "${taskId}" --ei slot 0`).trim());
+  console.log('Broadcast result:', adb(`shell am broadcast --include-stopped-packages -n ${ACTION_RECEIVER} -a ${ACTION_MARK_DONE} --es taskId "${taskId}" --ei slot 0`).trim());
 
   const completion = await pollFor(
     () => page.evaluate(`window.__test.queryCompletion(${JSON.stringify(taskId)}, ${JSON.stringify(todayKey)})`),

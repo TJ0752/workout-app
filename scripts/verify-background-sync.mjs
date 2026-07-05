@@ -360,7 +360,7 @@ async function main() {
 
   // --- Stop action: confirm it removes the persistent notification.
   console.log('Broadcasting the Stop action...');
-  console.log('Broadcast result:', adb(`shell am broadcast -n ${STOP_RECEIVER}`).trim());
+  console.log('Broadcast result:', adb(`shell am broadcast --include-stopped-packages -n ${STOP_RECEIVER}`).trim());
 
   const stopped = await pollFor(
     () => findAppRecords(dumpNotifications()).find((r) => r.channel === BG_SYNC_CHANNEL_ID),

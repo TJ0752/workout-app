@@ -289,7 +289,7 @@ async function main() {
   console.log('Summary notification before dismiss:', { title: summary1.title, text: summary1.text });
 
   console.log('Broadcasting a dismiss to SummaryDismissReceiver...');
-  adb(`shell am broadcast -n ${SUMMARY_DISMISS_RECEIVER}`);
+  adb(`shell am broadcast --include-stopped-packages -n ${SUMMARY_DISMISS_RECEIVER}`);
 
   console.log('Waiting for the summary notification to reappear...');
   let summary2 = null;
