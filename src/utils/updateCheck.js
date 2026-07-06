@@ -2,12 +2,25 @@ import { Capacitor } from '@capacitor/core';
 import { App } from '@capacitor/app';
 
 const REPO = 'TJ0752/workout-app';
-const RELEASE_TAG = 'latest-android';
+
+/**
+ * The `prod` (com.tharuka.routines) and `dev` (com.tharuka.routines.dev) flavors share this
+ * exact same web bundle - Capacitor copies one `dist/` into both, flavors only change native
+ * Android config (see CLAUDE.md's "Test app / product flavors") - so this can't just hardcode
+ * one release tag. `App.getInfo().id` is the actual running applicationId at runtime, which is
+ * what picks the right one: the `dev` app must only ever offer to install a `dev`-flavored APK
+ * over itself, and vice versa - installing a `prod` APK over a `dev` install (or the reverse) is
+ * a different Android package entirely, and fails at the OS installer level ("package appears to
+ * be invalid") rather than updating in place.
+ */
+export function releaseTagFor(applicationId) {
+  return applicationId?.endsWith('.dev') ? 'latest-android-dev' : 'latest-android';
+}
 
 /**
  * Compares the running app's versionCode (set at CI build time to the GitHub
- * Actions run number - see android-build.yml) against the "latest-android"
- * GitHub Release's versionCode, embedded in the release body. No-ops on web:
+ * Actions run number - see android-build.yml) against the matching GitHub Release's
+ * versionCode, embedded in the release body. No-ops on web:
  * there's no installed native build to compare, and no Play Store/backend to
  * check against otherwise, so this only makes sense on-device.
  */
@@ -18,8 +31,9 @@ export async function checkForUpdate() {
 
   const info = await App.getInfo();
   const currentBuild = Number(info.build) || 0;
+  const releaseTag = releaseTagFor(info.id);
 
-  const res = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/${RELEASE_TAG}`);
+  const res = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/${releaseTag}`);
   if (!res.ok) {
     throw new Error(`GitHub API responded ${res.status}`);
   }
