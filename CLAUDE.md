@@ -997,6 +997,23 @@ Two independent layers, deliberately both present rather than picking one:
   header) is the verifiable, user-controlled counterpart — export whenever you want a snapshot
   (before trying something risky, moving to a new phone, or just for peace of mind), not just
   whenever Android feels like it.
+- **Automatic local versioned backups** (`runAutoBackup`/`listAutoBackups`/`restoreAutoBackup` in
+  `backup.js`) are the third layer, added specifically for "seamless, before every release"
+  protection: a fresh snapshot is written every time the app is opened (App.jsx's top-level
+  mount effect, fire-and-forget so nothing on screen waits on it), to app-private storage
+  (`Directory.Data` → Android's `getFilesDir()/auto-backups/`), pruned to the 5 most recent. This
+  is a deliberately different mechanism from the manual export above, and a different tradeoff:
+  no OAuth/Drive-API integration (a real, standalone feature on the scale of the planned Claude
+  chat work — considered and explicitly not pursued, since a normal in-place app update never
+  touches this directory at all; only a genuine uninstall wipes it, and the actual risk "before
+  every release" is a *bad build corrupting data*, not the update process deleting it) and no
+  scoped-storage permission complexity (`Directory.Documents`/`External` need permissions that
+  vary awkwardly across Android versions, for a benefit — surviving a deliberate uninstall —
+  Auto Backup above already covers for free once its `file` domain include covers this folder).
+  `SettingsView.jsx`'s "Recent local backups" list restores any of the last 5 snapshots directly
+  (`Filesystem.readFile` → the same `importDatabaseJson` restore path the manual import uses),
+  with the same destructive-replace confirmation. Native-only (no-op on web) — there's no
+  separate "reinstall" story worth protecting against on a dev machine.
 
 **Export/import go through the sqlite plugin's own `exportToJson`/`importFromJson`, not
 hand-rolled per-table `SELECT`s** (`exportDatabaseJson`/`importDatabaseJson` in `db.js`) — this
@@ -1062,6 +1079,18 @@ app only ever updates once something has actually been merged to `main` — day-
 the working branch no longer pushes unfinished work to the one app real usage depends on.
 `android-emulator-verify.yml` builds and installs only the `prod` flavor, since its verification
 scripts assume the real `com.tharuka.routines` applicationId.
+
+**A real bug this introduced**: both flavors share the exact same web bundle (Capacitor copies
+one `dist/` into both; flavors only change native Android config), so `updateCheck.js`'s
+`checkForUpdate()` can't hardcode a single release tag the way it did before flavors existed —
+the `dev` app was checking (and trying to install) the `prod` release's APK, a different Android
+package, which fails at the OS installer level ("package appears to be invalid") rather than
+updating in place. Fixed by reading the running app's actual applicationId
+(`App.getInfo().id`) at check time and picking `latest-android` vs. `latest-android-dev`
+accordingly (`releaseTagFor` in `updateCheck.js`, unit-tested directly). One-time consequence for
+any device that already had the buggy version installed: since the fix itself ships inside the
+very release the broken checker fails to fetch, one manual APK install is needed to get off the
+broken version — after that, the in-app updater self-corrects permanently.
 
 ### Design system
 

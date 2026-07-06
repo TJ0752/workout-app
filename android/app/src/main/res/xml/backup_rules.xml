@@ -7,4 +7,5 @@ comment for the reasoning.
 <full-backup-content>
     <include domain="database" path="." />
     <include domain="sharedpref" path="." />
+    <include domain="file" path="auto-backups/" />
 </full-backup-content>

@@ -4,21 +4,27 @@ Android 12+ (API 31+) Auto Backup config. Explicit and intentional rather than r
 allowBackup=true default (which already includes essentially everything) - documents exactly
 what's covered, and gives a clear place to <exclude> something sensitive later (e.g. once an
 API key lands in EncryptedSharedPreferences for the planned Claude chat feature - see CLAUDE.md).
-Nothing here today needs excluding: the app's entire state is the SQLite DB (routines/tasks/
-completions/workout logs) plus this plugin's own notification-schedule SharedPreferences, both of
-which are meant to survive a backup/restore or device-transfer.
+The app's state is the SQLite DB (routines/tasks/completions/workout logs), this plugin's own
+notification-schedule SharedPreferences, and now the rolling automatic local backup snapshots in
+getFilesDir()/auto-backups/ (domain="file" - see src/backup.js's runAutoBackup) - all three are
+meant to survive a backup/restore or device-transfer. Providing any <include> switches this file
+to include-only mode, so `file` had to be added explicitly here once that folder existed -
+leaving it out wouldn't just skip that one folder, its absence from an include-list is itself a
+silent exclude.
 
 This is a passive, OS-scheduled safety net, not the primary recovery path - see
-src/backup.js/SettingsView.jsx for the on-demand, verifiable export/import feature, which is
-what most restores should actually use.
+src/backup.js/SettingsView.jsx for the on-demand, verifiable export/import feature (and the
+automatic local snapshot history alongside it), which is what most restores should actually use.
 -->
 <data-extraction-rules>
     <cloud-backup>
         <include domain="database" path="." />
         <include domain="sharedpref" path="." />
+        <include domain="file" path="auto-backups/" />
     </cloud-backup>
     <device-transfer>
         <include domain="database" path="." />
         <include domain="sharedpref" path="." />
+        <include domain="file" path="auto-backups/" />
     </device-transfer>
 </data-extraction-rules>

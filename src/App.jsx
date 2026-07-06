@@ -44,6 +44,7 @@ import {
 } from './notifications';
 import { todayKey } from './utils/date';
 import { computeSessionFraction } from './utils/workouts';
+import { runAutoBackup } from './backup';
 
 function findTask(routines, taskId) {
   for (const routine of routines) {
@@ -115,6 +116,11 @@ function App() {
       await syncAllNotifications(state.routines, state.completions);
       await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
     })();
+
+    // Fire-and-forget: a fresh automatic local snapshot every time the app is opened (see
+    // backup.js's runAutoBackup for why "on every open" is exactly the right cadence for
+    // "seamless, before every release" protection), but nothing on screen should wait on it.
+    runAutoBackup().catch((err) => console.warn('Automatic local backup failed', err));
 
     const handleMarkDone = async (taskId) => {
       await setCompletion(taskId, todayKey(), true);

@@ -1,13 +1,19 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { ArrowLeft, DownloadCloud, UploadCloud } from 'lucide-react';
-import { exportBackup, importBackup } from '../backup';
+import { ArrowLeft, DownloadCloud, History, UploadCloud } from 'lucide-react';
+import { exportBackup, importBackup, listAutoBackups, restoreAutoBackup, formatAutoBackupName } from '../backup';
 
 export default function SettingsView({ onClose, onImported }) {
   const [exportStatus, setExportStatus] = useState('idle'); // idle | exporting | done | error
   const [importStatus, setImportStatus] = useState('idle'); // idle | importing | done | error
   const [importError, setImportError] = useState('');
+  const [autoBackups, setAutoBackups] = useState([]);
+  const [restoringName, setRestoringName] = useState(null);
   const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    listAutoBackups().then(setAutoBackups);
+  }, []);
 
   const handleExport = async () => {
     setExportStatus('exporting');
@@ -44,6 +50,27 @@ export default function SettingsView({ onClose, onImported }) {
     }
   };
 
+  const handleRestoreAutoBackup = async (name) => {
+    const proceed = confirm(
+      `Restore the snapshot from ${formatAutoBackupName(name)}? This replaces everything currently in the app and can't be undone.`
+    );
+    if (!proceed) return;
+
+    setRestoringName(name);
+    setImportError('');
+    try {
+      await restoreAutoBackup(name);
+      setImportStatus('done');
+      await onImported?.();
+    } catch (err) {
+      console.warn('Restore failed', err);
+      setImportStatus('error');
+      setImportError(err.message || 'Something went wrong restoring that snapshot.');
+    } finally {
+      setRestoringName(null);
+    }
+  };
+
   return (
     <div className="settings-view">
       <header className="settings-header">
@@ -56,10 +83,12 @@ export default function SettingsView({ onClose, onImported }) {
       <div className="settings-body">
         <div className="section-title">Data backup</div>
         <p className="settings-desc">
-          Android also backs your data up automatically in the background (Settings › Google › Backup), but
-          that only restores itself on a fresh install, on its own schedule. Use the buttons below any time you
-          want an on-demand, verifiable snapshot instead - moving to a new phone, before trying something risky,
-          or just for peace of mind.
+          A fresh snapshot is saved automatically every time you open the app, so there's always a
+          very recent one to fall back on before trying an update or anything risky - no action
+          needed. Android also backs your data up in the background on its own schedule (Settings ›
+          Google › Backup), which is what lets a snapshot survive a full reinstall. Use the buttons
+          below any time you want an on-demand copy instead - moving to a new phone, sharing it
+          somewhere, or just for peace of mind.
         </p>
 
         <div className="settings-actions">
@@ -98,6 +127,34 @@ export default function SettingsView({ onClose, onImported }) {
         {exportStatus === 'error' && <p className="settings-status error">Export failed - try again.</p>}
         {importStatus === 'done' && <p className="settings-status success">Backup restored.</p>}
         {importStatus === 'error' && <p className="settings-status error">{importError}</p>}
+
+        {Capacitor.isNativePlatform() && (
+          <>
+            <div className="section-title">Recent local backups</div>
+            {autoBackups.length === 0 ? (
+              <p className="settings-desc">
+                No automatic snapshots yet - one is saved the next time you open the app.
+              </p>
+            ) : (
+              <ul className="auto-backup-list">
+                {autoBackups.map((name) => (
+                  <li key={name} className="auto-backup-row">
+                    <History size={15} />
+                    <span className="auto-backup-when">{formatAutoBackupName(name)}</span>
+                    <button
+                      type="button"
+                      className="auto-backup-restore-btn"
+                      onClick={() => handleRestoreAutoBackup(name)}
+                      disabled={restoringName === name}
+                    >
+                      {restoringName === name ? 'Restoring…' : 'Restore'}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

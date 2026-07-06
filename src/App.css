@@ -154,6 +154,47 @@
   color: var(--bad);
 }
 
+.auto-backup-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.auto-backup-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--text-soft);
+}
+
+.auto-backup-when {
+  flex: 1;
+  color: var(--text);
+  font-size: 0.92em;
+}
+
+.auto-backup-restore-btn {
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--card-border);
+  background: none;
+  font-size: 0.85em;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auto-backup-restore-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .update-dot {
   position: absolute;
   top: 1px;
