@@ -139,11 +139,18 @@ export async function restoreAutoBackup(name) {
   invalidateDbCache();
 }
 
-/** `auto-backup-2026-07-06-05-11-44.json` -> `Jul 6, 2026, 5:11 AM` for the Settings list. */
+/**
+ * `auto-backup-2026-07-06-05-11-44.json` -> the equivalent local time, e.g. `Jul 6, 2026, 1:11 PM`
+ * for a UTC+8 device. The filename's timestamp is `toISOString()`-derived, i.e. UTC - a real bug
+ * here parsed those components with the local-time `Date(y, mo, d, h, mi, s)` constructor, which
+ * silently relabels a UTC clock reading as a local one before formatting, showing the wrong time
+ * everywhere outside UTC+0. `Date.UTC(...)` parses it as the UTC instant it actually is; only the
+ * display step (`toLocaleString`, no explicit timeZone) converts it to the device's local zone.
+ */
 export function formatAutoBackupName(name) {
   const match = name.match(/^auto-backup-(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})\.json$/);
   if (!match) return name;
   const [, y, mo, d, h, mi, s] = match;
-  const date = new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
+  const date = new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s)));
   return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }

@@ -176,4 +176,23 @@ describe('formatAutoBackupName', () => {
   it('falls back to the raw name if it does not match the expected shape', () => {
     expect(formatAutoBackupName('something-else.json')).toBe('something-else.json');
   });
+
+  it('interprets the filename timestamp as UTC and converts it to the device local time', () => {
+    // Regression test for a real bug: the filename encodes a UTC instant (autoBackupFileName
+    // uses toISOString()), but this used to reconstruct it with the local-time
+    // `Date(y, mo, d, h, mi, s)` constructor - which always reads its arguments as local time by
+    // definition, so it silently relabeled a UTC clock reading as a local one before formatting.
+    // Under that bug the displayed hour is always exactly the filename's hour (05), regardless of
+    // the device's timezone. Etc/GMT+5 is a fixed UTC-5 offset with no DST, chosen so the correct
+    // answer (05:11 UTC -> 00:11 local) is unambiguous and stable in CI.
+    const originalTZ = process.env.TZ;
+    process.env.TZ = 'Etc/GMT+5';
+    try {
+      const formatted = formatAutoBackupName('auto-backup-2026-07-06-05-11-44.json');
+      expect(formatted).toMatch(/12:11/); // 00:11 local, 12-hour clock
+      expect(formatted).not.toMatch(/\b5:11\b/); // the bug's telltale: filename hour shown verbatim
+    } finally {
+      process.env.TZ = originalTZ;
+    }
+  });
 });

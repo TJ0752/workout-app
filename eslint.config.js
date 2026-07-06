@@ -30,4 +30,13 @@ export default [
       ],
     },
   },
+  {
+    // Test files run under Vitest/Node, not the browser - they legitimately need Node globals
+    // (e.g. process.env.TZ, used by backup.test.js to pin a timezone for a deterministic
+    // regression test) that the app source above never should.
+    files: ['**/*.test.js'],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
 ]
