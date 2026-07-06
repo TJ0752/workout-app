@@ -22,6 +22,23 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // Two installable variants sharing one codebase: `prod` keeps the applicationId (and thus the
+    // Android package identity) untouched, so the real device install keeps updating in place via
+    // the existing debug-keystore-signed "latest-android" GitHub Release exactly as before. `dev`
+    // gets a distinct applicationId (a different Android package = a different app, not an update
+    // to the same one) so a work-in-progress build can be installed and driven side-by-side on the
+    // same device, with fully separate SQLite/SharedPreferences data, without ever touching the
+    // real app - see android-build.yml for how each flavor's APK is published.
+    flavorDimensions = ["env"]
+    productFlavors {
+        prod {
+            dimension "env"
+        }
+        dev {
+            dimension "env"
+            applicationId "com.tharuka.routines.dev"
+        }
+    }
     signingConfigs {
         debug {
             storeFile file('../debug.keystore')

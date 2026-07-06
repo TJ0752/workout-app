@@ -39,24 +39,36 @@ jobs:
         # CI indefinitely without this running explicitly.
         run: ./gradlew :shared:testDebugUnitTest
 
-      - name: Build debug APK
+      - name: Build debug APKs (both flavors)
         working-directory: android
-        # versionCode = the Actions run number (always increasing, unique per
-        # build) so the in-app "Check for updates" button (src/utils/updateCheck.js)
-        # can compare the installed build against the latest GitHub Release.
+        # `assembleDebug` is AGP's synthetic aggregate task once flavorDimensions exist - it
+        # builds every flavor's debug variant in one go, so this command is unchanged from
+        # before flavors were introduced. Produces two separate, side-by-side-installable APKs:
+        # `prod` (applicationId com.tharuka.routines, unchanged) and `dev`
+        # (com.tharuka.routines.dev) - see app/build.gradle's productFlavors block. versionCode =
+        # the Actions run number (always increasing, unique per build) so the in-app "Check for
+        # updates" button (src/utils/updateCheck.js) can compare the installed build against the
+        # latest GitHub Release.
         run: ./gradlew assembleDebug -PappVersionCode=${{ github.run_number }} -PappVersionName=1.0.${{ github.run_number }}
 
-      - name: Upload APK
+      - name: Upload prod APK
         uses: actions/upload-artifact@v6
         with:
-          name: daily-routines-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: daily-routines-prod-debug-apk
+          path: android/app/build/outputs/apk/prod/debug/app-prod-debug.apk
 
-      - name: Publish latest build as a GitHub Release
-        # Only the main dev branch counts as a "release" - other branches
-        # still build/upload as an artifact above, but shouldn't overwrite
-        # the release the in-app update checker points at.
-        if: github.ref == 'refs/heads/claude/android-routines-app-mvp-gjl4kh'
+      - name: Upload dev (test) APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: daily-routines-dev-debug-apk
+          path: android/app/build/outputs/apk/dev/debug/app-dev-debug.apk
+
+      - name: Publish latest prod build as a GitHub Release
+        # Only `main` counts as a real release now - this is the one the in-app update checker
+        # on the real device points at (RELEASE_TAG in updateCheck.js), so it should only ever
+        # move once work has actually been merged there, not on every push to a work-in-progress
+        # branch. Use the `dev` flavor build below for day-to-day iteration instead.
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-android
@@ -65,4 +77,20 @@ jobs:
             Automatically published debug build from commit ${{ github.sha }}.
             versionCode: ${{ github.run_number }}
           prerelease: true
-          files: android/app/build/outputs/apk/debug/app-debug.apk
+          files: android/app/build/outputs/apk/prod/debug/app-prod-debug.apk
+
+      - name: Publish latest dev (test) build as a GitHub Release
+        # A separate, always-moving release for the `dev`-flavored (com.tharuka.routines.dev)
+        # test app, so grabbing the newest work-in-progress build doesn't require digging through
+        # this run's artifact list - install this over the previous dev build any time to try the
+        # latest work without touching the real (`main`-gated) app at all.
+        if: github.ref == 'refs/heads/claude/android-routines-app-mvp-gjl4kh'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-android-dev
+          name: "Latest test build (run ${{ github.run_number }})"
+          body: |
+            Automatically published debug build from commit ${{ github.sha }}.
+            versionCode: ${{ github.run_number }}
+          prerelease: true
+          files: android/app/build/outputs/apk/dev/debug/app-dev-debug.apk

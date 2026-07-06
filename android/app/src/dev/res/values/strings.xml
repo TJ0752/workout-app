@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <!-- Overrides src/main's strings.xml for the `dev` product flavor only - so the test app
+         installed alongside the real one (separate applicationId, see app/build.gradle) is
+         clearly labelled in the app drawer/recents instead of showing an identical "Daily
+         Routines" next to the real app. -->
+    <string name="app_name">Daily Routines (Test)</string>
+    <string name="title_activity_main">Daily Routines (Test)</string>
+</resources>

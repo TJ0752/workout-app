@@ -36,7 +36,10 @@ jobs:
 
       - name: Build debug APK
         working-directory: android
-        run: ./gradlew assembleDebug
+        # `prod` flavor only (see app/build.gradle's productFlavors) - this workflow verifies the
+        # real applicationId (com.tharuka.routines) the scripts below assume; no need to also
+        # build the `dev` flavor here.
+        run: ./gradlew assembleProdDebug
 
       - name: Enable KVM group perms
         run: |
@@ -66,7 +69,7 @@ jobs:
           # TEMPORARY: only running due-reminder + extra-reminder below while validating the new
           # technique - restore the other 4 scripts once confirmed, then rework them the same way.
           script: |
-            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+            adb install -r android/app/build/outputs/apk/prod/debug/app-prod-debug.apk
             adb shell am start -n com.tharuka.routines/.MainActivity
             node scripts/verify-due-reminder.mjs
             adb shell am start -n com.tharuka.routines/.MainActivity
