@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+Legacy (pre-Android-12) Auto Backup config - minSdkVersion is 24, so this covers the device range
+data_extraction_rules.xml (API 31+) doesn't. Same inclusion rules as that file; see its own
+comment for the reasoning.
+-->
+<full-backup-content>
+    <include domain="database" path="." />
+    <include domain="sharedpref" path="." />
+</full-backup-content>

@@ -199,6 +199,18 @@ async function ready() {
   return readyPromise;
 }
 
+/**
+ * Called once a backup restore (see backup.js's importBackup) has swapped the underlying
+ * database out from under this module - without this, `ready()` would keep handing out its
+ * already-resolved promise for the pre-restore connection (db.js's own import already closed
+ * and nulled that connection, so reusing it here would query a dead handle). The next call to
+ * any storage.js function re-derives a fresh connection via getDb() and skips
+ * migrateFromPreferencesOnce again since the restored DB is never a pre-SQLite install.
+ */
+export function invalidateDbCache() {
+  readyPromise = null;
+}
+
 export async function getRoutines() {
   const db = await ready();
   const [routineRows, taskRows] = await Promise.all([

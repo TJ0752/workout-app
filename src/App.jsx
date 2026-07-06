@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Sun, ListTodo, BarChart3, Calendar } from 'lucide-react';
+import { Sun, ListTodo, BarChart3, Calendar, Settings as SettingsIcon } from 'lucide-react';
 import './App.css';
 import TodayView from './components/TodayView';
 import RoutinesView from './components/RoutinesView';
@@ -7,6 +7,7 @@ import DashboardView from './components/DashboardView';
 import HistoryView from './components/HistoryView';
 import Logo from './components/Logo';
 import UpdateChecker from './components/UpdateChecker';
+import SettingsView from './components/SettingsView';
 import WorkoutSessionView from './components/WorkoutSessionView';
 import {
   isNativeWorkoutSessionAvailable,
@@ -72,6 +73,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [activeSession, setActiveSession] = useState(null);
   const [focusTarget, setFocusTarget] = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
   const handleLogWorkoutSetRef = useRef(null);
 
   const refreshAll = async () => {
@@ -91,6 +93,18 @@ function App() {
       taskVersionsMap: versionsMap,
       workoutLogsByTask: workoutLogs,
     };
+  };
+
+  // Re-derives every screen's data and re-syncs every notification from scratch - the same
+  // sequence the app-open effect below already runs. Reused as SettingsView's onImported
+  // callback: a restored backup swaps the entire database out from under the app (see
+  // backup.js/db.js), so everything on screen and every scheduled reminder/digest needs
+  // recomputing against the restored data, not just a plain re-render.
+  const refreshAllAndSync = async () => {
+    const state = await refreshAll();
+    await syncAllNotifications(state.routines, state.completions);
+    await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
+    return state;
   };
 
   useEffect(() => {
@@ -305,6 +319,14 @@ function App() {
     );
   }
 
+  if (showSettings) {
+    return (
+      <div className="app-shell">
+        <SettingsView onClose={() => setShowSettings(false)} onImported={refreshAllAndSync} />
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -313,6 +335,15 @@ function App() {
         </span>
         <h1>Daily Routines</h1>
         <UpdateChecker />
+        <button
+          type="button"
+          className="settings-btn"
+          onClick={() => setShowSettings(true)}
+          aria-label="Settings"
+          title="Settings"
+        >
+          <SettingsIcon size={17} />
+        </button>
       </header>
 
       <main className="app-main">

@@ -980,6 +980,61 @@ undisplayed one.
 - The overview tiles are genuinely adaptive: a routine with only bodyweight exercises
   shows only the bodyweight-PR tile, not an empty/zero weighted one, and vice versa.
 
+### Data backup & recovery (`src/backup.js`, `src/db.js`, `SettingsView.jsx`)
+
+Two independent layers, deliberately both present rather than picking one:
+
+- **Android Auto Backup** (`android:allowBackup="true"` plus explicit
+  `android:dataExtractionRules`/`android:fullBackupContent` XML in `android/app/src/main/res/xml/`)
+  is a passive, OS-scheduled safety net — it runs in the background on Android's own timing (WiFi,
+  charging, idle) and only actually restores itself on a genuinely fresh install tied to the same
+  Google account. The XML rules explicitly `<include>` the SQLite database and this plugin's own
+  notification-schedule SharedPreferences rather than relying on the (equally inclusive by default)
+  implicit behavior — being explicit here is what gives a clean, documented place to later
+  `<exclude>` something sensitive, e.g. once an API key lands in EncryptedSharedPreferences for the
+  planned Claude-chat feature.
+- **On-demand manual export/import** (`SettingsView.jsx`, reachable via the gear icon in the app
+  header) is the verifiable, user-controlled counterpart — export whenever you want a snapshot
+  (before trying something risky, moving to a new phone, or just for peace of mind), not just
+  whenever Android feels like it.
+
+**Export/import go through the sqlite plugin's own `exportToJson`/`importFromJson`, not
+hand-rolled per-table `SELECT`s** (`exportDatabaseJson`/`importDatabaseJson` in `db.js`) — this
+automatically covers every table (including ones added by future migrations) with zero
+export-code changes needed per schema bump, and the exported JSON's own `version` field is the
+DB's `PRAGMA user_version` at export time, which is what makes restoring safe: importing recreates
+the schema at that exact version rather than needing this app's own migration array to replay.
+Import is a **full, destructive replace** (`overwrite: true`), never a merge — `SettingsView.jsx`
+confirms this explicitly before touching anything, since it can't be undone.
+
+- **Connection-lifecycle care on restore**, following the same discipline as the native/web SQLite
+  warnings elsewhere in this doc: `importDatabaseJson` explicitly closes and nulls the existing
+  `dbInstance`/`initPromise` in `db.js` *before* calling `importFromJson` (which rewrites the same
+  underlying file from under any already-open handle), then storage.js's own cache is invalidated
+  too (`invalidateDbCache`, called from `backup.js`'s `importBackup`) so the next read anywhere in
+  the app opens a genuinely fresh connection against the restored data rather than reusing a stale
+  handle.
+- **A real bug caught by testing this in the browser, not assumed correct**: on the web backend,
+  calling `saveToStore` immediately after `importFromJson` — with no connection reopened in
+  between — fails with `"No available connection for routines"`, because `importFromJson` alone
+  doesn't leave a connection registered for the web backend to persist through. Fixed by having
+  `importDatabaseJson` call `getDb()` again (reopening a live connection against the just-restored
+  data) before calling `saveToStore`. Found via a real Playwright round-trip in the browser dev
+  loop — same "test in browser first" discipline this project has followed since the very first
+  SQLite migration — not by inspection alone: create routine A, export, create routine B, import
+  A's snapshot back, confirm B is gone and A survives *a full page reload* (proving the restore
+  actually persisted to IndexedDB, not just an in-memory illusion), all before ever touching a real
+  device.
+- Native (`Filesystem`/`Share` from `@capacitor/filesystem`/`@capacitor/share`) writes the export
+  to `Directory.Cache` and hands it to the OS Share sheet — the existing FileProvider
+  (`file_paths.xml`'s `<cache-path path="."/>`, already present in this project's manifest for
+  other plugins) already covers the cache directory, so no new provider config was needed. Web
+  gets a plain `Blob` + anchor-`download` browser download instead, both because there's no OS
+  share target in a desktop browser and because it doubles as the dev-loop verification path
+  above. Import needs no native file-picker plugin at all on either platform — a hidden
+  `<input type="file" accept="application/json">` already gets a real native file-chooser from the
+  Android WebView, standard HTML5 behavior Capacitor doesn't need to wrap.
+
 ### Android signing (`android/debug.keystore`)
 
 The debug keystore is committed to the repo and wired into
@@ -988,6 +1043,25 @@ keystores have a universally-known password and no security value) — without i
 run generates its own random ephemeral debug key, so each built APK would have a different
 signature and Android would refuse to install an update over the previous one, forcing an
 uninstall (and full data loss) on every release. Never regenerate this file casually.
+
+### Test app / product flavors (`android/app/build.gradle`)
+
+Two product flavors share one codebase: `prod` (applicationId `com.tharuka.routines`, unchanged)
+is the real, everyday-use app; `dev` (applicationId `com.tharuka.routines.dev`, labeled "Daily
+Routines (Test)" via `src/dev/res/values/strings.xml`) installs *alongside* it as a fully separate
+Android app — different applicationId means different app, with its own SQLite DB/SharedPreferences,
+not an update to the same one. This exists so work-in-progress builds can be installed and driven
+on a real device without any risk to the real app's data.
+
+CI (`android-build.yml`) builds both flavors on every push (`assembleDebug` is AGP's synthetic
+aggregate task once `flavorDimensions` exist, so this needed no command changes) and publishes two
+independent GitHub Releases: `latest-android` (the `prod` APK, what `src/utils/updateCheck.js`'s
+in-app "Check for updates" button points at) only moves on pushes to `main`, while
+`latest-android-dev` (the `dev` APK) tracks the ongoing working branch instead. This means the real
+app only ever updates once something has actually been merged to `main` — day-to-day iteration on
+the working branch no longer pushes unfinished work to the one app real usage depends on.
+`android-emulator-verify.yml` builds and installs only the `prod` flavor, since its verification
+scripts assume the real `com.tharuka.routines` applicationId.
 
 ### Design system
 

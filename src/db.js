@@ -212,3 +212,56 @@ export async function persist() {
 export function getOpenDb() {
   return dbInstance;
 }
+
+/**
+ * Dumps the entire live database (every table, schema and rows) via the sqlite plugin's own
+ * exportToJson - not a hand-rolled per-table SELECT, so this automatically covers every table
+ * (including ones added by future migrations) with no export-code changes needed per schema
+ * bump. The returned object's own `version` field is the DB's current PRAGMA user_version
+ * (DB_VERSION at export time), which is exactly what makes round-tripping through
+ * importDatabaseJson safe - see there for why.
+ */
+export async function exportDatabaseJson() {
+  const db = await getDb();
+  const result = await db.exportToJson('full');
+  return result.export;
+}
+
+/**
+ * Restores a previously-exported database, wholesale-replacing whatever's currently there
+ * (`overwrite: true`) - this is a full restore, not a merge. `isJsonValid` rejects anything
+ * that isn't a well-formed JsonSQLite export before touching the real database at all.
+ *
+ * The existing connection is explicitly closed first: `importFromJson` recreates every table
+ * from scratch on the same underlying file, and this app's own connection-lifecycle rule (see
+ * CLAUDE.md's two-SQLite-drivers-in-one-process warning, which applies just as much to two
+ * *uses* of the same driver holding stale handles to a file that just got rewritten out from
+ * under them) means the already-open `dbInstance` must not survive past this point. Resetting
+ * both module-level caches here forces the next `getDb()` call to open a genuinely fresh
+ * connection against the restored file, rather than reusing a handle to the pre-import schema.
+ */
+export async function importDatabaseJson(jsonExport) {
+  const jsonString = JSON.stringify({ ...jsonExport, overwrite: true });
+  const isValid = await sqlite.isJsonValid(jsonString);
+  if (!isValid.result) {
+    throw new Error("That file doesn't look like a valid Daily Routines backup.");
+  }
+
+  if (dbInstance) {
+    await sqlite.closeConnection(DB_NAME, false);
+  }
+  dbInstance = null;
+  initPromise = null;
+
+  await sqlite.importFromJson(jsonString);
+
+  if (Capacitor.getPlatform() === 'web') {
+    // Confirmed via a real browser round-trip: the web backend's saveToStore needs a live
+    // connection registered under DB_NAME to know what to persist into IndexedDB -
+    // importFromJson alone doesn't leave one open, so calling saveToStore right after it fails
+    // with "No available connection for routines". Reopening here (which storage.js's own
+    // ready() will happily reuse once its cache is invalidated) is what makes this work.
+    await getDb();
+    await sqlite.saveToStore(DB_NAME);
+  }
+}

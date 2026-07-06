@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+Android 12+ (API 31+) Auto Backup config. Explicit and intentional rather than relying on the
+allowBackup=true default (which already includes essentially everything) - documents exactly
+what's covered, and gives a clear place to <exclude> something sensitive later (e.g. once an
+API key lands in EncryptedSharedPreferences for the planned Claude chat feature - see CLAUDE.md).
+Nothing here today needs excluding: the app's entire state is the SQLite DB (routines/tasks/
+completions/workout logs) plus this plugin's own notification-schedule SharedPreferences, both of
+which are meant to survive a backup/restore or device-transfer.
+
+This is a passive, OS-scheduled safety net, not the primary recovery path - see
+src/backup.js/SettingsView.jsx for the on-demand, verifiable export/import feature, which is
+what most restores should actually use.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="database" path="." />
+        <include domain="sharedpref" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="database" path="." />
+        <include domain="sharedpref" path="." />
+    </device-transfer>
+</data-extraction-rules>
