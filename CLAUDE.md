@@ -296,12 +296,29 @@ display just shows whichever spelling was most recently seen.
   rewriting only the live `tasks` table — per this codebase's append-only versioning philosophy,
   `task_versions` rows are an immutable audit log and are deliberately left untouched; only
   current-state tables are safe to backfill in place.
-- **Autosuggest UI.** `RoutineForm.jsx`'s `ExerciseNameInput` fetches `getExerciseNames()` once
-  per form mount and filters it client-side (substring, case-insensitive) as the user types in an
-  exercise's name field. Selecting a suggestion sets both `name` and `exerciseId` on that
-  exercise; typing free text instead clears any previously-set `exerciseId` (so an edited name
-  doesn't keep pointing at the wrong repository row) and leaves resolution to `upsertTask` on
-  save, exactly like a brand-new exercise.
+- **Autosuggest UI, plus a full-repository browse picker.** `RoutineForm.jsx`'s
+  `ExerciseNameInput` fetches `getExerciseNames()` once per form mount and filters it
+  client-side (substring, case-insensitive) as the user types in an exercise's name field.
+  Selecting a suggestion sets both `name` and `exerciseId` on that exercise; typing free text
+  instead clears any previously-set `exerciseId` (so an edited name doesn't keep pointing at the
+  wrong repository row) and leaves resolution to `upsertTask` on save, exactly like a brand-new
+  exercise. A second entry point next to the input (`ExercisePickerModal`, a bottom-sheet reusing
+  the same `day-drilldown-*` overlay/panel CSS as the Dashboard's heatmap drill-down) lets a user
+  browse the *entire* repository rather than relying on typing to narrow it down — useful for
+  reusing an exercise name that isn't top-of-mind at all. It has its own text search box that
+  filters the same list client-side, and selecting a row calls the identical
+  `onSelectExisting(match)` path the inline autosuggest uses. **Its list rows select on
+  `onMouseDown` with `preventDefault()`, not `onClick`** — a real bug hit during manual browser
+  testing: with a plain `onClick`, clicking a row first moves focus onto that button (default
+  browser behavior), and when the whole modal then unmounts a beat later (its `autoFocus`'d
+  search input was still focused up to that point), the browser's fallback-focus behavior on
+  removing a focused subtree landed focus back on the *exercise name input behind it* — silently
+  re-triggering that input's own `onFocus` handler and reopening its inline autosuggest dropdown
+  right after the picker closed. `onMouseDown`+`preventDefault()` (the same trick the inline
+  autosuggest list already used, for an unrelated blur-race reason) keeps focus on the modal's
+  own search input throughout the click, so when the modal unmounts focus falls through to
+  `document.body` instead of anywhere nearby — confirmed via a Playwright script asserting
+  `document.activeElement` after a picker selection.
 
 ### Notifications (`src/notifications.js`)
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { List, X } from 'lucide-react';
 import { parseQuickAddText, MAX_EXTRA_REMINDERS } from '../utils/tasks';
 import { DAY_LABELS } from '../utils/date';
 import { ICON_OPTIONS, suggestIconId } from '../utils/icons';
@@ -102,8 +103,62 @@ function ReminderTimesEditor({ task, onChange }) {
   );
 }
 
+function ExercisePickerModal({ exerciseNames, onSelect, onClose }) {
+  const [query, setQuery] = useState('');
+  const trimmed = query.trim().toLowerCase();
+  const filtered = trimmed ? exerciseNames.filter((ex) => ex.name.toLowerCase().includes(trimmed)) : exerciseNames;
+
+  return (
+    <div className="day-drilldown-overlay" onClick={onClose}>
+      <div className="day-drilldown-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="day-drilldown-header">
+          <strong>Exercise repository</strong>
+          <button type="button" className="day-drilldown-close" onClick={onClose} aria-label="Close">
+            <X size={18} />
+          </button>
+        </div>
+        <input
+          type="text"
+          className="exercise-picker-search"
+          placeholder="Search exercises…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          autoFocus
+        />
+        {exerciseNames.length === 0 ? (
+          <p className="empty-state">No exercises logged yet — type a name to create the first one.</p>
+        ) : filtered.length === 0 ? (
+          <p className="empty-state">No matches.</p>
+        ) : (
+          <ul className="exercise-picker-list">
+            {filtered.map((ex) => (
+              <li key={ex.id}>
+                <button
+                  type="button"
+                  onMouseDown={(e) => {
+                    // Selecting here (not onClick) keeps focus on the search input above
+                    // instead of momentarily moving it to this button - when the whole modal
+                    // then unmounts, that avoids the browser reassigning focus onto the
+                    // exercise name input behind it, which would otherwise reopen its own
+                    // autosuggest dropdown via its onFocus handler.
+                    e.preventDefault();
+                    onSelect(ex);
+                  }}
+                >
+                  {ex.name}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ExerciseNameInput({ value, exerciseNames, onChange, onSelectExisting }) {
   const [open, setOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const trimmed = value.trim().toLowerCase();
   const suggestions = trimmed
     ? exerciseNames.filter((ex) => ex.name.toLowerCase().includes(trimmed)).slice(0, 6)
@@ -111,17 +166,31 @@ function ExerciseNameInput({ value, exerciseNames, onChange, onSelectExisting })
 
   return (
     <div className="exercise-name-autosuggest">
-      <input
-        type="text"
-        placeholder="e.g. Push-ups"
-        value={value}
-        onChange={(e) => {
-          onChange(e.target.value);
-          setOpen(true);
-        }}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
-      />
+      <div className="exercise-name-row">
+        <input
+          type="text"
+          placeholder="e.g. Push-ups"
+          value={value}
+          onChange={(e) => {
+            onChange(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+        />
+        <button
+          type="button"
+          className="exercise-browse-btn"
+          onClick={() => {
+            setOpen(false);
+            setPickerOpen(true);
+          }}
+          aria-label="Browse exercise repository"
+          title="Browse exercise repository"
+        >
+          <List size={16} />
+        </button>
+      </div>
       {open && suggestions.length > 0 && (
         <ul className="autosuggest-list">
           {suggestions.map((match) => (
@@ -137,6 +206,17 @@ function ExerciseNameInput({ value, exerciseNames, onChange, onSelectExisting })
             </li>
           ))}
         </ul>
+      )}
+      {pickerOpen && (
+        <ExercisePickerModal
+          exerciseNames={exerciseNames}
+          onSelect={(match) => {
+            onSelectExisting(match);
+            setOpen(false);
+            setPickerOpen(false);
+          }}
+          onClose={() => setPickerOpen(false)}
+        />
       )}
     </div>
   );

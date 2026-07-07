@@ -939,6 +939,57 @@
   position: relative;
 }
 
+.exercise-name-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: stretch;
+}
+
+.exercise-name-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.exercise-browse-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.7rem;
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  color: var(--text-soft);
+}
+
+.exercise-picker-search {
+  width: 100%;
+  margin-bottom: 0.8rem;
+}
+
+.exercise-picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.exercise-picker-list button {
+  width: 100%;
+  text-align: left;
+  padding: 0.55rem 0.7rem;
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+}
+
+.exercise-picker-list button:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
 .autosuggest-list {
   position: absolute;
   top: calc(100% + 0.2rem);
