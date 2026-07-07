@@ -333,7 +333,14 @@ export function getFitnessOverview(routines, workoutLogsByTask) {
             date,
             e1rm: getExerciseE1RM(completedSets)?.e1rm || 0,
             volume: getExerciseVolume(completedSets),
+            // bestReps/bestDuration are this *session's* single best set - the reps/duration
+            // equivalent of e1rm above (also derived from one best set, not summed) - while
+            // totalReps/totalDuration remain the summed "how much work total" equivalent of
+            // volume, so bodyweight/duration exercises get the exact same
+            // single-best-effort-vs-total-volume duality a weighted exercise already has.
+            bestReps: getExerciseRepPR(completedSets)?.reps || 0,
             totalReps: getExerciseTotalReps(completedSets),
+            bestDuration: getExerciseDurationPR(completedSets)?.durationSeconds || 0,
             totalDuration: getExerciseTotalDuration(completedSets),
           };
         })

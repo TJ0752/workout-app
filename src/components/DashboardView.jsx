@@ -100,12 +100,16 @@ function FitnessStatsPanel({ routines, workoutLogsByTask }) {
         {overview.exercises.map((ex) => {
           const latest = ex.series[ex.series.length - 1];
           const kind = ex.isWeighted ? 'weighted' : ex.repPR ? 'reps' : 'duration';
+          // headline/sub/the primary trend all use a single-best-effort metric (the best one set
+          // in a session, not summed) - e1RM already worked this way; bestReps/bestDuration give
+          // bodyweight/duration exercises the identical parity, rather than double-counting the
+          // same summed number the volume trend below already shows.
           const headline =
             kind === 'weighted'
               ? `${fmt1(latest.e1rm)}kg e1RM`
               : kind === 'reps'
-                ? `${latest.totalReps} reps`
-                : `${latest.totalDuration}s`;
+                ? `${latest.bestReps} reps`
+                : `${latest.bestDuration}s`;
           const sub =
             kind === 'weighted'
               ? `PR ${fmt1(ex.e1rm.e1rm)}kg`
@@ -114,14 +118,18 @@ function FitnessStatsPanel({ routines, workoutLogsByTask }) {
                 : `PR ${ex.durationPR.durationSeconds}s`;
           const trendLabel = kind === 'weighted' ? 'e1RM trend' : kind === 'reps' ? 'Reps trend' : 'Duration trend';
           const seriesValues = ex.series.map((s) =>
-            kind === 'weighted' ? s.e1rm : kind === 'reps' ? s.totalReps : s.totalDuration
+            kind === 'weighted' ? s.e1rm : kind === 'reps' ? s.bestReps : s.bestDuration
           );
           const maxSeriesValue = Math.max(1, ...seriesValues);
-          // Volume (kg x reps) only exists for weighted exercises - a bodyweight/duration set has
-          // no weight to multiply by, so getExerciseVolume is always 0 for those and a trend
-          // would just be a flat empty line.
-          const volumeValues = kind === 'weighted' ? ex.series.map((s) => s.volume) : null;
-          const maxVolumeValue = volumeValues ? Math.max(1, ...volumeValues) : 0;
+          // Volume - total work done in a session (kg x reps for weighted; summed reps/duration
+          // for bodyweight/duration, the exact reps/duration-denominated equivalents of kg x reps
+          // - see getExerciseTotalReps/getExerciseTotalDuration in workouts.js) - genuinely
+          // different from the single-best-effort trend above for every exercise type, not just
+          // weighted ones, so every kind gets this second chart now.
+          const volumeLabel =
+            kind === 'weighted' ? 'Volume trend (kg × reps)' : kind === 'reps' ? 'Volume trend (total reps)' : 'Volume trend (total sec)';
+          const volumeValues = ex.series.map((s) => (kind === 'weighted' ? s.volume : kind === 'reps' ? s.totalReps : s.totalDuration));
+          const maxVolumeValue = Math.max(1, ...volumeValues);
           const isOpen = expandedExercise === ex.name;
 
           return (
@@ -155,18 +163,14 @@ function FitnessStatsPanel({ routines, workoutLogsByTask }) {
                       </div>
                     ))}
                   </div>
-                  {volumeValues && (
-                    <>
-                      <div className="trend-chart-label">Volume trend (kg × reps)</div>
-                      <div className="trend-chart small">
-                        {volumeValues.slice(-8).map((v, i) => (
-                          <div className="trend-bar-wrap" key={i}>
-                            <div className="trend-bar volume" style={{ height: `${(v / maxVolumeValue) * 100}%` }} />
-                          </div>
-                        ))}
+                  <div className="trend-chart-label">{volumeLabel}</div>
+                  <div className="trend-chart small">
+                    {volumeValues.slice(-8).map((v, i) => (
+                      <div className="trend-bar-wrap" key={i}>
+                        <div className="trend-bar volume" style={{ height: `${(v / maxVolumeValue) * 100}%` }} />
                       </div>
-                    </>
-                  )}
+                    ))}
+                  </div>
                 </div>
               )}
             </div>

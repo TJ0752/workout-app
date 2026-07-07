@@ -337,6 +337,45 @@ describe('getFitnessOverview', () => {
     expect(byDate['2026-07-02']).toBe(325); // 65kg x 5 reps
   });
 
+  it('e1rm and volume move independently, not in lockstep, when the underlying sets genuinely diverge', () => {
+    const divergentRoutines = [
+      { id: 'r1', tasks: [{ id: 't1', completionType: 'workout', exercises: [{ id: 'e1', name: 'Bicep curls' }] }] },
+    ];
+    const divergentLogs = {
+      t1: {
+        '2026-07-01': { e1: [set({ weight: 100, reps: 1 })] }, // e1rm ~103.3, volume 100
+        '2026-07-02': { e1: [set({ weight: 50, reps: 20 })] }, // e1rm ~83.3, volume 1000
+      },
+    };
+    const overview = getFitnessOverview(divergentRoutines, divergentLogs);
+    const curls = overview.exercises[0];
+    const day1 = curls.series.find((s) => s.date === '2026-07-01');
+    const day2 = curls.series.find((s) => s.date === '2026-07-02');
+    expect(day1.e1rm).toBeGreaterThan(day2.e1rm); // e1RM went down...
+    expect(day1.volume).toBeLessThan(day2.volume); // ...while volume went up
+  });
+
+  it('gives bestReps/bestDuration (single best set per session) alongside totalReps/totalDuration (session sum) for bodyweight exercises', () => {
+    const plankRoutines = [
+      { id: 'r1', tasks: [{ id: 't1', completionType: 'workout', exercises: [{ id: 'plank', name: 'Sit-ups' }] }] },
+    ];
+    const plankLogs = {
+      t1: {
+        '2026-07-01': {
+          plank: [
+            set({ weight: undefined, reps: 15, setIndex: 0 }),
+            set({ weight: undefined, reps: 20, setIndex: 1 }),
+          ],
+        },
+      },
+    };
+    const overview = getFitnessOverview(plankRoutines, plankLogs);
+    const situps = overview.exercises[0];
+    const day = situps.series.find((s) => s.date === '2026-07-01');
+    expect(day.bestReps).toBe(20); // the single best set, not the sum
+    expect(day.totalReps).toBe(35); // 15 + 20, the volume-equivalent sum
+  });
+
   it('picks the adaptive top-PR tiles: weighted from weighted exercises, bodyweight from bodyweight ones', () => {
     const overview = getFitnessOverview(routines, workoutLogsByTask);
     expect(overview.topWeightedPR.name).toBe('Bench Press');

@@ -1174,22 +1174,34 @@ undisplayed one.
   logged with real added weight (a vest/belt) shows up here with a genuine e1RM/volume
   trend rather than being silently excluded — the classification only ever looks at
   whether a set actually had a weight, never at the exercise's configured type.
-- **Per-exercise trend charts, not just an all-time PR tile.** Expanding an exercise in the
-  "By exercise" list shows a small bar-chart trend of its primary metric over its last 8
-  sessions (e1RM for weighted, total reps for bodyweight/reps, total duration for
-  duration-based) — `getFitnessOverview`'s `series` already carries one entry per date with
-  every metric computed, so no separate query is needed. A weighted exercise additionally
-  shows a **second trend for volume** (kg × reps, `series[].volume`) right below the e1RM
-  one — volume and e1RM answer different questions (how much total work was done that
-  session vs. the single heaviest effort), and previously `volume` was only ever an
-  all-time total (`getExerciseVolume(entry.logs)`, still used for nothing visible in the
-  UI) with no per-session trend to show progression. Bodyweight/duration exercises don't
-  get a volume trend — `getExerciseVolume` requires a `weight` on every set, so it's always
-  0 for those and would just render a flat empty chart. The volume trend's bars use
-  `--accent-chart` (not the primary trend's `--accent-soft`) specifically so the two
-  stacked charts read as distinct series at a glance, matching this app's "UI chrome vs.
-  chart marks get two different shades of the same hue" design-token convention (see
-  "Design system" below).
+- **Every exercise type gets the same single-best-effort-vs-total-volume pair of trend
+  charts, not just weighted ones.** Expanding an exercise in the "By exercise" list shows
+  two stacked bar-chart trends over its last 8 sessions: the top one is always a
+  *single-best-set* metric (e1RM for weighted — Epley's formula already picks the one best
+  set of the session, not a sum — `bestReps`/`bestDuration` for bodyweight/duration, the
+  reps/duration-denominated equivalent), and the bottom one is always the *session total*
+  ("Volume trend": kg × reps for weighted via `series[].volume`, total reps/total duration
+  for bodyweight/duration via `series[].totalReps`/`series[].totalDuration`) — `getFitnessOverview`'s
+  `series` already carries one entry per date with every metric computed, so no separate
+  query is needed for either. This wasn't the original design: the volume trend first
+  shipped weighted-only (`getExerciseVolume` requires a `weight` on every set, so it's
+  always 0 for bodyweight/duration exercises), and the primary trend for those types used
+  to be `totalReps`/`totalDuration` directly — which meant the "second chart" for
+  bodyweight would have just duplicated the first one. Fixed by giving the primary trend
+  its own single-best-set metric (`bestReps`/`bestDuration`, computed the same way
+  `getExerciseRepPR`/`getExerciseDurationPR` already compute an all-time PR, just scoped to
+  one session's `completedSets` instead of `entry.logs`) — the exact same
+  single-effort-vs-total-work duality e1RM/volume already had for weighted exercises, now
+  true for every kind. The exercise-list headline was updated to match (`latest.bestReps`/
+  `latest.bestDuration`, not the session total) for the same reason. The volume trend's
+  bars use `--accent-chart` (not the primary trend's `--accent-soft`) specifically so the
+  two stacked charts read as distinct series at a glance, matching this app's "UI chrome
+  vs. chart marks get two different shades of the same hue" design-token convention (see
+  "Design system" below) — genuinely useful here since, with few logged sessions, the
+  best-set and volume metrics can trend in the *same* direction and look superficially
+  similar at a glance; confirmed with a deliberately divergent test case (a 1-rep-max
+  single set vs. a many-rep lighter set) that e1RM and volume move independently and
+  correctly in opposite directions when the underlying sets genuinely warrant it.
 - **`getFitnessOverview(routines, workoutLogsByTask)` merges by exercise *name*, not
   exercise id**, across every workout-type task in the app. Exercise ids are per-task (a
   "Bench Press" added to two different routines gets two different ids), so a PR/trend
