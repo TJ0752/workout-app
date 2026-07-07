@@ -44,6 +44,40 @@ export function getExercisePR(logs) {
   return best;
 }
 
+/**
+ * The most recently logged weight for an exercise, looking back through every date on or before
+ * a given date (including sets already logged earlier the same day, so a set's own later sets
+ * prefill with what was just used, not the exercise's static target). Used both to prefill the
+ * workout companion's weight field with what was actually lifted last time, and to decide
+ * whether the current attempt is a regression against it.
+ */
+export function getLastUsedWeight(logsForTaskByDate, exerciseId, onOrBeforeDateKey) {
+  const dates = Object.keys(logsForTaskByDate || {})
+    .filter((d) => d <= onOrBeforeDateKey)
+    .sort((a, b) => (a < b ? 1 : -1));
+  for (const date of dates) {
+    const sets = (logsForTaskByDate[date]?.[exerciseId] || [])
+      .filter((s) => s.completed && s.weight != null)
+      .sort((a, b) => b.setIndex - a.setIndex);
+    if (sets.length > 0) return sets[0].weight;
+  }
+  return null;
+}
+
+const KG_PER_LB = 0.45359237;
+
+/** kg -> lb, for the dual-unit weight field. Canonical storage stays kg (matching every
+ * already-logged weight in the app before this field existed) - lb is a display/entry
+ * convenience only, never a second stored value. */
+export function kgToLb(kg) {
+  return kg / KG_PER_LB;
+}
+
+/** lb -> kg, the inverse of kgToLb. */
+export function lbToKg(lb) {
+  return lb * KG_PER_LB;
+}
+
 /** Epley formula: a lifter's estimated 1-rep max from any logged weight x reps pair - lets
  * "how strong am I" be compared across different rep ranges, rather than only ever comparing
  * the single heaviest set at any one rep count the way getExercisePR does. */

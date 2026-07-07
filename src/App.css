@@ -2105,6 +2105,61 @@
   opacity: 0.4;
 }
 
+.workout-weight-block {
+  width: 100%;
+}
+
+.workout-weight-warning-label {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.workout-weight-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+
+.workout-weight-row.warning .workout-weight-inputs input {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+.workout-weight-stepper-btn {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  border-radius: 999px;
+  border: 1px solid var(--card-border);
+  background: var(--card);
+  color: var(--text);
+  font-size: 1.2em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.workout-weight-inputs {
+  display: flex;
+  flex: 1;
+  gap: 0.5rem;
+}
+
+.workout-weight-inputs label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85em;
+  color: var(--text-soft);
+}
+
+.workout-weight-inputs input {
+  min-width: 0;
+}
+
 .workout-rest-screen {
   flex: 1;
   display: flex;

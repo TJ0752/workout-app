@@ -278,8 +278,9 @@ function App() {
 
   const handleStartWorkout = (task, routine, dateKey) => {
     if (isNativeWorkoutSessionAvailable()) {
-      const logsForDate = workoutLogsByTask[task.id]?.[dateKey] || {};
-      startNativeWorkoutSession(task, dateKey, logsForDate);
+      const taskLogs = workoutLogsByTask[task.id] || {};
+      const logsForDate = taskLogs[dateKey] || {};
+      startNativeWorkoutSession(task, dateKey, logsForDate, taskLogs);
       return;
     }
     setActiveSession({ task, routine, dateKey });
@@ -310,11 +311,14 @@ function App() {
   }
 
   if (activeSession) {
-    const logsForDate = workoutLogsByTask[activeSession.task.id]?.[activeSession.dateKey] || {};
+    const taskLogs = workoutLogsByTask[activeSession.task.id] || {};
+    const logsForDate = taskLogs[activeSession.dateKey] || {};
     return (
       <div className="app-shell">
         <WorkoutSessionView
           task={activeSession.task}
+          taskLogs={taskLogs}
+          dateKey={activeSession.dateKey}
           logsForDate={logsForDate}
           onLogSet={(exercise, setIndex, values) =>
             handleLogWorkoutSet(activeSession.task, activeSession.dateKey, exercise, setIndex, values)

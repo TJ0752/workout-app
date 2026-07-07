@@ -978,6 +978,37 @@ only** — `storage.js` remains the sole DB reader/writer.
     yet); the volume line is omitted at exactly 0 so an all-bodyweight session never shows a
     meaningless "0". Implemented in both `WorkoutSessionScreen.kt` and
     `WorkoutSessionView.jsx` for parity.
+  - **Last-used-weight prefill, dual kg/lb fields, weight steppers, and a regression warning** —
+    the weight input in both companions now prefills with `getLastUsedWeight` (`:shared`'s
+    `WorkoutLogic.kt` / `utils/workouts.js`, kept in exact parity like `getExercisePR`/
+    `getExerciseVolume` above) — the most recently *logged* weight for that exercise, looking
+    back through every prior date and, for today, sets already logged earlier in this same
+    session — rather than the exercise's static `targetWeight`, which stays stale once a lifter
+    actually progresses past it. Canonical storage stays kg (all pre-existing weight data is kg
+    — confirmed with the user rather than assumed, since the app had never labeled a unit
+    before); a second, independently-typed lb field (`kgToLb`/`lbToKg`, both pure functions with
+    parity tests on both sides) shows the live conversion, and editing either field recomputes
+    only the *other* one, never the field currently being typed into — re-deriving the
+    in-progress field on every keystroke would fight the user's own typing with rounding, since
+    kg→lb→kg doesn't perfectly round-trip at display precision. Two `±2.5kg` (a common gym plate
+    increment) stepper buttons flank the fields for quick adjustment without opening the
+    keyboard. If the value about to be logged is lower than `getLastUsedWeight`, both fields and
+    a label turn `AppPalette.Bad`/`--bad` (red) as a warning — not a block, since an intentional
+    deload is a legitimate training choice, just one worth flagging rather than logging silently.
+    - **A real race condition, found via a Playwright round-trip, not by inspection.** The web
+      companion's `onLogSet` persists through `App.jsx`'s async SQLite write before
+      `workoutLogsByTask` (and this component's `taskLogs` prop) updates — so advancing to the
+      very next set immediately after logging one would compute `getLastUsedWeight` against
+      *stale* props, prefilling the new set's weight field empty instead of with what was just
+      lifted, until some *later* unrelated re-render happened to catch up (the initializing
+      effect only reruns on `[exerciseIndex, setIndex]`, not when `taskLogs` eventually arrives).
+      Fixed with a local `sessionLogs` mirror, seeded from the `logsForDate` prop once and
+      updated synchronously inside `markDone()` itself — the exact same pattern
+      `WorkoutSessionScreen.kt`'s own `logsByExercise` local state already used for this reason,
+      which is why the native side never had this bug in the first place. `getLastUsedWeight` is
+      called against `{...taskLogs, [dateKey]: sessionLogs}` (web) /
+      `logsByDate + (dateKey to logsByExercise)` (native) — the static cross-session history
+      merged with this session's own live edits — rather than either alone.
   - **Rich live notification on Android 16+ (API 36)** — `buildNotification()` branches to
     `buildProgressStyleNotification()` when `Build.VERSION.SDK_INT >= 36` and not resting: a
     real `Notification.ProgressStyle` with one `Segment` per exercise (sized by its planned

@@ -14,6 +14,9 @@ import {
   getExerciseSessionSeries,
   getSessionMixByWeek,
   getFitnessOverview,
+  getLastUsedWeight,
+  kgToLb,
+  lbToKg,
 } from './workouts.js';
 
 function set(overrides = {}) {
@@ -404,5 +407,51 @@ describe('getFitnessOverview', () => {
     const merged = overview.exercises.find((e) => e.pr.weight === 70);
     expect(merged.series).toHaveLength(2);
     expect(merged.name).toBe('Barbell Bench'); // most-recently-seen spelling wins
+  });
+});
+
+describe('getLastUsedWeight', () => {
+  it('returns the most recent completed set with a weight, most recent date first', () => {
+    const logs = {
+      '2026-07-01': { e1: [set({ weight: 60, setIndex: 0 })] },
+      '2026-07-03': { e1: [set({ weight: 65, setIndex: 0 })] },
+      '2026-07-02': { e1: [set({ weight: 62, setIndex: 0 })] },
+    };
+    expect(getLastUsedWeight(logs, 'e1', '2026-07-05')).toBe(65);
+  });
+
+  it('within a date, prefers the highest setIndex (the latest set logged that day)', () => {
+    const logs = {
+      '2026-07-01': {
+        e1: [set({ weight: 60, setIndex: 0 }), set({ weight: 62.5, setIndex: 1 }), set({ weight: 65, setIndex: 2 })],
+      },
+    };
+    expect(getLastUsedWeight(logs, 'e1', '2026-07-01')).toBe(65);
+  });
+
+  it('ignores dates after the cutoff, and incomplete or weightless sets', () => {
+    const logs = {
+      '2026-07-01': { e1: [set({ weight: 60 })] },
+      '2026-07-05': { e1: [set({ weight: 100 })] }, // after cutoff - ignored
+      '2026-07-02': { e1: [set({ weight: 999, completed: false }), set({ weight: null })] },
+    };
+    expect(getLastUsedWeight(logs, 'e1', '2026-07-03')).toBe(60);
+  });
+
+  it('returns null when nothing has ever been logged for this exercise', () => {
+    expect(getLastUsedWeight({}, 'e1', '2026-07-01')).toBeNull();
+    expect(getLastUsedWeight({ '2026-07-01': { other: [set()] } }, 'e1', '2026-07-01')).toBeNull();
+  });
+});
+
+describe('kgToLb / lbToKg', () => {
+  it('convert accurately in both directions', () => {
+    expect(kgToLb(100)).toBeCloseTo(220.462, 2);
+    expect(lbToKg(220.462)).toBeCloseTo(100, 2);
+  });
+
+  it('round-trip within floating point tolerance', () => {
+    expect(lbToKg(kgToLb(62.5))).toBeCloseTo(62.5, 6);
+    expect(kgToLb(lbToKg(135))).toBeCloseTo(135, 6);
   });
 });

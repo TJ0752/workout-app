@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,6 +35,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -68,12 +70,18 @@ import com.tharuka.routines.shared.workout.LoggedSet
 import com.tharuka.routines.shared.workout.findNextPosition
 import com.tharuka.routines.shared.workout.getExercisePR
 import com.tharuka.routines.shared.workout.getExerciseVolume
+import com.tharuka.routines.shared.workout.getLastUsedWeight
 import com.tharuka.routines.shared.workout.isNewPR
+import com.tharuka.routines.shared.workout.kgToLb
+import com.tharuka.routines.shared.workout.lbToKg
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 data class SetValues(val reps: Int?, val weight: Double?, val durationSeconds: Int?, val completed: Boolean)
+
+/** Common gym plate increment, used for the weight steppers' +/- step size. */
+private const val WEIGHT_STEP_KG = 2.5
 
 /** Fed to WorkoutTimerService.updateProgress() so the API-36+ live notification (see that file)
  * can mirror what's on screen - current exercise, per-exercise progress, and the last logged set. */
@@ -99,6 +107,9 @@ object AppPalette {
     val TextSoft = Color(0xFF8C7F57)
     val Accent = Color(0xFF0A9764)
     val AccentInk = Color(0xFF062F1F)
+    // Matches src/index.css's --bad token exactly (warm terracotta) - "missed/below-threshold"
+    // everywhere else in the app, reused here for the weight-regression warning.
+    val Bad = Color(0xFFD96C5F)
 }
 
 val WorkoutColorScheme = lightColorScheme(
@@ -122,6 +133,8 @@ fun WorkoutSessionScreen(
     taskTitle: String,
     exercises: List<Exercise>,
     initialLogs: Map<String, List<LoggedSet>>,
+    logsByDate: Map<String, Map<String, List<LoggedSet>>>,
+    dateKey: String,
     onLogSet: (Exercise, Int, SetValues) -> Unit,
     onRestStart: (Int) -> Unit,
     onRestEnd: () -> Unit,
@@ -171,16 +184,48 @@ fun WorkoutSessionScreen(
     val totalSets = maxOf(1, exercise.targetSets ?: 1)
     val setsForExercise = logsByExercise[exercise.id] ?: emptyList()
     val loggedSet = setsForExercise.find { it.setIndex == setIndex }
+    // logsByDate is a static snapshot from when the session launched; logsByExercise is this
+    // session's own live, already-updated state for today - merging them is what lets
+    // getLastUsedWeight see a set logged a moment ago in this same session, not just prior days.
+    val effectiveLogsByDate = logsByDate + (dateKey to logsByExercise)
+    val lastUsedWeight = if (isWeighted) getLastUsedWeight(effectiveLogsByDate, exercise.id, dateKey) else null
 
     var reps by remember(exerciseIndex, setIndex) {
         mutableStateOf((loggedSet?.reps ?: exercise.targetReps)?.toString() ?: "")
     }
-    var weight by remember(exerciseIndex, setIndex) {
-        mutableStateOf((loggedSet?.weight ?: exercise.targetWeight)?.toString() ?: "")
+    // Canonical value stays kg; lb is a second, independently-typed field so editing one doesn't
+    // fight the other's rounding while mid-keystroke - only the field NOT currently being typed
+    // into gets recomputed. Mirrors WorkoutSessionView.jsx's identical approach.
+    var weightKgText by remember(exerciseIndex, setIndex) {
+        val initialKg = loggedSet?.weight ?: lastUsedWeight ?: exercise.targetWeight
+        mutableStateOf(initialKg?.toString() ?: "")
+    }
+    var weightLbText by remember(exerciseIndex, setIndex) {
+        val initialKg = loggedSet?.weight ?: lastUsedWeight ?: exercise.targetWeight
+        mutableStateOf(initialKg?.let { formatNumber(kgToLb(it)) } ?: "")
     }
     var duration by remember(exerciseIndex, setIndex) {
         mutableStateOf((loggedSet?.durationSeconds ?: exercise.targetDurationSeconds)?.toString() ?: "")
     }
+
+    fun handleKgChange(value: String) {
+        weightKgText = value
+        weightLbText = value.toDoubleOrNull()?.let { formatNumber(kgToLb(it)) } ?: ""
+    }
+
+    fun handleLbChange(value: String) {
+        weightLbText = value
+        weightKgText = value.toDoubleOrNull()?.let { formatNumber(lbToKg(it)) } ?: ""
+    }
+
+    fun adjustWeight(deltaKg: Double) {
+        val current = weightKgText.toDoubleOrNull() ?: 0.0
+        val next = maxOf(0.0, Math.round((current + deltaKg) * 100.0) / 100.0)
+        handleKgChange(formatNumber(next))
+    }
+
+    val currentWeightKg = weightKgText.toDoubleOrNull()
+    val isWeightRegression = isWeighted && lastUsedWeight != null && currentWeightKg != null && currentWeightKg < lastUsedWeight
 
     fun jumpTo(index: Int) {
         exerciseIndex = index
@@ -212,7 +257,7 @@ fun WorkoutSessionScreen(
     fun markDone() {
         val values = SetValues(
             reps = if (isDuration) null else reps.toIntOrNull(),
-            weight = if (isWeighted) weight.toDoubleOrNull() else null,
+            weight = if (isWeighted) weightKgText.toDoubleOrNull() else null,
             durationSeconds = if (isDuration) duration.toIntOrNull() else null,
             completed = true,
         )
@@ -357,7 +402,7 @@ fun WorkoutSessionScreen(
                     )
 
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         if (isDuration) {
@@ -377,14 +422,66 @@ fun WorkoutSessionScreen(
                                 modifier = Modifier.weight(1f),
                             )
                         }
-                        if (isWeighted) {
+                    }
+
+                    if (isWeighted) {
+                        if (isWeightRegression) {
+                            Text(
+                                "Lower than last time (${formatNumber(lastUsedWeight ?: 0.0)} kg)",
+                                color = AppPalette.Bad,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            val weightBorderColor = if (isWeightRegression) AppPalette.Bad else null
+                            Button(
+                                onClick = { adjustWeight(-WEIGHT_STEP_KG) },
+                                shape = CircleShape,
+                                contentPadding = PaddingValues(0.dp),
+                                modifier = Modifier.size(40.dp),
+                            ) { Text("−") }
                             OutlinedTextField(
-                                value = weight,
-                                onValueChange = { weight = it },
-                                label = { Text("Weight") },
+                                value = weightKgText,
+                                onValueChange = ::handleKgChange,
+                                label = { Text("kg") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                colors = if (weightBorderColor != null) {
+                                    OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = weightBorderColor,
+                                        unfocusedBorderColor = weightBorderColor,
+                                    )
+                                } else {
+                                    OutlinedTextFieldDefaults.colors()
+                                },
                                 modifier = Modifier.weight(1f),
                             )
+                            OutlinedTextField(
+                                value = weightLbText,
+                                onValueChange = ::handleLbChange,
+                                label = { Text("lb") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                colors = if (weightBorderColor != null) {
+                                    OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = weightBorderColor,
+                                        unfocusedBorderColor = weightBorderColor,
+                                    )
+                                } else {
+                                    OutlinedTextFieldDefaults.colors()
+                                },
+                                modifier = Modifier.weight(1f),
+                            )
+                            Button(
+                                onClick = { adjustWeight(WEIGHT_STEP_KG) },
+                                shape = CircleShape,
+                                contentPadding = PaddingValues(0.dp),
+                                modifier = Modifier.size(40.dp),
+                            ) { Text("+") }
                         }
                     }
 
@@ -606,9 +703,7 @@ private fun WorkoutCompleteScreen(totalCompletedSets: Int, totalPlannedSets: Int
     }
 }
 
-/** "60" for a whole number, "62.5" otherwise - the app has no separate weight-unit field
- * (see WorkoutModels.kt's Exercise/LoggedSet), so this stays unitless like the existing
- * "Weight (optional)" input field above. */
+/** "60" for a whole number, "62.5" otherwise. */
 private fun formatNumber(value: Double): String {
     val rounded = (value * 10).roundToInt() / 10.0
     return if (rounded == rounded.toLong().toDouble()) rounded.toLong().toString() else rounded.toString()

@@ -64,6 +64,35 @@ fun isNewPR(previousLogs: List<LoggedSet>, newSet: LoggedSet): Boolean {
     return weight > previousWeight || (weight == previousWeight && newReps > previousReps)
 }
 
+/**
+ * The most recently logged weight for an exercise, looking back through every date on or before
+ * a given date (including sets already logged earlier the same day, so a set's own later sets
+ * prefill with what was just used, not the exercise's static target). Mirrors
+ * getLastUsedWeight in src/utils/workouts.js exactly.
+ */
+fun getLastUsedWeight(
+    logsForTaskByDate: Map<String, Map<String, List<LoggedSet>>>,
+    exerciseId: String,
+    onOrBeforeDateKey: String,
+): Double? {
+    val dates = logsForTaskByDate.keys.filter { it <= onOrBeforeDateKey }.sortedDescending()
+    for (date in dates) {
+        val sets = (logsForTaskByDate[date]?.get(exerciseId) ?: emptyList())
+            .filter { it.completed && it.weight != null }
+            .sortedByDescending { it.setIndex }
+        if (sets.isNotEmpty()) return sets[0].weight
+    }
+    return null
+}
+
+private const val KG_PER_LB = 0.45359237
+
+/** kg -> lb, for the dual-unit weight field. Canonical storage stays kg. */
+fun kgToLb(kg: Double): Double = kg / KG_PER_LB
+
+/** lb -> kg, the inverse of kgToLb. */
+fun lbToKg(lb: Double): Double = lb * KG_PER_LB
+
 fun findNextPosition(exercises: List<Exercise>, logsForDate: Map<String, List<LoggedSet>>): SessionPosition? {
     for (ei in exercises.indices) {
         val exercise = exercises[ei]

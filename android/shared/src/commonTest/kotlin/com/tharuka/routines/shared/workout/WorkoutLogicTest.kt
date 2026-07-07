@@ -133,4 +133,49 @@ class WorkoutLogicTest {
         val logs = mapOf("e1" to listOf(set(0)))
         assertNull(findNextPosition(exercises, logs))
     }
+
+    @Test
+    fun getLastUsedWeight_picksMostRecentDateOnOrBeforeCutoff() {
+        val logs = mapOf(
+            "2026-07-01" to mapOf("e1" to listOf(set(0, weight = 60.0))),
+            "2026-07-03" to mapOf("e1" to listOf(set(0, weight = 65.0))),
+            "2026-07-02" to mapOf("e1" to listOf(set(0, weight = 62.0))),
+        )
+        assertEquals(65.0, getLastUsedWeight(logs, "e1", "2026-07-05"))
+    }
+
+    @Test
+    fun getLastUsedWeight_withinADatePrefersHighestSetIndex() {
+        val logs = mapOf(
+            "2026-07-01" to mapOf(
+                "e1" to listOf(set(0, weight = 60.0), set(1, weight = 62.5), set(2, weight = 65.0))
+            )
+        )
+        assertEquals(65.0, getLastUsedWeight(logs, "e1", "2026-07-01"))
+    }
+
+    @Test
+    fun getLastUsedWeight_ignoresDatesAfterCutoffAndIncompleteOrWeightlessSets() {
+        val logs = mapOf(
+            "2026-07-01" to mapOf("e1" to listOf(set(0, weight = 60.0))),
+            "2026-07-05" to mapOf("e1" to listOf(set(0, weight = 100.0))),
+            "2026-07-02" to mapOf(
+                "e1" to listOf(set(0, weight = 999.0, completed = false), set(1, weight = null))
+            ),
+        )
+        assertEquals(60.0, getLastUsedWeight(logs, "e1", "2026-07-03"))
+    }
+
+    @Test
+    fun getLastUsedWeight_nullWhenNothingEverLogged() {
+        assertNull(getLastUsedWeight(emptyMap(), "e1", "2026-07-01"))
+        assertNull(getLastUsedWeight(mapOf("2026-07-01" to mapOf("other" to listOf(set(0)))), "e1", "2026-07-01"))
+    }
+
+    @Test
+    fun kgToLb_and_lbToKg_convertAndRoundTrip() {
+        assertEquals(220.462, kgToLb(100.0), 0.01)
+        assertEquals(100.0, lbToKg(220.462), 0.01)
+        assertEquals(62.5, lbToKg(kgToLb(62.5)), 0.000001)
+    }
 }

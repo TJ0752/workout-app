@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, Check } from 'lucide-react';
-import { getExercisePR, getExerciseVolume } from '../utils/workouts';
+import { getExercisePR, getExerciseVolume, getLastUsedWeight, kgToLb, lbToKg } from '../utils/workouts';
 
-/** "60" for a whole number, "62.5" otherwise - no separate weight-unit field exists on a task's
- * exercises, so this stays unitless like the existing "Weight (optional)" input. */
+/** "60" for a whole number, "62.5" otherwise. */
 function formatNumber(value) {
   return String(Math.round(value * 10) / 10);
 }
+
+const WEIGHT_STEP_KG = 2.5;
 
 function findNextPosition(exercises, logsForDate) {
   for (let ei = 0; ei < exercises.length; ei++) {
@@ -25,7 +26,7 @@ function findNextPosition(exercises, logsForDate) {
 const RING_RADIUS = 80;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
-export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClose }) {
+export default function WorkoutSessionView({ task, taskLogs, dateKey, logsForDate, onLogSet, onClose }) {
   const exercises = task.exercises || [];
   const start = findNextPosition(exercises, logsForDate) || { exerciseIndex: 0, setIndex: 0 };
   const [exerciseIndex, setExerciseIndex] = useState(start.exerciseIndex);
@@ -34,6 +35,12 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
   const [resting, setResting] = useState(false);
   const [restRemaining, setRestRemaining] = useState(0);
   const [ringAnimKey, setRingAnimKey] = useState(0);
+  // A local, synchronously-updated mirror of today's logs - `onLogSet`'s persistence round-trip
+  // through App.jsx is async (a SQLite write), so relying on the `logsForDate` prop alone would
+  // leave the very set just logged invisible to this same render pass (e.g. the next set's
+  // last-used-weight prefill would miss the set logged a moment ago). Seeded once from the prop;
+  // native's WorkoutSessionScreen.kt uses the identical pattern (its own `logsByExercise` state).
+  const [sessionLogs, setSessionLogs] = useState(logsForDate);
 
   const exercise = exercises[exerciseIndex];
   const isDuration = exercise?.unit === 'seconds';
@@ -42,19 +49,47 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
   // used to always show), rather than needing a one-time backfill/migration.
   const isWeighted = exercise?.type !== 'calisthenics';
   const totalSets = Math.max(1, exercise?.targetSets || 1);
-  const setsForExercise = logsForDate?.[exercise?.id] || [];
+  const setsForExercise = sessionLogs?.[exercise?.id] || [];
   const loggedSet = setsForExercise.find((s) => s.setIndex === setIndex);
+  const effectiveTaskLogs = { ...taskLogs, [dateKey]: sessionLogs };
+  const lastUsedWeight =
+    isWeighted && exercise ? getLastUsedWeight(effectiveTaskLogs, exercise.id, dateKey) : null;
 
   const [reps, setReps] = useState('');
-  const [weight, setWeight] = useState('');
+  // Canonical value stays kg (see getLastUsedWeight/kgToLb docs in utils/workouts.js); lb is a
+  // second, independently-typed field so editing one doesn't fight the other's rounding while
+  // you're mid-keystroke - only the field you're NOT currently typing into gets recomputed.
+  const [weightKgText, setWeightKgText] = useState('');
+  const [weightLbText, setWeightLbText] = useState('');
   const [duration, setDuration] = useState('');
 
   useEffect(() => {
     setReps(loggedSet?.reps ?? exercise?.targetReps ?? '');
-    setWeight(loggedSet?.weight ?? exercise?.targetWeight ?? '');
+    const initialKg = loggedSet?.weight ?? lastUsedWeight ?? exercise?.targetWeight ?? '';
+    setWeightKgText(initialKg === '' ? '' : String(initialKg));
+    setWeightLbText(initialKg === '' ? '' : formatNumber(kgToLb(Number(initialKg))));
     setDuration(loggedSet?.durationSeconds ?? exercise?.targetDurationSeconds ?? '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [exerciseIndex, setIndex]);
+
+  const handleKgChange = (value) => {
+    setWeightKgText(value);
+    setWeightLbText(value === '' ? '' : formatNumber(kgToLb(Number(value))));
+  };
+
+  const handleLbChange = (value) => {
+    setWeightLbText(value);
+    setWeightKgText(value === '' ? '' : formatNumber(lbToKg(Number(value))));
+  };
+
+  const adjustWeight = (deltaKg) => {
+    const next = Math.max(0, Math.round(((Number(weightKgText) || 0) + deltaKg) * 100) / 100);
+    handleKgChange(String(next));
+  };
+
+  const currentWeightKg = weightKgText === '' ? null : Number(weightKgText);
+  const isWeightRegression =
+    isWeighted && lastUsedWeight != null && currentWeightKg != null && currentWeightKg < lastUsedWeight;
 
   useEffect(() => {
     if (!resting) return undefined;
@@ -95,12 +130,17 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
   };
 
   const markDone = () => {
-    onLogSet(exercise, setIndex, {
+    const values = {
       reps: isDuration ? null : reps === '' ? null : Number(reps),
-      weight: isWeighted && weight !== '' ? Number(weight) : null,
+      weight: isWeighted && weightKgText !== '' ? Number(weightKgText) : null,
       durationSeconds: isDuration ? (duration === '' ? null : Number(duration)) : null,
       completed: true,
-    });
+    };
+    onLogSet(exercise, setIndex, values);
+    setSessionLogs((prev) => ({
+      ...prev,
+      [exercise.id]: (prev?.[exercise.id] || []).filter((s) => s.setIndex !== setIndex).concat({ setIndex, ...values }),
+    }));
     setRingAnimKey((k) => k + 1);
     const hasNextSet = setIndex + 1 < totalSets;
     const hasNextExercise = exerciseIndex + 1 < exercises.length;
@@ -116,13 +156,13 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
   };
 
   const totalCompletedSets = exercises.reduce((sum, ex) => {
-    const sets = logsForDate?.[ex.id] || [];
+    const sets = sessionLogs?.[ex.id] || [];
     return sum + sets.filter((s) => s.completed).length;
   }, 0);
   const totalPlannedSets = exercises.reduce((sum, ex) => sum + Math.max(1, ex.targetSets || 1), 0);
 
   const currentExercisePR = getExercisePR(setsForExercise);
-  const sessionVolume = exercises.reduce((sum, ex) => sum + getExerciseVolume(logsForDate?.[ex.id] || []), 0);
+  const sessionVolume = exercises.reduce((sum, ex) => sum + getExerciseVolume(sessionLogs?.[ex.id] || []), 0);
   const statsParts = [];
   if (currentExercisePR) statsParts.push(`PR: ${currentExercisePR.reps || 0} × ${formatNumber(currentExercisePR.weight)}`);
   if (sessionVolume > 0) statsParts.push(`Session volume: ${formatNumber(sessionVolume)}`);
@@ -157,7 +197,7 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
 
       <div className="workout-exercise-nav">
         {exercises.map((ex, i) => {
-          const sets = logsForDate?.[ex.id] || [];
+          const sets = sessionLogs?.[ex.id] || [];
           const doneCount = sets.filter((s) => s.completed).length;
           const exTotal = Math.max(1, ex.targetSets || 1);
           return (
@@ -244,19 +284,58 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
                 <input type="number" min="0" value={reps} onChange={(e) => setReps(e.target.value)} />
               </label>
             )}
-            {isWeighted && (
-              <label>
-                Weight (optional)
-                <input
-                  type="number"
-                  min="0"
-                  step="0.5"
-                  value={weight}
-                  onChange={(e) => setWeight(e.target.value)}
-                />
-              </label>
-            )}
           </div>
+
+          {isWeighted && (
+            <div className="workout-weight-block">
+              <span className="field-label">
+                Weight (optional)
+                {isWeightRegression && (
+                  <span className="workout-weight-warning-label"> — lower than last time ({formatNumber(lastUsedWeight)} kg)</span>
+                )}
+              </span>
+              <div className={`workout-weight-row ${isWeightRegression ? 'warning' : ''}`}>
+                <button
+                  type="button"
+                  className="workout-weight-stepper-btn"
+                  onClick={() => adjustWeight(-WEIGHT_STEP_KG)}
+                  aria-label="Decrease weight"
+                >
+                  −
+                </button>
+                <div className="workout-weight-inputs">
+                  <label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.5"
+                      value={weightKgText}
+                      onChange={(e) => handleKgChange(e.target.value)}
+                    />
+                    kg
+                  </label>
+                  <label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.5"
+                      value={weightLbText}
+                      onChange={(e) => handleLbChange(e.target.value)}
+                    />
+                    lb
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  className="workout-weight-stepper-btn"
+                  onClick={() => adjustWeight(WEIGHT_STEP_KG)}
+                  aria-label="Increase weight"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="workout-set-nav">
             <button

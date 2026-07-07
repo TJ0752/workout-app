@@ -54,6 +54,7 @@ class WorkoutSessionActivity : ComponentActivity() {
         val taskTitle = payload?.optString("taskTitle") ?: ""
         val exercises = parseExercises(payload?.optJSONArray("exercises"))
         val logsForDate = parseLogsForDate(payload?.optJSONObject("logsForDate"))
+        val logsByDate = parseLogsByDate(payload?.optJSONObject("logsByDate"))
 
         startTimerServiceOncePermitted(taskTitle)
 
@@ -64,6 +65,8 @@ class WorkoutSessionActivity : ComponentActivity() {
                         taskTitle = taskTitle,
                         exercises = exercises,
                         initialLogs = logsForDate,
+                        logsByDate = logsByDate,
+                        dateKey = dateKey ?: "",
                         onLogSet = { exercise, setIndex, values ->
                             val event = JSObject()
                             event.put("taskId", taskId)
@@ -188,6 +191,17 @@ class WorkoutSessionActivity : ComponentActivity() {
                 )
             }
             result[exerciseId] = list
+        }
+        return result
+    }
+
+    /** Every date's logs for this task, not just today's - needed for getLastUsedWeight to look
+     * back through prior sessions, the same way src/utils/workouts.js's JS counterpart does. */
+    private fun parseLogsByDate(obj: JSONObject?): Map<String, Map<String, List<LoggedSet>>> {
+        if (obj == null) return emptyMap()
+        val result = mutableMapOf<String, Map<String, List<LoggedSet>>>()
+        for (date in obj.keys()) {
+            result[date] = parseLogsForDate(obj.getJSONObject(date))
         }
         return result
     }
