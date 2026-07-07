@@ -212,11 +212,22 @@ async function resolveExerciseId(db, name) {
   return id;
 }
 
-/** Resolves (or creates) an exerciseId for every exercise in a workout task that doesn't already have one - picking one from the autosuggest list already carries its id, typing a brand-new name doesn't yet. */
+/**
+ * Resolves (or creates) an exerciseId for every exercise in a workout task that doesn't already
+ * have one - picking one from the autosuggest list already carries its id, typing a brand-new
+ * name doesn't yet. Sequential (not `Promise.all`) on purpose: a real bug found via a two-exercise
+ * routine failing to save ("cannot start a transaction within a transaction") - the web SQLite
+ * backend's `db.query`/`db.run` calls aren't safe to run concurrently on the same connection, and
+ * `Promise.all` over an async map issues exactly that (two brand-new exercise names both hitting
+ * the insert path at once). A `for` loop keeps each resolution's query+insert pair fully
+ * finished before the next exercise's begins.
+ */
 async function resolveExerciseIds(db, exercises) {
-  return Promise.all(
-    exercises.map(async (ex) => ({ ...ex, exerciseId: ex.exerciseId || (await resolveExerciseId(db, ex.name)) }))
-  );
+  const resolved = [];
+  for (const ex of exercises) {
+    resolved.push({ ...ex, exerciseId: ex.exerciseId || (await resolveExerciseId(db, ex.name)) });
+  }
+  return resolved;
 }
 
 /**

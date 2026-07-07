@@ -224,6 +224,14 @@ export default function WorkoutSessionView({ task, taskLogs, dateKey, logsForDat
         <div className="workout-rest-screen">
           <span className="workout-rest-label">Rest</span>
           <span className="workout-rest-countdown">{restRemaining}s</span>
+          {/* markDone() already advances exerciseIndex/setIndex to the upcoming position before
+              entering the resting state, so `exercise`/`setIndex` here already describe what's
+              next, not what was just finished - no separate lookahead needed. The rest screen
+              only ever shows when there IS a next set/exercise (see markDone's own guard), so
+              this never needs a "nothing next" fallback either. */}
+          <span className="workout-rest-next">
+            Up next: <strong>{exercise.name}</strong> · Set {setIndex + 1} of {totalSets}
+          </span>
           <button type="button" className="workout-skip-rest-btn" onClick={() => setResting(false)}>
             Skip rest
           </button>

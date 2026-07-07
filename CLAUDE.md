@@ -289,7 +289,14 @@ display just shows whichever spelling was most recently seen.
   (`resolveExerciseId`). This means naming a *new* exercise "Push-ups" and later naming another
   new exercise "push-ups" (different case) still resolves to the same repository row — the same
   case-insensitivity `RoutineForm.jsx`'s autosuggest surfaces to the user, kept consistent at the
-  data layer rather than relying on the UI alone to prevent duplicates.
+  data layer rather than relying on the UI alone to prevent duplicates. **Resolves sequentially, not
+  via `Promise.all`** — a real bug caught by testing a genuinely two-exercise routine (every
+  earlier manual/Playwright test happened to use one exercise per routine, so this went
+  unnoticed): the web SQLite backend's `db.query`/`db.run` aren't safe to call concurrently on
+  the same connection, and `Promise.all` over an async map issues exactly that whenever two
+  brand-new exercise names both need an insert at once, throwing "cannot start a transaction
+  within a transaction" and silently failing the whole routine save. A plain `for` loop keeps
+  each exercise's query+insert pair fully finished before the next one starts.
 - **One-time backfill for pre-existing data.** `backfillExerciseRepositoryOnce` (called from
   `ready()`, gated by a `Preferences` marker key so it only ever runs once per install) resolves
   `exerciseId` for every already-existing workout task's exercises that don't have one yet,
@@ -985,6 +992,16 @@ only** — `storage.js` remains the sole DB reader/writer.
     yet); the volume line is omitted at exactly 0 so an all-bodyweight session never shows a
     meaningless "0". Implemented in both `WorkoutSessionScreen.kt` and
     `WorkoutSessionView.jsx` for parity.
+  - **"Up next" preview on the rest screen** — the rest countdown now also shows what's coming
+    up (`"Up next: Squats · Set 1 of 3"`), so finishing a set doesn't drop you into an unlabeled
+    countdown with no idea what you're resting *for*. No new state or lookahead logic was
+    needed: `markDone()` already advances `exerciseIndex`/`setIndex` to the upcoming position
+    *before* entering the resting state (so the rest screen could show the right set-dot/ring
+    numbers once rest ends), which means `exercise`/`setIndex` already describe the next set for
+    the whole duration of the rest screen — the preview just reads them. Never needs a
+    "nothing next" fallback either, since the rest screen only ever appears when there *is* a
+    next set or exercise (`markDone`'s own `hasNextSet || hasNextExercise` guard) — the
+    genuinely last set of a workout skips straight to the finished screen instead.
   - **Last-used-weight prefill, dual kg/lb fields, weight steppers, and a regression warning** —
     the weight input in both companions now prefills with `getLastUsedWeight` (`:shared`'s
     `WorkoutLogic.kt` / `utils/workouts.js`, kept in exact parity like `getExercisePR`/

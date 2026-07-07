@@ -2184,6 +2184,11 @@
   color: var(--accent);
 }
 
+.workout-rest-next {
+  color: var(--text-soft);
+  font-size: 0.95em;
+}
+
 .workout-skip-rest-btn {
   padding: 0.85rem 1.8rem;
   border-radius: 999px;

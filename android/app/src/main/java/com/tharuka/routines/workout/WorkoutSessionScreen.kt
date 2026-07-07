@@ -362,6 +362,17 @@ fun WorkoutSessionScreen(
                         color = AppPalette.Accent,
                         modifier = Modifier.padding(vertical = 12.dp),
                     )
+                    // markDone() already advances exerciseIndex/setIndex to the upcoming position
+                    // before entering the resting state, so `exercise`/`setIndex` here already
+                    // describe what's next, not what was just finished - no separate lookahead
+                    // needed, and no "nothing next" fallback either, since the rest screen only
+                    // ever shows when there IS a next set/exercise (see markDone's own guard).
+                    Text(
+                        "Up next: ${exercise.name} · Set ${setIndex + 1} of $totalSets",
+                        color = AppPalette.TextSoft,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(bottom = 12.dp),
+                    )
                     Button(
                         onClick = { resting = false; onRestEnd() },
                         shape = RoundedCornerShape(999.dp),
