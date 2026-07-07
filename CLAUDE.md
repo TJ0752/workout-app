@@ -1002,6 +1002,40 @@ only** — `storage.js` remains the sole DB reader/writer.
     "nothing next" fallback either, since the rest screen only ever appears when there *is* a
     next set or exercise (`markDone`'s own `hasNextSet || hasNextExercise` guard) — the
     genuinely last set of a workout skips straight to the finished screen instead.
+  - **Radial rest-timer ring** — the rest screen's plain numeric countdown was replaced with a
+    ring that visually depletes from full to empty over the rest duration, per the original
+    request: *"I want rest period to have a light which smoothly goes round some clean element...
+    which indicated rest over when it blinks back to where it started."* Both companions
+    deliberately drive this through the platform's own animation system rather than a per-second
+    JS/Compose-state redraw loop, since a stepped redraw reads as discrete ticks, not the
+    continuous sweep the request asked for:
+    - **Web** (`RestRing` in `WorkoutSessionView.jsx`) uses a two-frame CSS-transition trick: an
+      SVG circle renders fully "lit" (`strokeDashoffset: 0`, no transition) for exactly one frame,
+      then on the next `requestAnimationFrame` tick flips to `strokeDashoffset: CIRCUMFERENCE`
+      together with `transition: stroke-dashoffset {duration}s linear` — the browser interpolates
+      the change smoothly over the full duration on its own compositor thread.
+    - **Native** (`RestRing` in `WorkoutSessionScreen.kt`, placed next to `MomentumRing`) uses the
+      Compose equivalent: a single `Animatable<Float>` animated from `1f` to `0f` via
+      `tween(totalSeconds * 1000, easing = LinearEasing)` inside a `LaunchedEffect`, drawn as a
+      `drawArc` sweep (the same `Canvas`/`Stroke`/`StrokeCap.Round` pattern `MomentumRing` already
+      established for its own fill ring).
+    - Both use `resetKey` (an incrementing counter, not the raw duration) as the animation's
+      restart trigger — two back-to-back rests can have an identical configured duration, and a
+      plain `totalSeconds` dependency wouldn't re-fire the effect/LaunchedEffect for the second
+      one.
+    - The "blinks back to where it started" completion signal is a brief alpha pulse on the ring
+      only (not the countdown number): web fades the ring to 15% opacity and back via a CSS
+      `@keyframes` triggered on `transitionend`; native mirrors this with a second `Animatable`
+      (`blinkAlpha`) driving a `graphicsLayer { alpha = ... }` on the ring's `Canvas`, sequenced
+      after the depletion tween in the same `LaunchedEffect`.
+    - **The same "capture before reassignment" bug class hit twice in this feature, in both
+      companions.** `exercise.restSeconds` can't be read at *render* time on the resting screen,
+      because `markDone()` calls `goNext()` (which reassigns `exercise` to the upcoming one)
+      shortly after starting the rest — reading it later would silently animate using the wrong
+      exercise's configured rest duration whenever the finishing and upcoming exercises differ.
+      Both sides fix this the same way: a dedicated `restTotalSeconds` (web state /
+      native `remember`) captured at the exact moment rest starts, before `goNext()` runs, and
+      used for the ring's duration instead of re-deriving it from `exercise.restSeconds` later.
   - **Last-used-weight prefill, dual kg/lb fields, weight steppers, and a regression warning** —
     the weight input in both companions now prefills with `getLastUsedWeight` (`:shared`'s
     `WorkoutLogic.kt` / `utils/workouts.js`, kept in exact parity like `getExercisePR`/

@@ -3,6 +3,7 @@
 package com.tharuka.routines.workout
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -148,6 +149,12 @@ fun WorkoutSessionScreen(
     var finished by remember { mutableStateOf(start == null) }
     var resting by remember { mutableStateOf(false) }
     var restRemaining by remember { mutableStateOf(0) }
+    // Captured separately from `exercise.restSeconds` because markDone() calls goNext() right
+    // after starting a rest, which reassigns `exercise` to the *upcoming* one - reading
+    // restSeconds from it later (e.g. at render time) would use the wrong exercise's configured
+    // rest duration whenever the two differ. Mirrors WorkoutSessionView.jsx's identical fix.
+    var restTotalSeconds by remember { mutableStateOf(0) }
+    var restAnimKey by remember { mutableStateOf(0) }
 
     fun notifyProgressUpdate(lastSetSummary: String? = null, isPR: Boolean = false) {
         onProgressUpdate(
@@ -284,6 +291,8 @@ fun WorkoutSessionScreen(
         val restSeconds = exercise.restSeconds ?: 0
         if ((hasNextSet || hasNextExercise) && restSeconds > 0) {
             restRemaining = restSeconds
+            restTotalSeconds = restSeconds
+            restAnimKey += 1
             resting = true
             onRestStart(restSeconds)
         }
@@ -355,11 +364,10 @@ fun WorkoutSessionScreen(
                     verticalArrangement = Arrangement.Center,
                 ) {
                     Text("REST", fontSize = 14.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp, color = AppPalette.TextSoft)
-                    Text(
-                        "${restRemaining}s",
-                        fontSize = 72.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = AppPalette.Accent,
+                    RestRing(
+                        totalSeconds = restTotalSeconds,
+                        resetKey = restAnimKey,
+                        remainingLabel = "${restRemaining}s",
                         modifier = Modifier.padding(vertical = 12.dp),
                     )
                     // markDone() already advances exerciseIndex/setIndex to the upcoming position
@@ -520,6 +528,70 @@ fun WorkoutSessionScreen(
                 }
             }
         }
+    }
+}
+
+/** Radial rest-timer ring: a full-circle track visually depletes from full to empty over the rest
+ * duration via a single linear Animatable tween (not a per-second redraw), matching the "smoothly
+ * goes round" continuous-motion effect the web version achieves with a CSS transition on
+ * strokeDashoffset (see .workout-rest-ring-fill in App.css - the same depletion, driven by the
+ * platform's own animation system instead of a JS/Compose-state redraw loop in both cases).
+ * Briefly blinks (an alpha pulse on the ring only, not the countdown number) once fully depleted,
+ * mirroring the web version's workoutRestRingBlink keyframes, as the "indicated rest over when it
+ * blinks back to where it started" signal from the original request. `resetKey` (not
+ * `totalSeconds`) is the LaunchedEffect key so that two back-to-back rests with an identical
+ * duration still restart the animation - see WorkoutSessionView.jsx's RestRing for the same
+ * reasoning. */
+@Composable
+private fun RestRing(
+    totalSeconds: Int,
+    resetKey: Int,
+    remainingLabel: String,
+    modifier: Modifier = Modifier,
+) {
+    val fraction = remember { Animatable(1f) }
+    val blinkAlpha = remember { Animatable(1f) }
+    LaunchedEffect(resetKey) {
+        blinkAlpha.snapTo(1f)
+        fraction.snapTo(1f)
+        if (totalSeconds > 0) {
+            fraction.animateTo(0f, animationSpec = tween(totalSeconds * 1000, easing = LinearEasing))
+            blinkAlpha.animateTo(0.15f, animationSpec = tween(240))
+            blinkAlpha.animateTo(1f, animationSpec = tween(360))
+        }
+    }
+
+    val ringColor = MaterialTheme.colorScheme.primary
+    val trackColor = MaterialTheme.colorScheme.outlineVariant
+    val numberColor = MaterialTheme.colorScheme.onBackground
+
+    Box(modifier = modifier.size(200.dp), contentAlignment = Alignment.Center) {
+        Canvas(modifier = Modifier.fillMaxSize().graphicsLayer { alpha = blinkAlpha.value }) {
+            val stroke = 10.dp.toPx()
+            val inset = stroke / 2f
+            val arcTopLeft = Offset(inset, inset)
+            val arcSize = Size(size.width - stroke, size.height - stroke)
+
+            drawArc(
+                color = trackColor,
+                startAngle = -90f,
+                sweepAngle = 360f,
+                useCenter = false,
+                topLeft = arcTopLeft,
+                size = arcSize,
+                style = Stroke(width = stroke, cap = StrokeCap.Round),
+            )
+            drawArc(
+                color = ringColor,
+                startAngle = -90f,
+                sweepAngle = 360f * fraction.value.coerceIn(0f, 1f),
+                useCenter = false,
+                topLeft = arcTopLeft,
+                size = arcSize,
+                style = Stroke(width = stroke, cap = StrokeCap.Round),
+            )
+        }
+        Text(remainingLabel, fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = numberColor)
     }
 }
 

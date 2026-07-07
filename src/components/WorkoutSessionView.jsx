@@ -26,6 +26,50 @@ function findNextPosition(exercises, logsForDate) {
 const RING_RADIUS = 80;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
+const REST_RING_RADIUS = 70;
+const REST_RING_CIRCUMFERENCE = 2 * Math.PI * REST_RING_RADIUS;
+
+/**
+ * A ring of light that smoothly depletes back to its starting point over the rest duration - a
+ * genuine CSS transition (not a per-second JS-driven redraw, which would look like discrete
+ * ticks rather than a smooth sweep), so this is deliberately decoupled from the numeric
+ * `restRemaining` countdown ticking alongside it. Rendered fully "lit" (no stroke-dashoffset)
+ * for exactly one frame, then transitioned to fully depleted over `totalSeconds` - the
+ * two-frame trick CSS transitions need, since a property can't visibly transition from a value
+ * it's *initially rendered at* in the same paint. `resetKey` forces the two-frame sequence to
+ * replay for every new rest period, even back-to-back ones with an identical duration (a plain
+ * `totalSeconds` dependency wouldn't change in that case, so the effect wouldn't rerun).
+ */
+function RestRing({ totalSeconds, resetKey }) {
+  const [depleted, setDepleted] = useState(false);
+  const [justFinished, setJustFinished] = useState(false);
+
+  useEffect(() => {
+    setDepleted(false);
+    setJustFinished(false);
+    const raf = requestAnimationFrame(() => setDepleted(true));
+    return () => cancelAnimationFrame(raf);
+  }, [resetKey]);
+
+  return (
+    <svg className="workout-rest-ring-svg" viewBox="0 0 160 160">
+      <circle className="workout-rest-ring-track" cx="80" cy="80" r={REST_RING_RADIUS} />
+      <circle
+        className={`workout-rest-ring-fill ${justFinished ? 'workout-rest-ring-blink' : ''}`}
+        cx="80"
+        cy="80"
+        r={REST_RING_RADIUS}
+        style={{
+          strokeDasharray: REST_RING_CIRCUMFERENCE,
+          strokeDashoffset: depleted ? REST_RING_CIRCUMFERENCE : 0,
+          transition: depleted ? `stroke-dashoffset ${totalSeconds}s linear` : 'none',
+        }}
+        onTransitionEnd={() => setJustFinished(true)}
+      />
+    </svg>
+  );
+}
+
 export default function WorkoutSessionView({ task, taskLogs, dateKey, logsForDate, onLogSet, onClose }) {
   const exercises = task.exercises || [];
   const start = findNextPosition(exercises, logsForDate) || { exerciseIndex: 0, setIndex: 0 };
@@ -34,6 +78,12 @@ export default function WorkoutSessionView({ task, taskLogs, dateKey, logsForDat
   const [finished, setFinished] = useState(findNextPosition(exercises, logsForDate) === null);
   const [resting, setResting] = useState(false);
   const [restRemaining, setRestRemaining] = useState(0);
+  // Captured separately from `exercise.restSeconds` because markDone() calls goNext() right
+  // after starting a rest, which reassigns `exercise` to the *upcoming* one - reading
+  // restSeconds from it later (e.g. at render time) would use the wrong exercise's configured
+  // rest duration whenever the two differ.
+  const [restTotalSeconds, setRestTotalSeconds] = useState(0);
+  const [restAnimKey, setRestAnimKey] = useState(0);
   const [ringAnimKey, setRingAnimKey] = useState(0);
   // A local, synchronously-updated mirror of today's logs - `onLogSet`'s persistence round-trip
   // through App.jsx is async (a SQLite write), so relying on the `logsForDate` prop alone would
@@ -146,6 +196,8 @@ export default function WorkoutSessionView({ task, taskLogs, dateKey, logsForDat
     const hasNextExercise = exerciseIndex + 1 < exercises.length;
     if ((hasNextSet || hasNextExercise) && exercise.restSeconds) {
       setRestRemaining(exercise.restSeconds);
+      setRestTotalSeconds(exercise.restSeconds);
+      setRestAnimKey((k) => k + 1);
       setResting(true);
     }
     if (hasNextSet || hasNextExercise) {
@@ -223,7 +275,10 @@ export default function WorkoutSessionView({ task, taskLogs, dateKey, logsForDat
       {resting ? (
         <div className="workout-rest-screen">
           <span className="workout-rest-label">Rest</span>
-          <span className="workout-rest-countdown">{restRemaining}s</span>
+          <div className="workout-rest-ring-wrap">
+            <RestRing totalSeconds={restTotalSeconds} resetKey={restAnimKey} />
+            <span className="workout-rest-countdown">{restRemaining}s</span>
+          </div>
           {/* markDone() already advances exerciseIndex/setIndex to the upcoming position before
               entering the resting state, so `exercise`/`setIndex` here already describe what's
               next, not what was just finished - no separate lookahead needed. The rest screen
