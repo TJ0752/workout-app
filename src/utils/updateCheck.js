@@ -1,7 +1,13 @@
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import { App } from '@capacitor/app';
 
 const REPO = 'TJ0752/workout-app';
+
+// Native-only (see android/.../update/UpdateInstallerPlugin.kt) - downloads a release APK via
+// Android's own DownloadManager and posts a tap-to-install notification once it's ready, since a
+// sideloaded (non-Play-Store) app has no way to install itself without at least one explicit
+// system confirmation. No-ops on web (there's no installed native build to update).
+const UpdateInstaller = Capacitor.isNativePlatform() ? registerPlugin('UpdateInstaller') : null;
 
 /**
  * The `prod` (com.tharuka.routines) and `dev` (com.tharuka.routines.dev) flavors share this
@@ -65,13 +71,37 @@ export async function checkForUpdate() {
     currentBuild,
     latestBuild,
     downloadUrl: asset?.browser_download_url || release.html_url,
+    fileName: assetName,
   };
 }
 
-export function openDownload(url) {
-  // '_system' tells Capacitor's core bridge to hand the URL to the device's
-  // default external browser rather than an in-app WebView tab - required
-  // for the OS's normal download manager (and its "unknown sources" install
-  // prompt) to actually take over for an .apk.
-  window.open(url, '_system');
+/**
+ * Downloads a newly-available release APK in the background (native DownloadManager, not a
+ * browser round-trip) and, once complete, posts an "Update ready" notification whose tap target
+ * fires the system install confirmation directly - the closest a sideloaded app can get to
+ * Play Store's silent auto-update, since only a privileged installer (Play Store itself, or
+ * root) can skip that confirmation entirely; a regular app has no permission that grants it.
+ * `versionCode` (checkForUpdate's `latestBuild`) lets the native side no-op a repeat call for a
+ * build that's already downloading or ready, instead of re-downloading the identical APK every
+ * time the app happens to be reopened before the user gets around to installing. No-ops on web.
+ */
+export async function downloadUpdate({ downloadUrl, fileName, latestBuild }) {
+  if (!UpdateInstaller) return null;
+  return UpdateInstaller.downloadUpdate({ url: downloadUrl, fileName, versionCode: latestBuild });
+}
+
+/** Re-fires the install confirmation for an already-downloaded update - lets in-app UI offer a
+ * retry if the "Update ready" notification was dismissed or missed. No-ops on web. */
+export async function installReadyUpdate() {
+  if (!UpdateInstaller) return null;
+  return UpdateInstaller.installReadyUpdate();
+}
+
+/** Fires once a background download started by downloadUpdate() finishes - see
+ * UpdateDownloadReceiver.kt. Registered with `true` retained semantics on the native side, so a
+ * listener attached after the event already fired (e.g. the app was reopened after the download
+ * completed while backgrounded) still receives it. No-ops on web. */
+export function initUpdateReadyListener(onReady) {
+  if (!UpdateInstaller) return null;
+  return UpdateInstaller.addListener('updateReady', (event) => onReady(event.versionCode));
 }

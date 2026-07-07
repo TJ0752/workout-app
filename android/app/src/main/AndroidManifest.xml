@@ -150,4 +150,9 @@
          comment on WorkoutTimerService.buildProgressStyleNotification() for why that part is
          deferred. Harmless to declare now even though nothing calls it yet. -->
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
+    <!-- For UpdateInstallerPlugin - required on Android 8+ for this app to request installing a
+         package at all. Not itself a runtime prompt: the first time the install intent actually
+         fires, Android shows a one-time "allow installs from Daily Routines" settings toggle if
+         not already granted, then proceeds normally on every install after that. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 </manifest>

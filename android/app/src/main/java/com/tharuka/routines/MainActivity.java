@@ -7,6 +7,7 @@ import com.getcapacitor.BridgeActivity;
 import com.tharuka.routines.notify.NativeNotificationsPlugin;
 import com.tharuka.routines.notify.NotificationTapBridgeKt;
 import com.tharuka.routines.shared.workout.SharedInfo;
+import com.tharuka.routines.update.UpdateInstallerPlugin;
 import com.tharuka.routines.workout.WorkoutSessionPlugin;
 
 public class MainActivity extends BridgeActivity {
@@ -14,6 +15,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(WorkoutSessionPlugin.class);
         registerPlugin(NativeNotificationsPlugin.class);
+        registerPlugin(UpdateInstallerPlugin.class);
         super.onCreate(savedInstanceState);
         Log.d("MainActivity", "Linked shared module: " + SharedInfo.MODULE_NAME);
     }

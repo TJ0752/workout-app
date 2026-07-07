@@ -539,6 +539,10 @@ needs to be checked against this whole list by hand:
   notification ever exists), and `APP_GROUP_SUMMARY_ID = 960,000,001` (`AppGroupSummary.kt`,
   also fixed — the one notification flagged `setGroupSummary(true)` for the whole app, see
   Part D).
+- `update/`'s `UPDATE_READY_NOTIFICATION_ID = 970,000,001` (`UpdateReadyNotification.kt`, also
+  fixed — exactly one update-ready notification ever exists) is a *third* independently
+  maintained id, in yet another package — checked against every range in this list at the time it
+  was added, same discipline as everything else here.
 - `workout/`'s `WorkoutTimerService.NOTIFICATION_ID = 850,000,001` (see below) is a *second*,
   independently maintained id in a completely different package — **this is exactly the gap
   that caused a real collision**: `WorkoutTimerService` originally hardcoded `800000001` before
@@ -1298,7 +1302,7 @@ on a real device without any risk to the real app's data.
 CI (`android-build.yml`) builds both flavors on every push (`assembleDebug` is AGP's synthetic
 aggregate task once `flavorDimensions` exist, so this needed no command changes) and publishes two
 independent GitHub Releases: `latest-android` (the `prod` APK, what `src/utils/updateCheck.js`'s
-in-app "Check for updates" button points at) only moves on pushes to `main`, while
+in-app updater checks against) only moves on pushes to `main`, while
 `latest-android-dev` (the `dev` APK) tracks the ongoing working branch instead. This means the real
 app only ever updates once something has actually been merged to `main` — day-to-day iteration on
 the working branch no longer pushes unfinished work to the one app real usage depends on.
@@ -1333,6 +1337,76 @@ cause is unrelated. Fixed with `assetNameFor(applicationId)` (`app-prod-debug.ap
 left in place (no tool available to delete a release asset from this environment) — harmless now
 that it's never matched by name, but worth knowing about if the "one `.apk` asset per release"
 assumption is relied on again anywhere else.
+
+### In-app update installer (`android/app/.../update/`, `src/utils/updateCheck.js`)
+
+This app is sideloaded, not distributed through the Play Store — only a privileged installer
+(Play Store itself, or root) can install a package with zero user interaction at all. A regular
+app has no permission that grants that, so a literal zero-tap Play-Store-style silent auto-update
+is architecturally impossible here. What *is* achievable, and what this implements, is collapsing
+every other step down to nothing: `checkForUpdate()` already ran silently on every app open before
+this existed; the gap being closed here is everything between "an update exists" and "it's
+installed," which used to require manually tapping Download, waiting for a browser download,
+opening Downloads, tapping the file, and finally confirming the install — five-plus taps for
+something that can be almost entirely automatic.
+
+- **Flow.** `UpdateChecker.jsx`'s existing silent on-open check, on finding `updateAvailable`, now
+  immediately calls `downloadUpdate()` (`utils/updateCheck.js` → native `UpdateInstaller` plugin)
+  with no user action required. `UpdateInstallerPlugin.downloadUpdate()` enqueues the APK via
+  Android's own `DownloadManager` (reliable large-file transfer, retries, progress — no reason to
+  hand-roll this with `fetch`/`Filesystem`) with its own notification hidden
+  (`VISIBILITY_HIDDEN`), since this app posts its own notification once the download completes
+  instead of relying on DownloadManager's generic one. `UpdateDownloadReceiver` (dynamically
+  registered from `UpdateInstallerPlugin.load()`, not manifest-declared — Android 8+ restricts
+  manifest-declared receivers for most implicit broadcasts, including this one on some OS
+  versions; a runtime-registered receiver has no such restriction and works as long as the app
+  process is alive, which it already is thanks to `BackgroundSyncService`, see above) posts a
+  plain, dismissible "Update ready" notification whose tap target is the install confirmation
+  directly (`Intent.ACTION_VIEW` + `application/vnd.android.package-archive` MIME type against
+  `DownloadManager.getUriForDownloadedFile()`'s own content URI). The user's total involvement:
+  tap that notification, tap "Install" in the mandatory system dialog. Two taps, both genuinely
+  unavoidable — the second is Android's own confirmation, and even Play Store apps get an
+  equivalent one the very first time (though not on subsequent updates, which is the one piece
+  this app structurally cannot replicate).
+- **Deliberately routed through a real notification tap, not an auto-launched install intent the
+  instant the download finishes.** Android's background-activity-start restrictions make an
+  unprompted `startActivity()` call from a `BroadcastReceiver` unreliable once the app isn't in
+  the foreground — exactly the kind of platform assumption this project has been burned by
+  confidently guessing wrong on before (the workout timer's `ACTIVITY_RECOGNITION` crash, the
+  `dataSync` 6-hour cap). A notification's `PendingIntent`, by contrast, is unconditionally exempt
+  from that restriction regardless of foreground/background state — it's the one mechanism in
+  this flow guaranteed to work every time, not just when the user happens to still be looking at
+  the app when the download finishes.
+- **`UpdateDownloadStore`** (SharedPreferences, not the app's DB — native code must never touch
+  that directly, see above) tracks the one in-flight/ready download by `versionCode`, letting
+  `downloadUpdate()` no-op a repeat call for a build that's already downloading or ready instead
+  of re-downloading the identical APK every time the app happens to be reopened before the user
+  installs it — the common case, since the check already runs on every app open.
+  `installReadyUpdate()` (wired to the in-app "Install" banner's button, and to `UpdateChecker`'s
+  `updateReady` listener showing that banner in the first place) re-fires the identical install
+  intent directly via `context.startActivity()` — safe here specifically because it's called from
+  a live in-app button tap, not a background receiver, so there's no activity-start restriction to
+  worry about.
+- **`REQUEST_INSTALL_PACKAGES`** (declared in the manifest, non-runtime — no permission dialog of
+  its own) is required for this app to request any package install at all on Android 8+. The
+  *first* time the install intent actually fires, Android shows a one-time "allow installs from
+  Daily Routines" settings toggle if not already granted (the same interstitial the user would
+  already be used to seeing from whatever app they used to open a downloaded `.apk` manually
+  before); every install after that proceeds straight to the normal confirmation dialog.
+- **The old browser-download path (`openDownload`, `window.open(url, '_system')`) is gone
+  entirely** — replaced, not kept as a fallback, since `UpdateChecker` already gates its whole
+  render on `Capacitor.isNativePlatform()` and the native plugin is registered unconditionally
+  alongside every other plugin in `MainActivity.java`, the same way this codebase treats every
+  other "native-only, no web fallback needed" feature.
+- **Not yet verified on a real device beyond compile-correctness** — this dev environment has no
+  Android SDK and the manual-dispatch emulator harness would need a real newer GitHub Release to
+  exercise the actual download+notification+install path meaningfully, which isn't something this
+  session can trigger deterministically. `DownloadManager` + `ACTION_DOWNLOAD_COMPLETE` +
+  `getUriForDownloadedFile()` + `REQUEST_INSTALL_PACKAGES` is a long-established, widely-used
+  Android pattern (unlike the more version-specific APIs this project has been burned by before),
+  but real-device confirmation from an actual release is still pending — documented here as an
+  open item, not claimed as proven, consistent with this project's standing practice for native
+  work this environment can't directly verify.
 
 ### Design system
 
