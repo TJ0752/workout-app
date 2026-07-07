@@ -267,6 +267,42 @@ migrating from a different storage system entirely, not a schema version bump).
 / `return getCompletions()`) rather than trusting in-memory state — callers in `App.jsx`
 rely on this.
 
+### Exercise repository (`src/storage.js`, `RoutineForm.jsx`)
+
+A workout task's `exercises[]` entries carry a stable `exerciseId` (added via `DB_VERSION = 6`'s
+migration, a new `exercises` table: `id`, `name`, `created_at`, with a case-insensitive unique
+index on `name`) in addition to their existing per-task-instance `id` — the two answer different
+questions. `exercises[].id` is regenerated every time a task is edited/versioned (it's scoped to
+one task's own array); `exerciseId` is the cross-routine identity that lets
+`getFitnessOverview` in `src/utils/workouts.js` merge "Bench Press" logged under two different
+routines' tasks into one PR/volume history, instead of silo-ing by whichever task happened to log
+it. `getFitnessOverview` keys its merge by `exercise.exerciseId || name` (name-only fallback for
+any exercise that predates this migration and hasn't been backfilled yet) — matching by id, not
+name, also means a later rename doesn't split an exercise's history in two: renaming "Bench Press"
+to "Barbell Bench" keeps the same `exerciseId`, so its PR/volume history stays merged and the
+display just shows whichever spelling was most recently seen.
+
+- **Resolution happens in `upsertTask`, not in the UI.** `resolveExerciseIds(db, exercises)`
+  (called from `upsertTask` for every `completionType === 'workout'` task, before the task's
+  other fields are computed) resolves each exercise missing an `exerciseId`: a case-insensitive
+  name lookup against the `exercises` table, or a new row insert if this is a genuinely new name
+  (`resolveExerciseId`). This means naming a *new* exercise "Push-ups" and later naming another
+  new exercise "push-ups" (different case) still resolves to the same repository row — the same
+  case-insensitivity `RoutineForm.jsx`'s autosuggest surfaces to the user, kept consistent at the
+  data layer rather than relying on the UI alone to prevent duplicates.
+- **One-time backfill for pre-existing data.** `backfillExerciseRepositoryOnce` (called from
+  `ready()`, gated by a `Preferences` marker key so it only ever runs once per install) resolves
+  `exerciseId` for every already-existing workout task's exercises that don't have one yet,
+  rewriting only the live `tasks` table — per this codebase's append-only versioning philosophy,
+  `task_versions` rows are an immutable audit log and are deliberately left untouched; only
+  current-state tables are safe to backfill in place.
+- **Autosuggest UI.** `RoutineForm.jsx`'s `ExerciseNameInput` fetches `getExerciseNames()` once
+  per form mount and filters it client-side (substring, case-insensitive) as the user types in an
+  exercise's name field. Selecting a suggestion sets both `name` and `exerciseId` on that
+  exercise; typing free text instead clears any previously-set `exerciseId` (so an edited name
+  doesn't keep pointing at the wrong repository row) and leaves resolution to `upsertTask` on
+  save, exactly like a brand-new exercise.
+
 ### Notifications (`src/notifications.js`)
 
 **Every notification in the app is posted by native Kotlin** — `@capacitor/local-notifications`

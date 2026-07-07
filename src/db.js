@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 
 const DB_NAME = 'routines';
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 const sqlite = new SQLiteConnection(CapacitorSQLite);
 let dbInstance = null;
@@ -172,6 +172,25 @@ const MIGRATIONS = [
       );`,
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_workout_logs_natural_key
         ON workout_logs(task_id, date, exercise_id, set_index);`,
+    ],
+  },
+  {
+    // A named exercise ("Bench Press") is currently only identified by a per-task-instance id
+    // (task.exercises[].id, generated fresh whenever a task is created/edited) - the same
+    // real-world exercise added to two different routines gets two different ids, which is
+    // exactly why getFitnessOverview (utils/workouts.js) has to fall back to matching by name
+    // string instead, silently fragmenting history across any typo/casing difference. This table
+    // is the stable, cross-routine identity that fixes that: `exercises.id` is what
+    // task.exercises[].exerciseId (a new field, resolved by storage.js's resolveExerciseId,
+    // distinct from the existing per-task exercises[].id) actually refers to.
+    toVersion: 6,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS exercises (
+        id TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_name_nocase ON exercises(name COLLATE NOCASE);`,
     ],
   },
 ];

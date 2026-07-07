@@ -5,6 +5,7 @@ import { generateId } from './utils/id';
 const LEGACY_ROUTINES_KEY = 'routines';
 const LEGACY_COMPLETIONS_KEY = 'completions';
 const MIGRATION_MARKER_KEY = 'sqlite_migrated';
+const EXERCISE_BACKFILL_MARKER_KEY = 'exercise_repository_backfilled';
 
 function rowToTask(row) {
   return {
@@ -188,15 +189,91 @@ async function migrateFromPreferencesOnce(db) {
   await Preferences.set({ key: MIGRATION_MARKER_KEY, value: 'true' });
 }
 
+/**
+ * Looks up an exercise repository row by case-insensitive name, creating one if it doesn't
+ * exist yet - this is the single choke point that gives a real-world exercise ("Bench Press") a
+ * stable identity shared across every routine/task it's added to, instead of the per-task-instance
+ * `exercises[].id` that gets regenerated fresh every time. Called both from upsertTask (for a
+ * newly typed exercise name with no exerciseId yet) and the one-time backfill below (for
+ * exercises that existed before this table did).
+ */
+async function resolveExerciseId(db, name) {
+  const trimmed = (name || '').trim();
+  if (!trimmed) return null;
+  const rows = await db.query('SELECT id FROM exercises WHERE name = ? COLLATE NOCASE', [trimmed]);
+  const existing = (rows.values || [])[0];
+  if (existing) return existing.id;
+  const id = generateId();
+  await db.run('INSERT INTO exercises (id, name, created_at) VALUES (?, ?, ?)', [
+    id,
+    trimmed,
+    new Date().toISOString(),
+  ]);
+  return id;
+}
+
+/** Resolves (or creates) an exerciseId for every exercise in a workout task that doesn't already have one - picking one from the autosuggest list already carries its id, typing a brand-new name doesn't yet. */
+async function resolveExerciseIds(db, exercises) {
+  return Promise.all(
+    exercises.map(async (ex) => ({ ...ex, exerciseId: ex.exerciseId || (await resolveExerciseId(db, ex.name)) }))
+  );
+}
+
+/**
+ * One-time backfill for installs that already had workout tasks before the exercises table
+ * existed - without this, `getFitnessOverview`'s switch from name-matching to exerciseId-matching
+ * would silently orphan every exercise saved before this migration (no exerciseId means no
+ * matching group) until the task happened to be edited again. Rewrites each task's *live*
+ * `exercises` JSON with the resolved id - safe to mutate in place because `tasks` is current
+ * state, not the append-only `task_versions` audit log (see CLAUDE.md's versioning section);
+ * historical versions are never rewritten.
+ */
+async function backfillExerciseRepositoryOnce(db) {
+  const { value: marker } = await Preferences.get({ key: EXERCISE_BACKFILL_MARKER_KEY });
+  if (marker) return;
+
+  const taskRows = await db.query("SELECT id, exercises FROM tasks WHERE completion_type = 'workout'");
+  for (const row of taskRows.values || []) {
+    let exercises;
+    try {
+      exercises = JSON.parse(row.exercises || '[]');
+    } catch {
+      exercises = [];
+    }
+    if (exercises.length === 0) continue;
+
+    let changed = false;
+    for (const ex of exercises) {
+      if (ex.exerciseId || !ex.name?.trim()) continue;
+      ex.exerciseId = await resolveExerciseId(db, ex.name);
+      changed = true;
+    }
+    if (changed) {
+      await db.run('UPDATE tasks SET exercises = ? WHERE id = ?', [JSON.stringify(exercises), row.id]);
+    }
+  }
+
+  await persist();
+  await Preferences.set({ key: EXERCISE_BACKFILL_MARKER_KEY, value: 'true' });
+}
+
 let readyPromise = null;
 async function ready() {
   if (!readyPromise) {
     readyPromise = getDb().then(async (db) => {
       await migrateFromPreferencesOnce(db);
+      await backfillExerciseRepositoryOnce(db);
       return db;
     });
   }
   return readyPromise;
+}
+
+/** Every exercise ever named, for the RoutineForm exercise editor's autosuggest. */
+export async function getExerciseNames() {
+  const db = await ready();
+  const result = await db.query('SELECT id, name FROM exercises ORDER BY name COLLATE NOCASE ASC');
+  return result.values || [];
 }
 
 /**
@@ -289,7 +366,11 @@ export async function deleteRoutine(routineId) {
 export async function upsertTask(task) {
   const db = await ready();
   const now = new Date().toISOString();
-  const fields = taskFieldsOf(task);
+  const resolvedTask =
+    task.completionType === 'workout'
+      ? { ...task, exercises: await resolveExerciseIds(db, task.exercises || []) }
+      : task;
+  const fields = taskFieldsOf(resolvedTask);
 
   const existingRows = await db.query('SELECT * FROM tasks WHERE id = ?', [task.id]);
   const existing = (existingRows.values || [])[0];

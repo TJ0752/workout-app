@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { parseQuickAddText, MAX_EXTRA_REMINDERS } from '../utils/tasks';
 import { DAY_LABELS } from '../utils/date';
 import { ICON_OPTIONS, suggestIconId } from '../utils/icons';
 import { generateId } from '../utils/id';
+import { getExerciseNames } from '../storage';
 import ActivityLogView from './ActivityLogView';
 
 function toggleDay(days, day) {
@@ -101,7 +102,47 @@ function ReminderTimesEditor({ task, onChange }) {
   );
 }
 
-function ExerciseListEditor({ task, onChange }) {
+function ExerciseNameInput({ value, exerciseNames, onChange, onSelectExisting }) {
+  const [open, setOpen] = useState(false);
+  const trimmed = value.trim().toLowerCase();
+  const suggestions = trimmed
+    ? exerciseNames.filter((ex) => ex.name.toLowerCase().includes(trimmed)).slice(0, 6)
+    : [];
+
+  return (
+    <div className="exercise-name-autosuggest">
+      <input
+        type="text"
+        placeholder="e.g. Push-ups"
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+      />
+      {open && suggestions.length > 0 && (
+        <ul className="autosuggest-list">
+          {suggestions.map((match) => (
+            <li
+              key={match.id}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onSelectExisting(match);
+                setOpen(false);
+              }}
+            >
+              {match.name}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ExerciseListEditor({ task, onChange, exerciseNames }) {
   const exercises = task.exercises || [];
 
   const updateExercise = (id, patch) => {
@@ -125,11 +166,11 @@ function ExerciseListEditor({ task, onChange }) {
             <div className="inline-fields">
               <label>
                 Exercise name
-                <input
-                  type="text"
-                  placeholder="e.g. Push-ups"
+                <ExerciseNameInput
                   value={ex.name}
-                  onChange={(e) => updateExercise(ex.id, { name: e.target.value })}
+                  exerciseNames={exerciseNames}
+                  onChange={(name) => updateExercise(ex.id, { name, exerciseId: null })}
+                  onSelectExisting={(match) => updateExercise(ex.id, { name: match.name, exerciseId: match.id })}
                 />
               </label>
               <button type="button" className="task-edit-icon-btn" onClick={() => removeExercise(ex.id)}>
@@ -252,7 +293,7 @@ function DayPicker({ days, onChange }) {
   );
 }
 
-function TaskFields({ task, onChange, showTitle }) {
+function TaskFields({ task, onChange, showTitle, exerciseNames }) {
   return (
     <>
       {showTitle && (
@@ -345,7 +386,9 @@ function TaskFields({ task, onChange, showTitle }) {
           <QuickAddInput task={task} onChange={onChange} />
         </>
       )}
-      {task.completionType === 'workout' && <ExerciseListEditor task={task} onChange={onChange} />}
+      {task.completionType === 'workout' && (
+        <ExerciseListEditor task={task} onChange={onChange} exerciseNames={exerciseNames} />
+      )}
     </>
   );
 }
@@ -378,6 +421,13 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
   const [deletedTaskIds, setDeletedTaskIds] = useState([]);
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [exerciseNames, setExerciseNames] = useState([]);
+
+  useEffect(() => {
+    getExerciseNames()
+      .then(setExerciseNames)
+      .catch(() => {});
+  }, []);
 
   const isSimple = tasks.length === 1;
   const autoIconId = suggestIconId(routine.title);
@@ -476,7 +526,7 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
 
       {isSimple ? (
         <>
-          <TaskFields task={tasks[0]} onChange={updateTask} showTitle={false} />
+          <TaskFields task={tasks[0]} onChange={updateTask} showTitle={false} exerciseNames={exerciseNames} />
           <button type="button" className="add-task-btn" onClick={addTask}>
             + Add another task
           </button>
@@ -488,7 +538,7 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
             {tasks.map((task) =>
               editingTaskId === task.id ? (
                 <div className="form-card" key={task.id}>
-                  <TaskFields task={task} onChange={updateTask} showTitle />
+                  <TaskFields task={task} onChange={updateTask} showTitle exerciseNames={exerciseNames} />
                   <div className="inline-fields">
                     <button type="button" style={{ flex: 1 }} onClick={() => setEditingTaskId(null)}>
                       Done

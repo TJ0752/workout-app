@@ -375,4 +375,34 @@ describe('getFitnessOverview', () => {
     expect(getFitnessOverview(undefined, undefined).hasWorkouts).toBe(false);
     expect(getFitnessOverview([], {}).hasWorkouts).toBe(false);
   });
+
+  it('merges by exerciseId even when the display name differs, and keeps the two apart when exerciseId differs despite an identical name', () => {
+    const renamedRoutines = [
+      {
+        id: 'r1',
+        tasks: [
+          { id: 'task-a', completionType: 'workout', exercises: [{ id: 'ex-a', exerciseId: 'shared-id', name: 'Bench Press' }] },
+        ],
+      },
+      {
+        id: 'r2',
+        tasks: [
+          // Same exerciseId, renamed since - should still merge into one entry.
+          { id: 'task-b', completionType: 'workout', exercises: [{ id: 'ex-b', exerciseId: 'shared-id', name: 'Barbell Bench' }] },
+          // Different exerciseId, coincidentally same name as an unrelated exercise - should NOT merge with it.
+          { id: 'task-c', completionType: 'workout', exercises: [{ id: 'ex-c', exerciseId: 'other-id', name: 'Squat' }] },
+        ],
+      },
+    ];
+    const renamedLogs = {
+      'task-a': { '2026-07-01': { 'ex-a': [set({ weight: 60, reps: 5 })] } },
+      'task-b': { '2026-07-02': { 'ex-b': [set({ weight: 70, reps: 5 })] } },
+      'task-c': { '2026-07-03': { 'ex-c': [set({ weight: 100, reps: 5 })] } },
+    };
+    const overview = getFitnessOverview(renamedRoutines, renamedLogs);
+    expect(overview.exercises).toHaveLength(2);
+    const merged = overview.exercises.find((e) => e.pr.weight === 70);
+    expect(merged.series).toHaveLength(2);
+    expect(merged.name).toBe('Barbell Bench'); // most-recently-seen spelling wins
+  });
 });

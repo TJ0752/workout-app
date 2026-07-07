@@ -211,12 +211,16 @@ export function getWorkoutStats(task, logsForTask) {
 
 /**
  * Aggregates fitness stats across every workout-type task in the app, merging exercises by
- * name so the same real-world exercise (e.g. "Bench Press") logged from different routines
- * combines into one PR/trend rather than being siloed per routine - getWorkoutStats alone
- * only ever looks at a single task. Backs the Fitness Stats screen: an adaptive overview (only
- * a weighted-PR tile if any weighted exercise exists, only a bodyweight-PR tile if any
- * bodyweight exercise exists), the calisthenics-vs-weightlifting mix, and a per-exercise list
- * where each entry already carries whichever metric actually fits its type.
+ * `exerciseId` - the stable, cross-routine exercise-repository identity (see CLAUDE.md and
+ * storage.js's resolveExerciseId) - so the same real-world exercise (e.g. "Bench Press") logged
+ * from different routines combines into one PR/trend rather than being siloed per routine.
+ * Falls back to the exercise's own name if `exerciseId` is somehow missing (shouldn't happen
+ * post-migration, but keeps this from silently dropping an exercise's history if it ever is).
+ * getWorkoutStats alone only ever looks at a single task. Backs the Fitness Stats screen: an
+ * adaptive overview (only a weighted-PR tile if any weighted exercise exists, only a
+ * bodyweight-PR tile if any bodyweight exercise exists), the calisthenics-vs-weightlifting mix,
+ * and a per-exercise list where each entry already carries whichever metric actually fits its
+ * type.
  */
 export function getFitnessOverview(routines, workoutLogsByTask) {
   const workoutTasks = [];
@@ -226,23 +230,25 @@ export function getFitnessOverview(routines, workoutLogsByTask) {
     }
   }
 
-  const byName = new Map();
+  const entriesById = new Map();
   for (const task of workoutTasks) {
     const logsForTask = workoutLogsByTask?.[task.id] || {};
     for (const exercise of task.exercises || []) {
       const name = exercise.name || 'Exercise';
-      const entry = byName.get(name) || { name, logs: [], seriesByDate: {} };
-      for (const [date, byExerciseId] of Object.entries(logsForTask)) {
-        const sets = byExerciseId[exercise.id];
+      const key = exercise.exerciseId || name;
+      const entry = entriesById.get(key) || { name, logs: [], seriesByDate: {} };
+      entry.name = name; // keep the most-recently-seen spelling if it was ever renamed
+      for (const [date, logsByExerciseId] of Object.entries(logsForTask)) {
+        const sets = logsByExerciseId[exercise.id];
         if (!sets || sets.length === 0) continue;
         entry.logs.push(...sets);
         entry.seriesByDate[date] = (entry.seriesByDate[date] || []).concat(sets);
       }
-      byName.set(name, entry);
+      entriesById.set(key, entry);
     }
   }
 
-  const exercises = Array.from(byName.values())
+  const exercises = Array.from(entriesById.values())
     .map((entry) => {
       const isWeighted = entry.logs.some((s) => s.completed && s.weight);
       const series = Object.keys(entry.seriesByDate)
