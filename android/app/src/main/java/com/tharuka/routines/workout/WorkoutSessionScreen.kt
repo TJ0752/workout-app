@@ -164,6 +164,10 @@ fun WorkoutSessionScreen(
 
     val exercise = exercises.getOrNull(exerciseIndex) ?: return
     val isDuration = exercise.unit == "seconds"
+    // Exercises saved before this field existed have no `type` at all - treating anything other
+    // than an explicit "calisthenics" as weighted preserves their old behavior (the weight input
+    // used to always show), rather than needing a one-time backfill/migration.
+    val isWeighted = exercise.type != "calisthenics"
     val totalSets = maxOf(1, exercise.targetSets ?: 1)
     val setsForExercise = logsByExercise[exercise.id] ?: emptyList()
     val loggedSet = setsForExercise.find { it.setIndex == setIndex }
@@ -208,7 +212,7 @@ fun WorkoutSessionScreen(
     fun markDone() {
         val values = SetValues(
             reps = if (isDuration) null else reps.toIntOrNull(),
-            weight = weight.toDoubleOrNull(),
+            weight = if (isWeighted) weight.toDoubleOrNull() else null,
             durationSeconds = if (isDuration) duration.toIntOrNull() else null,
             completed = true,
         )
@@ -373,13 +377,15 @@ fun WorkoutSessionScreen(
                                 modifier = Modifier.weight(1f),
                             )
                         }
-                        OutlinedTextField(
-                            value = weight,
-                            onValueChange = { weight = it },
-                            label = { Text("Weight") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.weight(1f),
-                        )
+                        if (isWeighted) {
+                            OutlinedTextField(
+                                value = weight,
+                                onValueChange = { weight = it },
+                                label = { Text("Weight") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
                     }
 
                     Row(

@@ -37,6 +37,10 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
 
   const exercise = exercises[exerciseIndex];
   const isDuration = exercise?.unit === 'seconds';
+  // Exercises saved before this field existed have no `type` at all - treating anything other
+  // than an explicit 'calisthenics' as weighted preserves their old behavior (the weight input
+  // used to always show), rather than needing a one-time backfill/migration.
+  const isWeighted = exercise?.type !== 'calisthenics';
   const totalSets = Math.max(1, exercise?.targetSets || 1);
   const setsForExercise = logsForDate?.[exercise?.id] || [];
   const loggedSet = setsForExercise.find((s) => s.setIndex === setIndex);
@@ -93,7 +97,7 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
   const markDone = () => {
     onLogSet(exercise, setIndex, {
       reps: isDuration ? null : reps === '' ? null : Number(reps),
-      weight: weight === '' ? null : Number(weight),
+      weight: isWeighted && weight !== '' ? Number(weight) : null,
       durationSeconds: isDuration ? (duration === '' ? null : Number(duration)) : null,
       completed: true,
     });
@@ -240,16 +244,18 @@ export default function WorkoutSessionView({ task, logsForDate, onLogSet, onClos
                 <input type="number" min="0" value={reps} onChange={(e) => setReps(e.target.value)} />
               </label>
             )}
-            <label>
-              Weight (optional)
-              <input
-                type="number"
-                min="0"
-                step="0.5"
-                value={weight}
-                onChange={(e) => setWeight(e.target.value)}
-              />
-            </label>
+            {isWeighted && (
+              <label>
+                Weight (optional)
+                <input
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  value={weight}
+                  onChange={(e) => setWeight(e.target.value)}
+                />
+              </label>
+            )}
           </div>
 
           <div className="workout-set-nav">

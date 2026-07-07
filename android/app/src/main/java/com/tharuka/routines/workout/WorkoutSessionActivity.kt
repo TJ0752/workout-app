@@ -160,6 +160,7 @@ class WorkoutSessionActivity : ComponentActivity() {
                     targetDurationSeconds = obj.optIntOrNull("targetDurationSeconds"),
                     unit = obj.optString("unit", "reps"),
                     restSeconds = obj.optIntOrNull("restSeconds"),
+                    type = obj.optString("type", "weights"),
                 )
             )
         }

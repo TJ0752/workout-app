@@ -33,6 +33,7 @@ function makeExercise() {
   return {
     id: generateId(),
     name: '',
+    type: 'weights',
     targetSets: 3,
     targetReps: 10,
     targetWeight: null,
@@ -40,6 +41,13 @@ function makeExercise() {
     unit: 'reps',
     restSeconds: null,
   };
+}
+
+// Exercises saved before this field existed have no `type` at all - treating anything other
+// than an explicit 'calisthenics' as weighted preserves their old behavior exactly (the weight
+// input used to always show), rather than needing a one-time backfill/migration.
+function isCalisthenics(exercise) {
+  return exercise.type === 'calisthenics';
 }
 
 function QuickAddInput({ task, onChange }) {
@@ -260,6 +268,22 @@ function ExerciseListEditor({ task, onChange, exerciseNames }) {
             <div className="type-toggle">
               <button
                 type="button"
+                className={!isCalisthenics(ex) ? 'active' : ''}
+                onClick={() => updateExercise(ex.id, { type: 'weights' })}
+              >
+                Weights
+              </button>
+              <button
+                type="button"
+                className={isCalisthenics(ex) ? 'active' : ''}
+                onClick={() => updateExercise(ex.id, { type: 'calisthenics', targetWeight: null })}
+              >
+                Calisthenics
+              </button>
+            </div>
+            <div className="type-toggle">
+              <button
+                type="button"
                 className={ex.unit !== 'seconds' ? 'active' : ''}
                 onClick={() =>
                   updateExercise(ex.id, { unit: 'reps', targetDurationSeconds: null, targetReps: ex.targetReps ?? 10 })
@@ -322,18 +346,20 @@ function ExerciseListEditor({ task, onChange, exerciseNames }) {
               )}
             </div>
             <div className="inline-fields">
-              <label>
-                Weight (optional)
-                <input
-                  type="number"
-                  min="0"
-                  step="0.5"
-                  value={ex.targetWeight ?? ''}
-                  onChange={(e) =>
-                    updateExercise(ex.id, { targetWeight: e.target.value ? Number(e.target.value) : null })
-                  }
-                />
-              </label>
+              {!isCalisthenics(ex) && (
+                <label>
+                  Weight (optional)
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={ex.targetWeight ?? ''}
+                    onChange={(e) =>
+                      updateExercise(ex.id, { targetWeight: e.target.value ? Number(e.target.value) : null })
+                    }
+                  />
+                </label>
+              )}
               <label>
                 Rest between sets, sec (optional)
                 <input

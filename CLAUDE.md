@@ -320,6 +320,33 @@ display just shows whichever spelling was most recently seen.
   `document.body` instead of anywhere nearby — confirmed via a Playwright script asserting
   `document.activeElement` after a picker selection.
 
+### Exercise type: calisthenics vs. weights (`RoutineForm.jsx`, `WorkoutSessionView.jsx`, native `workout/`)
+
+Each exercise config (`task.exercises[]`) carries an explicit `type: 'calisthenics' | 'weights'`
+field, set via a toggle in `RoutineForm.jsx`'s exercise editor (the same `.type-toggle` styling
+already used for the Reps/Duration toggle right below it). It exists purely to control **whether
+the weight input is offered at all** — in the setup form (`targetWeight`) and in both the web
+dev-loop companion (`WorkoutSessionView.jsx`) and the native Compose companion
+(`WorkoutSessionScreen.kt`) during live logging (`weight`) — not to reclassify anything after the
+fact; the analytics layer's own weighted-vs-bodyweight decision (`utils/workouts.js`'s
+`isWeighted`, described above) stays exactly as it was, based on whether a completed *set* ever
+had a weight, not this config field. Switching an exercise to `'calisthenics'` clears any
+previously-set `targetWeight` and forces `weight: null` on every set logged for it going forward
+(both `markDone()`s), so a stray/stale value from before the toggle existed can't silently leak
+into newly-logged sets once the field is hidden.
+
+**No backfill/migration needed for exercises saved before this field existed.** `isCalisthenics`
+(JS) / the `isWeighted` local (Kotlin) both treat anything other than an explicit `'calisthenics'`
+— including a totally absent `type` — as weighted, which is exactly the old behavior (the weight
+input always showed, unconditionally). `type` defaults to `'weights'` for brand-new exercises
+(`makeExercise()` in `RoutineForm.jsx`, and the `:shared` `Exercise` data class's default
+parameter) for the same reason: least-surprise continuity with what every existing user is
+already used to seeing, rather than defaulting to the newly-added option. The native JSON parse
+(`WorkoutSessionActivity.kt`'s `parseExercises`) mirrors this with `obj.optString("type",
+"weights")`. `:shared`'s `Exercise` data class has `type` as its last constructor parameter
+specifically so `WorkoutLogicTest`'s existing positional `Exercise(...)` calls keep compiling
+unchanged — Kotlin only lets a trailing parameter with a default be omitted positionally.
+
 ### Notifications (`src/notifications.js`)
 
 **Every notification in the app is posted by native Kotlin** — `@capacitor/local-notifications`
@@ -1013,7 +1040,10 @@ undisplayed one.
   given exercise shows is decided at render time from whether any completed set for it
   ever had a `weight` — not from the exercise's configured `unit`, since a nominally
   bodyweight exercise logged with added weight one session should still count as weighted
-  that session.
+  that session. **This stays log-based on purpose, deliberately independent of the
+  exercise's own `type` field** (see "Exercise type" below) — `type` only controls whether
+  the weight input is offered at all during setup/logging, not how already-logged sessions
+  get classified after the fact.
 - **`getFitnessOverview(routines, workoutLogsByTask)` merges by exercise *name*, not
   exercise id**, across every workout-type task in the app. Exercise ids are per-task (a
   "Bench Press" added to two different routines gets two different ids), so a PR/trend
