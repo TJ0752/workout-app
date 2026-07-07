@@ -1145,6 +1145,23 @@ any device that already had the buggy version installed: since the fix itself sh
 very release the broken checker fails to fetch, one manual APK install is needed to get off the
 broken version — after that, the in-app updater self-corrects permanently.
 
+**A second, related bug in the same area**: fixing the tag wasn't enough on its own, because
+`checkForUpdate()` picked the release's download asset with `.find(a => a.name.endsWith('.apk'))`
+— and the `latest-android` tag *predates* the flavor split, so it still carries a leftover
+`app-debug.apk` asset (the pre-flavor build's filename) sitting alongside the current
+`app-prod-debug.apk`. `softprops/action-gh-release` only adds/overwrites the files it's given on
+each run; it never prunes assets that are no longer produced, so that stale asset just sits there
+indefinitely. `.find()` returning array order meant the OLD, much-lower-versionCode asset could
+get picked over the real one — installing an older build over a newer already-installed one trips
+Android's downgrade protection, which (at least on the reporting device) surfaces as the exact
+same "package appears to be invalid" toast as the cross-flavor bug above, even though the actual
+cause is unrelated. Fixed with `assetNameFor(applicationId)` (`app-prod-debug.apk` /
+`app-dev-debug.apk`), matching by exact filename instead of "any `.apk`", with the old loose
+`.find()` kept only as a fallback if the exact name is ever missing. The stale asset itself was
+left in place (no tool available to delete a release asset from this environment) — harmless now
+that it's never matched by name, but worth knowing about if the "one `.apk` asset per release"
+assumption is relied on again anywhere else.
+
 ### Design system
 
 Single committed light theme (a warmer revision of the original "Soft Paper" look — warm

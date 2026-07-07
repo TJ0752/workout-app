@@ -18,6 +18,20 @@ export function releaseTagFor(applicationId) {
 }
 
 /**
+ * A release can carry more than one .apk asset - the `latest-android` tag predates the
+ * prod/dev flavor split and still has a leftover pre-flavor `app-debug.apk` sitting alongside
+ * the current `app-prod-debug.apk` (softprops/action-gh-release only adds/overwrites the files
+ * it's given; it doesn't prune assets that are no longer produced). Matching by exact filename
+ * - not just "ends with .apk" - is what keeps checkForUpdate from grabbing that stale asset,
+ * which is a much older, lower-versionCode build and triggers Android's downgrade protection
+ * (surfaced to the user as "App not installed as package appears to be invalid") when installed
+ * over the current app.
+ */
+export function assetNameFor(applicationId) {
+  return applicationId?.endsWith('.dev') ? 'app-dev-debug.apk' : 'app-prod-debug.apk';
+}
+
+/**
  * Compares the running app's versionCode (set at CI build time to the GitHub
  * Actions run number - see android-build.yml) against the matching GitHub Release's
  * versionCode, embedded in the release body. No-ops on web:
@@ -41,7 +55,10 @@ export async function checkForUpdate() {
 
   const match = release.body?.match(/versionCode:\s*(\d+)/);
   const latestBuild = match ? Number(match[1]) : 0;
-  const asset = (release.assets || []).find((a) => a.name.endsWith('.apk'));
+  const assetName = assetNameFor(info.id);
+  const asset =
+    (release.assets || []).find((a) => a.name === assetName) ||
+    (release.assets || []).find((a) => a.name.endsWith('.apk'));
 
   return {
     updateAvailable: latestBuild > currentBuild,
