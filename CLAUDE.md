@@ -325,15 +325,22 @@ display just shows whichever spelling was most recently seen.
 Each exercise config (`task.exercises[]`) carries an explicit `type: 'calisthenics' | 'weights'`
 field, set via a toggle in `RoutineForm.jsx`'s exercise editor (the same `.type-toggle` styling
 already used for the Reps/Duration toggle right below it). It exists purely to control **whether
-the weight input is offered at all** — in the setup form (`targetWeight`) and in both the web
-dev-loop companion (`WorkoutSessionView.jsx`) and the native Compose companion
-(`WorkoutSessionScreen.kt`) during live logging (`weight`) — not to reclassify anything after the
-fact; the analytics layer's own weighted-vs-bodyweight decision (`utils/workouts.js`'s
-`isWeighted`, described above) stays exactly as it was, based on whether a completed *set* ever
-had a weight, not this config field. Switching an exercise to `'calisthenics'` clears any
-previously-set `targetWeight` and forces `weight: null` on every set logged for it going forward
-(both `markDone()`s), so a stray/stale value from before the toggle existed can't silently leak
-into newly-logged sets once the field is hidden.
+the weight input is offered at all** during live logging, in both the web dev-loop companion
+(`WorkoutSessionView.jsx`) and the native Compose companion (`WorkoutSessionScreen.kt`) — not to
+reclassify anything after the fact; the analytics layer's own weighted-vs-bodyweight decision
+(`utils/workouts.js`'s `isWeighted`, described above) stays exactly as it was, based on whether a
+completed *set* ever had a weight, not this config field. Switching an exercise to
+`'calisthenics'` forces `weight: null` on every set logged for it going forward (both
+`markDone()`s), so a stray/stale value typed before the toggle existed can't silently leak into
+newly-logged sets once the field is hidden.
+
+**The exercise config itself has no `targetWeight` field at all** — it existed only as the final
+fallback in the weight-prefill chain (`loggedSet?.weight ?? lastUsedWeight ?? targetWeight`)
+before `getLastUsedWeight` (see below) existed, and was removed once that fallback became
+redundant for every exercise with any logged history. The one real behavior change from removing
+it: a brand-new exercise's very first-ever set now starts with an empty weight field instead of a
+pre-set suggestion — a deliberate tradeoff the user chose over keeping a setup-time field whose
+only other use was that single first session.
 
 **No backfill/migration needed for exercises saved before this field existed.** `isCalisthenics`
 (JS) / the `isWeighted` local (Kotlin) both treat anything other than an explicit `'calisthenics'`
@@ -983,8 +990,10 @@ only** — `storage.js` remains the sole DB reader/writer.
     `WorkoutLogic.kt` / `utils/workouts.js`, kept in exact parity like `getExercisePR`/
     `getExerciseVolume` above) — the most recently *logged* weight for that exercise, looking
     back through every prior date and, for today, sets already logged earlier in this same
-    session — rather than the exercise's static `targetWeight`, which stays stale once a lifter
-    actually progresses past it. Canonical storage stays kg (all pre-existing weight data is kg
+    session. This fully replaced the exercise config's old `targetWeight` setup field (since
+    removed entirely, see "Exercise type" above) — a static per-exercise number set once at
+    setup time and never revisited stays stale the moment a lifter actually progresses past it,
+    where `getLastUsedWeight` never does. Canonical storage stays kg (all pre-existing weight data is kg
     — confirmed with the user rather than assumed, since the app had never labeled a unit
     before); a second, independently-typed lb field (`kgToLb`/`lbToKg`, both pure functions with
     parity tests on both sides) shows the live conversion, and editing either field recomputes

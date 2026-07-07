@@ -65,7 +65,7 @@ export default function WorkoutSessionView({ task, taskLogs, dateKey, logsForDat
 
   useEffect(() => {
     setReps(loggedSet?.reps ?? exercise?.targetReps ?? '');
-    const initialKg = loggedSet?.weight ?? lastUsedWeight ?? exercise?.targetWeight ?? '';
+    const initialKg = loggedSet?.weight ?? lastUsedWeight ?? '';
     setWeightKgText(initialKg === '' ? '' : String(initialKg));
     setWeightLbText(initialKg === '' ? '' : formatNumber(kgToLb(Number(initialKg))));
     setDuration(loggedSet?.durationSeconds ?? exercise?.targetDurationSeconds ?? '');

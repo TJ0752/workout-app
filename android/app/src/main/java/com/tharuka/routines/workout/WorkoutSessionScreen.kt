@@ -197,11 +197,11 @@ fun WorkoutSessionScreen(
     // fight the other's rounding while mid-keystroke - only the field NOT currently being typed
     // into gets recomputed. Mirrors WorkoutSessionView.jsx's identical approach.
     var weightKgText by remember(exerciseIndex, setIndex) {
-        val initialKg = loggedSet?.weight ?: lastUsedWeight ?: exercise.targetWeight
+        val initialKg = loggedSet?.weight ?: lastUsedWeight
         mutableStateOf(initialKg?.toString() ?: "")
     }
     var weightLbText by remember(exerciseIndex, setIndex) {
-        val initialKg = loggedSet?.weight ?: lastUsedWeight ?: exercise.targetWeight
+        val initialKg = loggedSet?.weight ?: lastUsedWeight
         mutableStateOf(initialKg?.let { formatNumber(kgToLb(it)) } ?: "")
     }
     var duration by remember(exerciseIndex, setIndex) {

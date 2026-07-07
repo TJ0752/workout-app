@@ -159,7 +159,6 @@ class WorkoutSessionActivity : ComponentActivity() {
                     name = obj.optString("name", ""),
                     targetSets = obj.optIntOrNull("targetSets"),
                     targetReps = obj.optIntOrNull("targetReps"),
-                    targetWeight = obj.optDoubleOrNull("targetWeight"),
                     targetDurationSeconds = obj.optIntOrNull("targetDurationSeconds"),
                     unit = obj.optString("unit", "reps"),
                     restSeconds = obj.optIntOrNull("restSeconds"),

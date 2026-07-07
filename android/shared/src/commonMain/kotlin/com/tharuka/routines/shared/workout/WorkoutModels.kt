@@ -5,7 +5,6 @@ data class Exercise(
     val name: String,
     val targetSets: Int?,
     val targetReps: Int?,
-    val targetWeight: Double?,
     val targetDurationSeconds: Int?,
     val unit: String,
     val restSeconds: Int?,

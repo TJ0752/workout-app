@@ -21,8 +21,8 @@ class WorkoutLogicTest {
     @Test
     fun computeSessionFraction_isCompletedOverPlannedAcrossExercises() {
         val exercises = listOf(
-            Exercise("e1", "", 3, null, null, null, "reps", null),
-            Exercise("e2", "", 2, null, null, null, "reps", null)
+            Exercise("e1", "", 3, null, null, "reps", null),
+            Exercise("e2", "", 2, null, null, "reps", null)
         )
         val logs = mapOf(
             "e1" to listOf(set(0), set(1), set(2, completed = false)),
@@ -34,14 +34,14 @@ class WorkoutLogicTest {
 
     @Test
     fun computeSessionFraction_zeroTargetSetsNeedsAtLeastOne() {
-        val exercises = listOf(Exercise("e1", "", 0, null, null, null, "reps", null))
+        val exercises = listOf(Exercise("e1", "", 0, null, null, "reps", null))
         val logs = mapOf("e1" to listOf(set(0)))
         assertEquals(1.0, computeSessionFraction(exercises, logs))
     }
 
     @Test
     fun computeSessionFraction_clampsToOne() {
-        val exercises = listOf(Exercise("e1", "", 2, null, null, null, "reps", null))
+        val exercises = listOf(Exercise("e1", "", 2, null, null, "reps", null))
         val logs = mapOf("e1" to listOf(set(0), set(1), set(2), set(3)))
         assertEquals(1.0, computeSessionFraction(exercises, logs))
     }
@@ -119,8 +119,8 @@ class WorkoutLogicTest {
     @Test
     fun findNextPosition_resumesAtFirstIncompleteSet() {
         val exercises = listOf(
-            Exercise("e1", "", 2, null, null, null, "reps", null),
-            Exercise("e2", "", 2, null, null, null, "reps", null)
+            Exercise("e1", "", 2, null, null, "reps", null),
+            Exercise("e2", "", 2, null, null, "reps", null)
         )
         val logs = mapOf("e1" to listOf(set(0), set(1)), "e2" to listOf(set(0)))
         val pos = findNextPosition(exercises, logs)
@@ -129,7 +129,7 @@ class WorkoutLogicTest {
 
     @Test
     fun findNextPosition_returnsNullWhenAllSetsDone() {
-        val exercises = listOf(Exercise("e1", "", 1, null, null, null, "reps", null))
+        val exercises = listOf(Exercise("e1", "", 1, null, null, "reps", null))
         val logs = mapOf("e1" to listOf(set(0)))
         assertNull(findNextPosition(exercises, logs))
     }

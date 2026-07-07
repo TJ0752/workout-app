@@ -36,7 +36,6 @@ function makeExercise() {
     type: 'weights',
     targetSets: 3,
     targetReps: 10,
-    targetWeight: null,
     targetDurationSeconds: null,
     unit: 'reps',
     restSeconds: null,
@@ -276,7 +275,7 @@ function ExerciseListEditor({ task, onChange, exerciseNames }) {
               <button
                 type="button"
                 className={isCalisthenics(ex) ? 'active' : ''}
-                onClick={() => updateExercise(ex.id, { type: 'calisthenics', targetWeight: null })}
+                onClick={() => updateExercise(ex.id, { type: 'calisthenics' })}
               >
                 Calisthenics
               </button>
@@ -346,20 +345,6 @@ function ExerciseListEditor({ task, onChange, exerciseNames }) {
               )}
             </div>
             <div className="inline-fields">
-              {!isCalisthenics(ex) && (
-                <label>
-                  Weight (optional)
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.5"
-                    value={ex.targetWeight ?? ''}
-                    onChange={(e) =>
-                      updateExercise(ex.id, { targetWeight: e.target.value ? Number(e.target.value) : null })
-                    }
-                  />
-                </label>
-              )}
               <label>
                 Rest between sets, sec (optional)
                 <input
