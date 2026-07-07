@@ -332,6 +332,7 @@ export function getFitnessOverview(routines, workoutLogsByTask) {
           return {
             date,
             e1rm: getExerciseE1RM(completedSets)?.e1rm || 0,
+            volume: getExerciseVolume(completedSets),
             totalReps: getExerciseTotalReps(completedSets),
             totalDuration: getExerciseTotalDuration(completedSets),
           };

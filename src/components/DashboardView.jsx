@@ -112,10 +112,16 @@ function FitnessStatsPanel({ routines, workoutLogsByTask }) {
               : kind === 'reps'
                 ? `PR ${ex.repPR.reps} reps`
                 : `PR ${ex.durationPR.durationSeconds}s`;
+          const trendLabel = kind === 'weighted' ? 'e1RM trend' : kind === 'reps' ? 'Reps trend' : 'Duration trend';
           const seriesValues = ex.series.map((s) =>
             kind === 'weighted' ? s.e1rm : kind === 'reps' ? s.totalReps : s.totalDuration
           );
           const maxSeriesValue = Math.max(1, ...seriesValues);
+          // Volume (kg x reps) only exists for weighted exercises - a bodyweight/duration set has
+          // no weight to multiply by, so getExerciseVolume is always 0 for those and a trend
+          // would just be a flat empty line.
+          const volumeValues = kind === 'weighted' ? ex.series.map((s) => s.volume) : null;
+          const maxVolumeValue = volumeValues ? Math.max(1, ...volumeValues) : 0;
           const isOpen = expandedExercise === ex.name;
 
           return (
@@ -141,6 +147,7 @@ function FitnessStatsPanel({ routines, workoutLogsByTask }) {
               </div>
               {isOpen && (
                 <div className="exercise-detail">
+                  <div className="trend-chart-label">{trendLabel}</div>
                   <div className="trend-chart small">
                     {seriesValues.slice(-8).map((v, i) => (
                       <div className="trend-bar-wrap" key={i}>
@@ -148,6 +155,18 @@ function FitnessStatsPanel({ routines, workoutLogsByTask }) {
                       </div>
                     ))}
                   </div>
+                  {volumeValues && (
+                    <>
+                      <div className="trend-chart-label">Volume trend (kg × reps)</div>
+                      <div className="trend-chart small">
+                        {volumeValues.slice(-8).map((v, i) => (
+                          <div className="trend-bar-wrap" key={i}>
+                            <div className="trend-bar volume" style={{ height: `${(v / maxVolumeValue) * 100}%` }} />
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>

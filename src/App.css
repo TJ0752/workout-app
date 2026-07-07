@@ -1230,6 +1230,22 @@
   height: 60px;
 }
 
+.trend-chart-label {
+  font-size: 0.7em;
+  color: var(--text-soft);
+  margin: 0.6rem 0 0.3rem;
+}
+
+.trend-chart-label:first-child {
+  margin-top: 0;
+}
+
+/* Chart-mark color (--accent-chart), not the UI-chrome --accent-soft the primary metric trend
+   above uses - lets the two stacked trends read as distinct series at a glance. */
+.trend-bar.volume {
+  background: var(--accent-chart);
+}
+
 /* ---- Fitness Stats sub-view ---- */
 .fit-overview-row {
   display: flex;

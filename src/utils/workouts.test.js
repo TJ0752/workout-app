@@ -329,6 +329,14 @@ describe('getFitnessOverview', () => {
     expect(bench.series).toHaveLength(2); // one session from each routine's task
   });
 
+  it('includes a per-date volume alongside e1rm/totalReps/totalDuration in series, for a volume-over-time trend', () => {
+    const overview = getFitnessOverview(routines, workoutLogsByTask);
+    const bench = overview.exercises.find((e) => e.name === 'Bench Press');
+    const byDate = Object.fromEntries(bench.series.map((s) => [s.date, s.volume]));
+    expect(byDate['2026-07-01']).toBe(300); // 60kg x 5 reps
+    expect(byDate['2026-07-02']).toBe(325); // 65kg x 5 reps
+  });
+
   it('picks the adaptive top-PR tiles: weighted from weighted exercises, bodyweight from bodyweight ones', () => {
     const overview = getFitnessOverview(routines, workoutLogsByTask);
     expect(overview.topWeightedPR.name).toBe('Bench Press');

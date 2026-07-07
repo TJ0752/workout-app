@@ -1164,9 +1164,28 @@ undisplayed one.
   ever had a `weight` — not from the exercise's configured `unit`, since a nominally
   bodyweight exercise logged with added weight one session should still count as weighted
   that session. **This stays log-based on purpose, deliberately independent of the
-  exercise's own `type` field** (see "Exercise type" below) — `type` only controls whether
-  the weight input is offered at all during setup/logging, not how already-logged sessions
-  get classified after the fact.
+  exercise's own `type` field** (see "Exercise type" below) — `type` only changes the live
+  logging screen's field label ("Weight" vs. "Added weight"), not how already-logged
+  sessions get classified after the fact. This is exactly why a calisthenics exercise
+  logged with real added weight (a vest/belt) shows up here with a genuine e1RM/volume
+  trend rather than being silently excluded — the classification only ever looks at
+  whether a set actually had a weight, never at the exercise's configured type.
+- **Per-exercise trend charts, not just an all-time PR tile.** Expanding an exercise in the
+  "By exercise" list shows a small bar-chart trend of its primary metric over its last 8
+  sessions (e1RM for weighted, total reps for bodyweight/reps, total duration for
+  duration-based) — `getFitnessOverview`'s `series` already carries one entry per date with
+  every metric computed, so no separate query is needed. A weighted exercise additionally
+  shows a **second trend for volume** (kg × reps, `series[].volume`) right below the e1RM
+  one — volume and e1RM answer different questions (how much total work was done that
+  session vs. the single heaviest effort), and previously `volume` was only ever an
+  all-time total (`getExerciseVolume(entry.logs)`, still used for nothing visible in the
+  UI) with no per-session trend to show progression. Bodyweight/duration exercises don't
+  get a volume trend — `getExerciseVolume` requires a `weight` on every set, so it's always
+  0 for those and would just render a flat empty chart. The volume trend's bars use
+  `--accent-chart` (not the primary trend's `--accent-soft`) specifically so the two
+  stacked charts read as distinct series at a glance, matching this app's "UI chrome vs.
+  chart marks get two different shades of the same hue" design-token convention (see
+  "Design system" below).
 - **`getFitnessOverview(routines, workoutLogsByTask)` merges by exercise *name*, not
   exercise id**, across every workout-type task in the app. Exercise ids are per-task (a
   "Bench Press" added to two different routines gets two different ids), so a PR/trend
