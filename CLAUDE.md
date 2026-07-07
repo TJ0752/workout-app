@@ -918,9 +918,11 @@ only** — `storage.js` remains the sole DB reader/writer.
   and on `ubuntu-latest` CI runners.
 - **`WorkoutSessionPlugin` (`@CapacitorPlugin(name = "WorkoutSession")`)** — `start(payload)`
   launches `WorkoutSessionActivity` via `startActivityForResult` + `@ActivityCallback`,
-  passing `taskId`/`taskTitle`/`dateKey`/`exercises`/`logsForDate` as one JSON Intent extra
-  (shape matches `task.exercises`/`workoutLogsByTask[taskId][dateKey]` exactly — no JS-side
-  translation needed). Since `@ActivityCallback` only fires once (on Activity finish),
+  passing `taskId`/`taskTitle`/`dateKey`/`exercises`/`logsForDate`/`workoutLogSources` as one
+  JSON Intent extra (`exercises`/`logsForDate` shape matches `task.exercises`/
+  `workoutLogsByTask[taskId][dateKey]` exactly — no JS-side translation needed;
+  `workoutLogSources` is `buildWorkoutLogSources`'s flattened cross-routine output, see
+  "Last-used-weight prefill" above). Since `@ActivityCallback` only fires once (on Activity finish),
   per-set progress during the session needs a separate channel: `WorkoutSessionBridge` is a
   same-process singleton (`var onSetLogged: ((JSObject) -> Unit)?`) the Activity calls
   directly and the Plugin wires in `load()` to `notifyListeners("workoutSetLogged", ...,
@@ -1055,20 +1057,39 @@ only** — `storage.js` remains the sole DB reader/writer.
     keyboard. If the value about to be logged is lower than `getLastUsedWeight`, both fields and
     a label turn `AppPalette.Bad`/`--bad` (red) as a warning — not a block, since an intentional
     deload is a legitimate training choice, just one worth flagging rather than logging silently.
+    - **Cross-routine, not per-task.** `getLastUsedWeight` searches every workout task across
+      every routine, matched by `exerciseId` (the cross-routine exercise-repository identity —
+      see "Exercise repository" above), not just the one task currently being logged — so
+      "Bench Press" logged under one routine prefills/warns against what was last lifted under
+      *any* routine that logs it, per a direct user request ("I want the last used weight to
+      apply even across routines, if it's the same exercise"). `buildWorkoutLogSources(routines,
+      workoutLogsByTask)` (`utils/workouts.js`) flattens every workout-type task into a
+      `{taskId, exercises: [{id, exerciseId}], logsByDate}` list — `getLastUsedWeight(sources,
+      exerciseId, onOrBeforeDateKey)` then scans that flat shape directly, picking whichever
+      `(date, setIndex)` pair across every matching source is latest overall. This flattened
+      shape is the actual reason it's a separate exported step rather than folded into
+      `getLastUsedWeight` itself: the native companion has no `Routine`/`Task` object model at
+      all (`WorkoutSessionActivity` only ever receives flat exercises/logs shapes across the
+      plugin bridge — see "Native Android workout session" below), so both platforms scan the
+      identical flattened shape with the identical algorithm instead of native needing its own
+      differently-shaped traversal. Falls back to matching by exercise *name* when `exerciseId`
+      is missing (pre-migration data not yet backfilled), mirroring `getFitnessOverview`'s same
+      fallback.
     - **A real race condition, found via a Playwright round-trip, not by inspection.** The web
       companion's `onLogSet` persists through `App.jsx`'s async SQLite write before
-      `workoutLogsByTask` (and this component's `taskLogs` prop) updates — so advancing to the
-      very next set immediately after logging one would compute `getLastUsedWeight` against
-      *stale* props, prefilling the new set's weight field empty instead of with what was just
-      lifted, until some *later* unrelated re-render happened to catch up (the initializing
-      effect only reruns on `[exerciseIndex, setIndex]`, not when `taskLogs` eventually arrives).
-      Fixed with a local `sessionLogs` mirror, seeded from the `logsForDate` prop once and
-      updated synchronously inside `markDone()` itself — the exact same pattern
-      `WorkoutSessionScreen.kt`'s own `logsByExercise` local state already used for this reason,
-      which is why the native side never had this bug in the first place. `getLastUsedWeight` is
-      called against `{...taskLogs, [dateKey]: sessionLogs}` (web) /
-      `logsByDate + (dateKey to logsByExercise)` (native) — the static cross-session history
-      merged with this session's own live edits — rather than either alone.
+      `workoutLogsByTask` updates — so advancing to the very next set immediately after logging
+      one would compute `getLastUsedWeight` against *stale* props, prefilling the new set's
+      weight field empty instead of with what was just lifted, until some *later* unrelated
+      re-render happened to catch up (the initializing effect only reruns on `[exerciseIndex,
+      setIndex]`, not when `workoutLogsByTask` eventually arrives). Fixed with a local
+      `sessionLogs` mirror, seeded from the `logsForDate` prop once and updated synchronously
+      inside `markDone()` itself — the exact same pattern `WorkoutSessionScreen.kt`'s own
+      `logsByExercise` local state already used for this reason, which is why the native side
+      never had this bug in the first place. `getLastUsedWeight` is called against
+      `workoutLogSources` with the current task's own entry's `logsByDate` overridden to merge
+      in `sessionLogs`/`logsByExercise` (web/native) — every *other* task's source is used as-is,
+      since only the current task is being edited this session — the static cross-session
+      history merged with this session's own live edits, rather than either alone.
   - **Rich live notification on Android 16+ (API 36)** — `buildNotification()` branches to
     `buildProgressStyleNotification()` when `Build.VERSION.SDK_INT >= 36` and not resting: a
     real `Notification.ProgressStyle` with one `Segment` per exercise (sized by its planned

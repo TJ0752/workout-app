@@ -11,12 +11,14 @@ export function isNativeWorkoutSessionAvailable() {
  * the user closes the session (Capacitor's @ActivityCallback fires once, on Activity finish) -
  * per-set progress arrives separately via the workoutSetLogged listener below.
  *
- * `logsByDate` is the task's *full* logged history (every date, not just today) - needed for the
- * native getLastUsedWeight (see :shared's WorkoutLogic.kt) to look back through prior sessions
- * for its last-used-weight prefill/regression-warning, the same way the web companion's
- * WorkoutSessionView.jsx already does via its own `taskLogs` prop.
+ * `workoutLogSources` is buildWorkoutLogSources's flattened output (utils/workouts.js) - every
+ * workout-type task across every routine, not just this one - needed for the native
+ * getLastUsedWeight (see :shared's WorkoutLogic.kt) to search by exerciseId across routines the
+ * same way the web companion's WorkoutSessionView.jsx already does via its own
+ * `workoutLogSources` prop, so the same real-world exercise logged under a different routine
+ * still prefills/warns against its true last-used weight.
  */
-export async function startNativeWorkoutSession(task, dateKey, logsForDate, logsByDate) {
+export async function startNativeWorkoutSession(task, dateKey, logsForDate, workoutLogSources) {
   if (!WorkoutSession) return null;
   return WorkoutSession.start({
     taskId: task.id,
@@ -24,7 +26,7 @@ export async function startNativeWorkoutSession(task, dateKey, logsForDate, logs
     dateKey,
     exercises: task.exercises || [],
     logsForDate,
-    logsByDate,
+    workoutLogSources,
   });
 }
 

@@ -70,7 +70,7 @@ function RestRing({ totalSeconds, resetKey }) {
   );
 }
 
-export default function WorkoutSessionView({ task, taskLogs, dateKey, logsForDate, onLogSet, onClose }) {
+export default function WorkoutSessionView({ task, workoutLogSources, dateKey, logsForDate, onLogSet, onClose }) {
   const exercises = task.exercises || [];
   const start = findNextPosition(exercises, logsForDate) || { exerciseIndex: 0, setIndex: 0 };
   const [exerciseIndex, setExerciseIndex] = useState(start.exerciseIndex);
@@ -101,9 +101,16 @@ export default function WorkoutSessionView({ task, taskLogs, dateKey, logsForDat
   const totalSets = Math.max(1, exercise?.targetSets || 1);
   const setsForExercise = sessionLogs?.[exercise?.id] || [];
   const loggedSet = setsForExercise.find((s) => s.setIndex === setIndex);
-  const effectiveTaskLogs = { ...taskLogs, [dateKey]: sessionLogs };
-  const lastUsedWeight =
-    isWeighted && exercise ? getLastUsedWeight(effectiveTaskLogs, exercise.id, dateKey) : null;
+  // This task's own source (if present in workoutLogSources) gets its logsByDate overridden with
+  // the live sessionLogs mirror, so a set logged a moment ago in this same session is visible to
+  // the lookup below even though App.jsx's copy hasn't finished its async persistence round-trip
+  // yet - every *other* task's source is used as-is, since only the current task is being edited
+  // this session.
+  const effectiveSources = (workoutLogSources || []).map((s) =>
+    s.taskId === task.id ? { ...s, logsByDate: { ...s.logsByDate, [dateKey]: sessionLogs } } : s
+  );
+  const exerciseId = exercise?.exerciseId || exercise?.name;
+  const lastUsedWeight = isWeighted && exercise ? getLastUsedWeight(effectiveSources, exerciseId, dateKey) : null;
 
   const [reps, setReps] = useState('');
   // Canonical value stays kg (see getLastUsedWeight/kgToLb docs in utils/workouts.js); lb is a

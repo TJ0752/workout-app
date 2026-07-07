@@ -15,6 +15,7 @@ import {
   getSessionMixByWeek,
   getFitnessOverview,
   getLastUsedWeight,
+  buildWorkoutLogSources,
   kgToLb,
   lbToKg,
 } from './workouts.js';
@@ -410,37 +411,98 @@ describe('getFitnessOverview', () => {
   });
 });
 
+// A single-task source, for tests that don't care about cross-routine merging.
+function source(taskId, exerciseId, logsByDate) {
+  return { taskId, exercises: [{ id: 'e1', exerciseId }], logsByDate };
+}
+
 describe('getLastUsedWeight', () => {
   it('returns the most recent completed set with a weight, most recent date first', () => {
-    const logs = {
-      '2026-07-01': { e1: [set({ weight: 60, setIndex: 0 })] },
-      '2026-07-03': { e1: [set({ weight: 65, setIndex: 0 })] },
-      '2026-07-02': { e1: [set({ weight: 62, setIndex: 0 })] },
-    };
-    expect(getLastUsedWeight(logs, 'e1', '2026-07-05')).toBe(65);
+    const sources = [
+      source('t1', 'ex1', {
+        '2026-07-01': { e1: [set({ weight: 60, setIndex: 0 })] },
+        '2026-07-03': { e1: [set({ weight: 65, setIndex: 0 })] },
+        '2026-07-02': { e1: [set({ weight: 62, setIndex: 0 })] },
+      }),
+    ];
+    expect(getLastUsedWeight(sources, 'ex1', '2026-07-05')).toBe(65);
   });
 
   it('within a date, prefers the highest setIndex (the latest set logged that day)', () => {
-    const logs = {
-      '2026-07-01': {
-        e1: [set({ weight: 60, setIndex: 0 }), set({ weight: 62.5, setIndex: 1 }), set({ weight: 65, setIndex: 2 })],
-      },
-    };
-    expect(getLastUsedWeight(logs, 'e1', '2026-07-01')).toBe(65);
+    const sources = [
+      source('t1', 'ex1', {
+        '2026-07-01': {
+          e1: [set({ weight: 60, setIndex: 0 }), set({ weight: 62.5, setIndex: 1 }), set({ weight: 65, setIndex: 2 })],
+        },
+      }),
+    ];
+    expect(getLastUsedWeight(sources, 'ex1', '2026-07-01')).toBe(65);
   });
 
   it('ignores dates after the cutoff, and incomplete or weightless sets', () => {
-    const logs = {
-      '2026-07-01': { e1: [set({ weight: 60 })] },
-      '2026-07-05': { e1: [set({ weight: 100 })] }, // after cutoff - ignored
-      '2026-07-02': { e1: [set({ weight: 999, completed: false }), set({ weight: null })] },
-    };
-    expect(getLastUsedWeight(logs, 'e1', '2026-07-03')).toBe(60);
+    const sources = [
+      source('t1', 'ex1', {
+        '2026-07-01': { e1: [set({ weight: 60 })] },
+        '2026-07-05': { e1: [set({ weight: 100 })] }, // after cutoff - ignored
+        '2026-07-02': { e1: [set({ weight: 999, completed: false }), set({ weight: null })] },
+      }),
+    ];
+    expect(getLastUsedWeight(sources, 'ex1', '2026-07-03')).toBe(60);
   });
 
   it('returns null when nothing has ever been logged for this exercise', () => {
-    expect(getLastUsedWeight({}, 'e1', '2026-07-01')).toBeNull();
-    expect(getLastUsedWeight({ '2026-07-01': { other: [set()] } }, 'e1', '2026-07-01')).toBeNull();
+    expect(getLastUsedWeight([], 'ex1', '2026-07-01')).toBeNull();
+    expect(getLastUsedWeight([source('t1', 'other', { '2026-07-01': { e1: [set()] } })], 'ex1', '2026-07-01')).toBeNull();
+  });
+
+  it('merges across sources (routines/tasks) sharing the same exerciseId, most recent overall wins', () => {
+    const sources = [
+      source('t1', 'ex1', { '2026-07-01': { e1: [set({ weight: 60, setIndex: 0 })] } }),
+      source('t2', 'ex1', { '2026-07-03': { e1: [set({ weight: 70, setIndex: 0 })] } }),
+    ];
+    expect(getLastUsedWeight(sources, 'ex1', '2026-07-05')).toBe(70);
+  });
+
+  it('does not merge across sources with a different exerciseId, even at the same local exercise id', () => {
+    const sources = [
+      source('t1', 'ex1', { '2026-07-05': { e1: [set({ weight: 60, setIndex: 0 })] } }),
+      source('t2', 'ex2', { '2026-07-01': { e1: [set({ weight: 999, setIndex: 0 })] } }),
+    ];
+    expect(getLastUsedWeight(sources, 'ex1', '2026-07-05')).toBe(60);
+  });
+});
+
+describe('buildWorkoutLogSources', () => {
+  it('flattens every workout-type task across every routine, keyed by their exercises exerciseId', () => {
+    const routines = [
+      {
+        id: 'r1',
+        tasks: [
+          { id: 't1', completionType: 'workout', exercises: [{ id: 'e1', exerciseId: 'ex1', name: 'Bench Press' }] },
+          { id: 't2', completionType: 'boolean', exercises: [] },
+        ],
+      },
+      {
+        id: 'r2',
+        tasks: [{ id: 't3', completionType: 'workout', exercises: [{ id: 'e9', exerciseId: 'ex1', name: 'Bench Press' }] }],
+      },
+    ];
+    const workoutLogsByTask = {
+      t1: { '2026-07-01': { e1: [set({ weight: 60 })] } },
+      t3: { '2026-07-02': { e9: [set({ weight: 62.5 })] } },
+    };
+    const sources = buildWorkoutLogSources(routines, workoutLogsByTask);
+    expect(sources).toHaveLength(2); // t2 excluded - not a workout task
+    expect(sources.map((s) => s.taskId).sort()).toEqual(['t1', 't3']);
+    expect(sources.find((s) => s.taskId === 't1').exercises).toEqual([{ id: 'e1', exerciseId: 'ex1' }]);
+  });
+
+  it('falls back to exercise name as the merge key when exerciseId is missing (pre-migration data)', () => {
+    const routines = [
+      { id: 'r1', tasks: [{ id: 't1', completionType: 'workout', exercises: [{ id: 'e1', name: 'Push-ups' }] }] },
+    ];
+    const sources = buildWorkoutLogSources(routines, {});
+    expect(sources[0].exercises).toEqual([{ id: 'e1', exerciseId: 'Push-ups' }]);
   });
 });
 

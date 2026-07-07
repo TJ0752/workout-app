@@ -65,24 +65,42 @@ fun isNewPR(previousLogs: List<LoggedSet>, newSet: LoggedSet): Boolean {
 }
 
 /**
- * The most recently logged weight for an exercise, looking back through every date on or before
- * a given date (including sets already logged earlier the same day, so a set's own later sets
- * prefill with what was just used, not the exercise's static target). Mirrors
- * getLastUsedWeight in src/utils/workouts.js exactly.
+ * The most recently logged weight for an exercise, across every routine/task that logs it -
+ * matched by exerciseId (the cross-routine exercise-repository identity), not scoped to the one
+ * task currently being logged, so the same real-world exercise logged under two different
+ * routines shares one last-used-weight/regression-warning baseline. Mirrors getLastUsedWeight in
+ * src/utils/workouts.js exactly - `sources` is the flattened shape buildWorkoutLogSources (JS) /
+ * WorkoutSessionActivity's payload parsing (native) both produce. Looks back through every date
+ * on or before a cutoff across every source whose exercises include a matching exerciseId
+ * (including sets already logged earlier the same day), picking whichever (date, setIndex) pair
+ * is latest overall.
  */
 fun getLastUsedWeight(
-    logsForTaskByDate: Map<String, Map<String, List<LoggedSet>>>,
+    sources: List<WorkoutLogSource>,
     exerciseId: String,
     onOrBeforeDateKey: String,
 ): Double? {
-    val dates = logsForTaskByDate.keys.filter { it <= onOrBeforeDateKey }.sortedDescending()
-    for (date in dates) {
-        val sets = (logsForTaskByDate[date]?.get(exerciseId) ?: emptyList())
-            .filter { it.completed && it.weight != null }
-            .sortedByDescending { it.setIndex }
-        if (sets.isNotEmpty()) return sets[0].weight
+    var bestDate: String? = null
+    var bestSetIndex = -1
+    var bestWeight: Double? = null
+    for (source in sources) {
+        val localIds = source.exercises.filter { it.exerciseId == exerciseId }.map { it.id }
+        if (localIds.isEmpty()) continue
+        for ((date, byExerciseId) in source.logsByDate) {
+            if (date > onOrBeforeDateKey) continue
+            for (localId in localIds) {
+                val sets = (byExerciseId[localId] ?: emptyList()).filter { it.completed && it.weight != null }
+                for (set in sets) {
+                    if (bestDate == null || date > bestDate!! || (date == bestDate && set.setIndex > bestSetIndex)) {
+                        bestDate = date
+                        bestSetIndex = set.setIndex
+                        bestWeight = set.weight
+                    }
+                }
+            }
+        }
     }
-    return null
+    return bestWeight
 }
 
 private const val KG_PER_LB = 0.45359237

@@ -134,42 +134,84 @@ class WorkoutLogicTest {
         assertNull(findNextPosition(exercises, logs))
     }
 
+    private fun source(taskId: String, exerciseId: String, logsByDate: Map<String, Map<String, List<LoggedSet>>>) =
+        WorkoutLogSource(taskId, listOf(ExerciseIdentity("e1", exerciseId)), logsByDate)
+
     @Test
     fun getLastUsedWeight_picksMostRecentDateOnOrBeforeCutoff() {
-        val logs = mapOf(
-            "2026-07-01" to mapOf("e1" to listOf(set(0, weight = 60.0))),
-            "2026-07-03" to mapOf("e1" to listOf(set(0, weight = 65.0))),
-            "2026-07-02" to mapOf("e1" to listOf(set(0, weight = 62.0))),
+        val sources = listOf(
+            source(
+                "t1", "ex1",
+                mapOf(
+                    "2026-07-01" to mapOf("e1" to listOf(set(0, weight = 60.0))),
+                    "2026-07-03" to mapOf("e1" to listOf(set(0, weight = 65.0))),
+                    "2026-07-02" to mapOf("e1" to listOf(set(0, weight = 62.0))),
+                )
+            )
         )
-        assertEquals(65.0, getLastUsedWeight(logs, "e1", "2026-07-05"))
+        assertEquals(65.0, getLastUsedWeight(sources, "ex1", "2026-07-05"))
     }
 
     @Test
     fun getLastUsedWeight_withinADatePrefersHighestSetIndex() {
-        val logs = mapOf(
-            "2026-07-01" to mapOf(
-                "e1" to listOf(set(0, weight = 60.0), set(1, weight = 62.5), set(2, weight = 65.0))
+        val sources = listOf(
+            source(
+                "t1", "ex1",
+                mapOf(
+                    "2026-07-01" to mapOf(
+                        "e1" to listOf(set(0, weight = 60.0), set(1, weight = 62.5), set(2, weight = 65.0))
+                    )
+                )
             )
         )
-        assertEquals(65.0, getLastUsedWeight(logs, "e1", "2026-07-01"))
+        assertEquals(65.0, getLastUsedWeight(sources, "ex1", "2026-07-01"))
     }
 
     @Test
     fun getLastUsedWeight_ignoresDatesAfterCutoffAndIncompleteOrWeightlessSets() {
-        val logs = mapOf(
-            "2026-07-01" to mapOf("e1" to listOf(set(0, weight = 60.0))),
-            "2026-07-05" to mapOf("e1" to listOf(set(0, weight = 100.0))),
-            "2026-07-02" to mapOf(
-                "e1" to listOf(set(0, weight = 999.0, completed = false), set(1, weight = null))
-            ),
+        val sources = listOf(
+            source(
+                "t1", "ex1",
+                mapOf(
+                    "2026-07-01" to mapOf("e1" to listOf(set(0, weight = 60.0))),
+                    "2026-07-05" to mapOf("e1" to listOf(set(0, weight = 100.0))),
+                    "2026-07-02" to mapOf(
+                        "e1" to listOf(set(0, weight = 999.0, completed = false), set(1, weight = null))
+                    ),
+                )
+            )
         )
-        assertEquals(60.0, getLastUsedWeight(logs, "e1", "2026-07-03"))
+        assertEquals(60.0, getLastUsedWeight(sources, "ex1", "2026-07-03"))
     }
 
     @Test
     fun getLastUsedWeight_nullWhenNothingEverLogged() {
-        assertNull(getLastUsedWeight(emptyMap(), "e1", "2026-07-01"))
-        assertNull(getLastUsedWeight(mapOf("2026-07-01" to mapOf("other" to listOf(set(0)))), "e1", "2026-07-01"))
+        assertNull(getLastUsedWeight(emptyList(), "ex1", "2026-07-01"))
+        assertNull(
+            getLastUsedWeight(
+                listOf(source("t1", "other", mapOf("2026-07-01" to mapOf("e1" to listOf(set(0)))))),
+                "ex1",
+                "2026-07-01",
+            )
+        )
+    }
+
+    @Test
+    fun getLastUsedWeight_mergesAcrossSourcesSharingExerciseId_mostRecentOverallWins() {
+        val sources = listOf(
+            source("t1", "ex1", mapOf("2026-07-01" to mapOf("e1" to listOf(set(0, weight = 60.0))))),
+            source("t2", "ex1", mapOf("2026-07-03" to mapOf("e1" to listOf(set(0, weight = 70.0))))),
+        )
+        assertEquals(70.0, getLastUsedWeight(sources, "ex1", "2026-07-05"))
+    }
+
+    @Test
+    fun getLastUsedWeight_doesNotMergeAcrossSourcesWithDifferentExerciseId() {
+        val sources = listOf(
+            source("t1", "ex1", mapOf("2026-07-05" to mapOf("e1" to listOf(set(0, weight = 60.0))))),
+            source("t2", "ex2", mapOf("2026-07-01" to mapOf("e1" to listOf(set(0, weight = 999.0))))),
+        )
+        assertEquals(60.0, getLastUsedWeight(sources, "ex1", "2026-07-05"))
     }
 
     @Test

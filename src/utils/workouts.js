@@ -45,23 +45,63 @@ export function getExercisePR(logs) {
 }
 
 /**
- * The most recently logged weight for an exercise, looking back through every date on or before
- * a given date (including sets already logged earlier the same day, so a set's own later sets
- * prefill with what was just used, not the exercise's static target). Used both to prefill the
- * workout companion's weight field with what was actually lifted last time, and to decide
- * whether the current attempt is a regression against it.
+ * Flattens every workout-type task across every routine into the {taskId, exercises,
+ * logsByDate} "sources" list getLastUsedWeight scans - not just the one task currently being
+ * logged, so a last-used-weight search by exerciseId can find the same real-world exercise
+ * wherever it was last logged (see CLAUDE.md's "Exercise repository" section for exerciseId
+ * itself, the cross-routine identity this merges by). Kept as its own step, exported separately
+ * from getLastUsedWeight, because the native companion needs this exact flattened shape
+ * serialized once into its session-start payload (see nativeWorkoutSession.js) -
+ * WorkoutSessionActivity.kt has no Routine/Task object model at all, only ever receiving flat
+ * exercises/logs shapes across the plugin bridge - so both platforms scan the identical shape
+ * with the identical algorithm in getLastUsedWeight below.
  */
-export function getLastUsedWeight(logsForTaskByDate, exerciseId, onOrBeforeDateKey) {
-  const dates = Object.keys(logsForTaskByDate || {})
-    .filter((d) => d <= onOrBeforeDateKey)
-    .sort((a, b) => (a < b ? 1 : -1));
-  for (const date of dates) {
-    const sets = (logsForTaskByDate[date]?.[exerciseId] || [])
-      .filter((s) => s.completed && s.weight != null)
-      .sort((a, b) => b.setIndex - a.setIndex);
-    if (sets.length > 0) return sets[0].weight;
+export function buildWorkoutLogSources(routines, workoutLogsByTask) {
+  const sources = [];
+  for (const routine of routines || []) {
+    for (const task of routine.tasks || []) {
+      if (task.completionType !== 'workout') continue;
+      sources.push({
+        taskId: task.id,
+        exercises: (task.exercises || []).map((ex) => ({ id: ex.id, exerciseId: ex.exerciseId || ex.name })),
+        logsByDate: workoutLogsByTask?.[task.id] || {},
+      });
+    }
   }
-  return null;
+  return sources;
+}
+
+/**
+ * The most recently logged weight for an exercise, across every routine/task that logs it -
+ * matched by exerciseId (the cross-routine exercise-repository identity), not scoped to the one
+ * task currently being logged, so the same real-world exercise logged under two different
+ * routines shares one last-used-weight/regression-warning baseline. `sources` is the flat shape
+ * buildWorkoutLogSources produces (or, on the native side, the equivalent payload built at
+ * session-start - see :shared's WorkoutLogic.kt). Looks back through every date on or before a
+ * cutoff across every source whose exercises include a matching exerciseId (including sets
+ * already logged earlier the same day, so a set's own later sets prefill with what was just
+ * used), picking whichever (date, setIndex) pair is latest overall.
+ */
+export function getLastUsedWeight(sources, exerciseId, onOrBeforeDateKey) {
+  if (!exerciseId) return null;
+  let best = null;
+  for (const source of sources || []) {
+    const localIds = (source.exercises || []).filter((ex) => ex.exerciseId === exerciseId).map((ex) => ex.id);
+    if (localIds.length === 0) continue;
+    const logsByDate = source.logsByDate || {};
+    for (const date of Object.keys(logsByDate)) {
+      if (date > onOrBeforeDateKey) continue;
+      for (const localId of localIds) {
+        const sets = (logsByDate[date]?.[localId] || []).filter((s) => s.completed && s.weight != null);
+        for (const s of sets) {
+          if (!best || date > best.date || (date === best.date && s.setIndex > best.setIndex)) {
+            best = { date, setIndex: s.setIndex, weight: s.weight };
+          }
+        }
+      }
+    }
+  }
+  return best ? best.weight : null;
 }
 
 const KG_PER_LB = 0.45359237;

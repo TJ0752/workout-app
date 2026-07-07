@@ -43,7 +43,7 @@ import {
   refreshTaskReminderVisibility,
 } from './notifications';
 import { todayKey } from './utils/date';
-import { computeSessionFraction } from './utils/workouts';
+import { computeSessionFraction, buildWorkoutLogSources } from './utils/workouts';
 import { runAutoBackup } from './backup';
 
 function findTask(routines, taskId) {
@@ -278,9 +278,9 @@ function App() {
 
   const handleStartWorkout = (task, routine, dateKey) => {
     if (isNativeWorkoutSessionAvailable()) {
-      const taskLogs = workoutLogsByTask[task.id] || {};
-      const logsForDate = taskLogs[dateKey] || {};
-      startNativeWorkoutSession(task, dateKey, logsForDate, taskLogs);
+      const logsForDate = workoutLogsByTask[task.id]?.[dateKey] || {};
+      const workoutLogSources = buildWorkoutLogSources(routines, workoutLogsByTask);
+      startNativeWorkoutSession(task, dateKey, logsForDate, workoutLogSources);
       return;
     }
     setActiveSession({ task, routine, dateKey });
@@ -311,13 +311,13 @@ function App() {
   }
 
   if (activeSession) {
-    const taskLogs = workoutLogsByTask[activeSession.task.id] || {};
-    const logsForDate = taskLogs[activeSession.dateKey] || {};
+    const logsForDate = workoutLogsByTask[activeSession.task.id]?.[activeSession.dateKey] || {};
+    const workoutLogSources = buildWorkoutLogSources(routines, workoutLogsByTask);
     return (
       <div className="app-shell">
         <WorkoutSessionView
           task={activeSession.task}
-          taskLogs={taskLogs}
+          workoutLogSources={workoutLogSources}
           dateKey={activeSession.dateKey}
           logsForDate={logsForDate}
           onLogSet={(exercise, setIndex, values) =>

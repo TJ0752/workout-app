@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tharuka.routines.shared.workout.Exercise
 import com.tharuka.routines.shared.workout.LoggedSet
+import com.tharuka.routines.shared.workout.WorkoutLogSource
 import com.tharuka.routines.shared.workout.findNextPosition
 import com.tharuka.routines.shared.workout.getExercisePR
 import com.tharuka.routines.shared.workout.getExerciseVolume
@@ -131,10 +132,11 @@ val WorkoutColorScheme = lightColorScheme(
 
 @Composable
 fun WorkoutSessionScreen(
+    taskId: String,
     taskTitle: String,
     exercises: List<Exercise>,
     initialLogs: Map<String, List<LoggedSet>>,
-    logsByDate: Map<String, Map<String, List<LoggedSet>>>,
+    workoutLogSources: List<WorkoutLogSource>,
     dateKey: String,
     onLogSet: (Exercise, Int, SetValues) -> Unit,
     onRestStart: (Int) -> Unit,
@@ -191,11 +193,17 @@ fun WorkoutSessionScreen(
     val totalSets = maxOf(1, exercise.targetSets ?: 1)
     val setsForExercise = logsByExercise[exercise.id] ?: emptyList()
     val loggedSet = setsForExercise.find { it.setIndex == setIndex }
-    // logsByDate is a static snapshot from when the session launched; logsByExercise is this
-    // session's own live, already-updated state for today - merging them is what lets
-    // getLastUsedWeight see a set logged a moment ago in this same session, not just prior days.
-    val effectiveLogsByDate = logsByDate + (dateKey to logsByExercise)
-    val lastUsedWeight = if (isWeighted) getLastUsedWeight(effectiveLogsByDate, exercise.id, dateKey) else null
+    // workoutLogSources is a static snapshot from when the session launched, covering every
+    // workout task across every routine (not just this one); logsByExercise is this session's
+    // own live, already-updated state for today. Overriding just this task's own source's
+    // logsByDate with logsByExercise is what lets getLastUsedWeight see a set logged a moment
+    // ago in this same session, not just prior days - every other source is used as-is, since
+    // only this task is being edited this session.
+    val effectiveSources = workoutLogSources.map { src ->
+        if (src.taskId == taskId) src.copy(logsByDate = src.logsByDate + (dateKey to logsByExercise)) else src
+    }
+    val exerciseKey = exercise.exerciseId ?: exercise.name
+    val lastUsedWeight = if (isWeighted) getLastUsedWeight(effectiveSources, exerciseKey, dateKey) else null
 
     var reps by remember(exerciseIndex, setIndex) {
         mutableStateOf((loggedSet?.reps ?: exercise.targetReps)?.toString() ?: "")

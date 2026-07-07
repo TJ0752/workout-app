@@ -13,7 +13,9 @@ import androidx.compose.material3.Surface
 import androidx.core.content.ContextCompat
 import com.getcapacitor.JSObject
 import com.tharuka.routines.shared.workout.Exercise
+import com.tharuka.routines.shared.workout.ExerciseIdentity
 import com.tharuka.routines.shared.workout.LoggedSet
+import com.tharuka.routines.shared.workout.WorkoutLogSource
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -54,7 +56,7 @@ class WorkoutSessionActivity : ComponentActivity() {
         val taskTitle = payload?.optString("taskTitle") ?: ""
         val exercises = parseExercises(payload?.optJSONArray("exercises"))
         val logsForDate = parseLogsForDate(payload?.optJSONObject("logsForDate"))
-        val logsByDate = parseLogsByDate(payload?.optJSONObject("logsByDate"))
+        val workoutLogSources = parseWorkoutLogSources(payload?.optJSONArray("workoutLogSources"))
 
         startTimerServiceOncePermitted(taskTitle)
 
@@ -62,10 +64,11 @@ class WorkoutSessionActivity : ComponentActivity() {
             MaterialTheme(colorScheme = WorkoutColorScheme) {
                 Surface {
                     WorkoutSessionScreen(
+                        taskId = taskId ?: "",
                         taskTitle = taskTitle,
                         exercises = exercises,
                         initialLogs = logsForDate,
-                        logsByDate = logsByDate,
+                        workoutLogSources = workoutLogSources,
                         dateKey = dateKey ?: "",
                         onLogSet = { exercise, setIndex, values ->
                             val event = JSObject()
@@ -163,6 +166,7 @@ class WorkoutSessionActivity : ComponentActivity() {
                     unit = obj.optString("unit", "reps"),
                     restSeconds = obj.optIntOrNull("restSeconds"),
                     type = obj.optString("type", "weights"),
+                    exerciseId = obj.optStringOrNull("exerciseId"),
                 )
             )
         }
@@ -194,7 +198,7 @@ class WorkoutSessionActivity : ComponentActivity() {
         return result
     }
 
-    /** Every date's logs for this task, not just today's - needed for getLastUsedWeight to look
+    /** Every date's logs for one task, not just today's - needed for getLastUsedWeight to look
      * back through prior sessions, the same way src/utils/workouts.js's JS counterpart does. */
     private fun parseLogsByDate(obj: JSONObject?): Map<String, Map<String, List<LoggedSet>>> {
         if (obj == null) return emptyMap()
@@ -204,10 +208,42 @@ class WorkoutSessionActivity : ComponentActivity() {
         }
         return result
     }
+
+    /** Every workout-type task's exercises + full log history across every routine, not just
+     * this session's own task - the flattened shape getLastUsedWeight needs to search by
+     * exerciseId across routines. Mirrors src/utils/workouts.js's buildWorkoutLogSources output
+     * exactly (see nativeWorkoutSession.js for how this payload is built on the JS side). */
+    private fun parseWorkoutLogSources(array: JSONArray?): List<WorkoutLogSource> {
+        if (array == null) return emptyList()
+        val result = mutableListOf<WorkoutLogSource>()
+        for (i in 0 until array.length()) {
+            val obj = array.getJSONObject(i)
+            val exercisesArray = obj.optJSONArray("exercises")
+            val identities = mutableListOf<ExerciseIdentity>()
+            if (exercisesArray != null) {
+                for (j in 0 until exercisesArray.length()) {
+                    val exObj = exercisesArray.getJSONObject(j)
+                    val exerciseId = exObj.optStringOrNull("exerciseId") ?: continue
+                    identities.add(ExerciseIdentity(id = exObj.getString("id"), exerciseId = exerciseId))
+                }
+            }
+            result.add(
+                WorkoutLogSource(
+                    taskId = obj.optString("taskId", ""),
+                    exercises = identities,
+                    logsByDate = parseLogsByDate(obj.optJSONObject("logsByDate")),
+                )
+            )
+        }
+        return result
+    }
 }
 
 private fun JSONObject.optIntOrNull(name: String): Int? =
     if (has(name) && !isNull(name)) getInt(name) else null
+
+private fun JSONObject.optStringOrNull(name: String): String? =
+    if (has(name) && !isNull(name)) getString(name) else null
 
 private fun JSONObject.optDoubleOrNull(name: String): Double? =
     if (has(name) && !isNull(name)) getDouble(name) else null
