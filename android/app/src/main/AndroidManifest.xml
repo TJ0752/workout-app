@@ -52,12 +52,15 @@
             android:name=".notify.DueReminderActionReceiver"
             android:exported="false" />
 
+        <!-- Not directBootAware, and no LOCKED_BOOT_COMPLETED - see the real crash writeup on
+             this in CLAUDE.md's "Native notifications" section: BOOT_COMPLETED alone still fires
+             the moment the device is usable (after first unlock post-reboot), which is early
+             enough, and it's the only variant where SharedPreferences (credential-encrypted by
+             default) are actually readable. -->
         <receiver
             android:name=".notify.DueReminderBootReceiver"
-            android:directBootAware="true"
             android:exported="false">
             <intent-filter>
-                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
@@ -73,10 +76,8 @@
 
         <receiver
             android:name=".notify.ExtraReminderBootReceiver"
-            android:directBootAware="true"
             android:exported="false">
             <intent-filter>
-                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
@@ -88,10 +89,8 @@
 
         <receiver
             android:name=".notify.DailyDigestBootReceiver"
-            android:directBootAware="true"
             android:exported="false">
             <intent-filter>
-                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>

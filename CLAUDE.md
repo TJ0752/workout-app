@@ -656,14 +656,45 @@ same day-of-week conversion, is reused as-is by `ExtraReminderScheduler` (Part C
   content-equality/overdue logic above — a quick-add on an already-overdue (hence already
   showing) reminder changes the body, which isn't content-unchanged, so `schedule()` reposts it
   with the new progress the same way it would for any other content change.
-- **Boot survival.** `DueReminderBootReceiver` (manifest, `directBootAware="true"`, listens
-  for `BOOT_COMPLETED`/`LOCKED_BOOT_COMPLETED`/`QUICKBOOT_POWERON`, needs
-  `RECEIVE_BOOT_COMPLETED` added explicitly since the stock plugin's own manifest contract
-  shouldn't be load-bearing for a completely different notification type) re-arms every
-  `DueReminderStore` entry on boot — `AlarmManager` alarms do **not** survive reboot on
-  their own, confirmed by the stock plugin needing its own equivalent
-  (`LocalNotificationRestoreReceiver`) for the exact same reason. `ExtraReminderBootReceiver`
-  and `DailyDigestBootReceiver` (Parts C and E) mirror this exactly, one per store.
+- **Boot survival.** `DueReminderBootReceiver` (manifest, listens for
+  `BOOT_COMPLETED`/`QUICKBOOT_POWERON`, needs `RECEIVE_BOOT_COMPLETED` added explicitly
+  since the stock plugin's own manifest contract shouldn't be load-bearing for a completely
+  different notification type) re-arms every `DueReminderStore` entry on boot —
+  `AlarmManager` alarms do **not** survive reboot on their own, confirmed by the stock
+  plugin needing its own equivalent (`LocalNotificationRestoreReceiver`) for the exact same
+  reason. `ExtraReminderBootReceiver` and `DailyDigestBootReceiver` (Parts C and E) mirror
+  this exactly, one per store.
+  - **A real crash, found via a user's on-device bug report, not CI.** All three boot
+    receivers originally were `directBootAware="true"` and also listened for
+    `LOCKED_BOOT_COMPLETED`, on the assumption that re-arming alarms as early as possible
+    after a reboot — even before the user has unlocked the device once — was strictly
+    better. This crashed on *every* reboot, for both flavors, with `Fatal signal 6
+    (SIGABRT)` → `IllegalStateException: SharedPreferences in credential encrypted storage
+    are not available until after user (id 0) is unlocked`, thrown from
+    `DueReminderStore.prefs()`'s `context.getSharedPreferences(...)` call.
+    `LOCKED_BOOT_COMPLETED` fires *before* first unlock specifically so direct-boot-aware
+    components can run in that window (e.g. showing a lock-screen alarm clock) — but the
+    default `getSharedPreferences()` a `Store` class calls is backed by **credential
+    encrypted storage**, which is only unlocked once the user enters their PIN/pattern/
+    biometric for the first time post-reboot; reading it any earlier throws exactly this
+    exception, unconditionally, regardless of device state otherwise. Diagnosed from a real
+    bug report (`adb`/computer not available to the reporting user, so via Android's
+    on-device "Take bug report" flow, then searching the resulting log text for `FATAL
+    EXCEPTION` — the same diagnostic approach already used once before for the workout
+    timer's `ACTIVITY_RECOGNITION` crash) — found as `Unable to start receiver
+    com.tharuka.routines.notify.DueReminderBootReceiver`, immediately followed by the
+    identical trace for the `.dev` flavor. Fixed by dropping `directBootAware="true"` and
+    the `LOCKED_BOOT_COMPLETED` action from all three receivers, keeping only
+    `BOOT_COMPLETED`/`QUICKBOOT_POWERON` — those fire once the device has actually finished
+    booting into a normal, unlocked-at-least-once state, exactly when regular
+    SharedPreferences become readable. The tradeoff (alarms re-arm slightly later — once the
+    user first unlocks post-reboot, rather than the instant the device powers on — instead
+    of immediately) is strictly better than a guaranteed crash on every single reboot; no
+    store was migrated to device-protected storage (`createDeviceProtectedStorageContext()`)
+    to preserve the original pre-unlock timing, since that would touch every read/write site
+    across three independent `Store` classes for a narrow edge case (a reminder due in the
+    few minutes between a physical reboot and the user's first unlock) that isn't worth the
+    added risk right now.
 
 **Part C — extra reminders.** `ExtraReminderStore`/`ExtraReminderScheduler`/
 `ExtraReminderNotificationBuilder`/`ExtraReminderAlarmReceiver` are their own small, dedicated
