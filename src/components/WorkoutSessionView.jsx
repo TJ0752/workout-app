@@ -94,9 +94,12 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
 
   const exercise = exercises[exerciseIndex];
   const isDuration = exercise?.unit === 'seconds';
-  // Exercises saved before this field existed have no `type` at all - treating anything other
-  // than an explicit 'calisthenics' as weighted preserves their old behavior (the weight input
-  // used to always show), rather than needing a one-time backfill/migration.
+  // Purely a label/framing choice now (see the weight block below) - a calisthenics exercise's
+  // weight field is "added weight" (a vest/belt worn on top of bodyweight) rather than "weight",
+  // but both are logged into the same `weight` field and feed the identical
+  // prefill/regression/PR/volume pipeline. Exercises saved before `type` existed have no field
+  // at all - treating anything other than an explicit 'calisthenics' as weighted preserves their
+  // old "Weight" labeling, rather than needing a one-time backfill/migration.
   const isWeighted = exercise?.type !== 'calisthenics';
   const totalSets = Math.max(1, exercise?.targetSets || 1);
   const setsForExercise = sessionLogs?.[exercise?.id] || [];
@@ -110,7 +113,7 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
     s.taskId === task.id ? { ...s, logsByDate: { ...s.logsByDate, [dateKey]: sessionLogs } } : s
   );
   const exerciseId = exercise?.exerciseId || exercise?.name;
-  const lastUsedWeight = isWeighted && exercise ? getLastUsedWeight(effectiveSources, exerciseId, dateKey) : null;
+  const lastUsedWeight = exercise ? getLastUsedWeight(effectiveSources, exerciseId, dateKey) : null;
 
   const [reps, setReps] = useState('');
   // Canonical value stays kg (see getLastUsedWeight/kgToLb docs in utils/workouts.js); lb is a
@@ -145,8 +148,7 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
   };
 
   const currentWeightKg = weightKgText === '' ? null : Number(weightKgText);
-  const isWeightRegression =
-    isWeighted && lastUsedWeight != null && currentWeightKg != null && currentWeightKg < lastUsedWeight;
+  const isWeightRegression = lastUsedWeight != null && currentWeightKg != null && currentWeightKg < lastUsedWeight;
 
   useEffect(() => {
     if (!resting) return undefined;
@@ -189,7 +191,7 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
   const markDone = () => {
     const values = {
       reps: isDuration ? null : reps === '' ? null : Number(reps),
-      weight: isWeighted && weightKgText !== '' ? Number(weightKgText) : null,
+      weight: weightKgText !== '' ? Number(weightKgText) : null,
       durationSeconds: isDuration ? (duration === '' ? null : Number(duration)) : null,
       completed: true,
     };
@@ -356,56 +358,54 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
             )}
           </div>
 
-          {isWeighted && (
-            <div className="workout-weight-block">
-              <span className="field-label">
-                Weight (optional)
-                {isWeightRegression && (
-                  <span className="workout-weight-warning-label"> — lower than last time ({formatNumber(lastUsedWeight)} kg)</span>
-                )}
-              </span>
-              <div className={`workout-weight-row ${isWeightRegression ? 'warning' : ''}`}>
-                <button
-                  type="button"
-                  className="workout-weight-stepper-btn"
-                  onClick={() => adjustWeight(-WEIGHT_STEP_KG)}
-                  aria-label="Decrease weight"
-                >
-                  −
-                </button>
-                <div className="workout-weight-inputs">
-                  <label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
-                      value={weightKgText}
-                      onChange={(e) => handleKgChange(e.target.value)}
-                    />
-                    kg
-                  </label>
-                  <label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
-                      value={weightLbText}
-                      onChange={(e) => handleLbChange(e.target.value)}
-                    />
-                    lb
-                  </label>
-                </div>
-                <button
-                  type="button"
-                  className="workout-weight-stepper-btn"
-                  onClick={() => adjustWeight(WEIGHT_STEP_KG)}
-                  aria-label="Increase weight"
-                >
-                  +
-                </button>
+          <div className="workout-weight-block">
+            <span className="field-label">
+              {isWeighted ? 'Weight' : 'Added weight'} (optional)
+              {isWeightRegression && (
+                <span className="workout-weight-warning-label"> — lower than last time ({formatNumber(lastUsedWeight)} kg)</span>
+              )}
+            </span>
+            <div className={`workout-weight-row ${isWeightRegression ? 'warning' : ''}`}>
+              <button
+                type="button"
+                className="workout-weight-stepper-btn"
+                onClick={() => adjustWeight(-WEIGHT_STEP_KG)}
+                aria-label="Decrease weight"
+              >
+                −
+              </button>
+              <div className="workout-weight-inputs">
+                <label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={weightKgText}
+                    onChange={(e) => handleKgChange(e.target.value)}
+                  />
+                  kg
+                </label>
+                <label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={weightLbText}
+                    onChange={(e) => handleLbChange(e.target.value)}
+                  />
+                  lb
+                </label>
               </div>
+              <button
+                type="button"
+                className="workout-weight-stepper-btn"
+                onClick={() => adjustWeight(WEIGHT_STEP_KG)}
+                aria-label="Increase weight"
+              >
+                +
+              </button>
             </div>
-          )}
+          </div>
 
           <div className="workout-set-nav">
             <button

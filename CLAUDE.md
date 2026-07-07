@@ -331,15 +331,26 @@ display just shows whichever spelling was most recently seen.
 
 Each exercise config (`task.exercises[]`) carries an explicit `type: 'calisthenics' | 'weights'`
 field, set via a toggle in `RoutineForm.jsx`'s exercise editor (the same `.type-toggle` styling
-already used for the Reps/Duration toggle right below it). It exists purely to control **whether
-the weight input is offered at all** during live logging, in both the web dev-loop companion
-(`WorkoutSessionView.jsx`) and the native Compose companion (`WorkoutSessionScreen.kt`) — not to
-reclassify anything after the fact; the analytics layer's own weighted-vs-bodyweight decision
-(`utils/workouts.js`'s `isWeighted`, described above) stays exactly as it was, based on whether a
-completed *set* ever had a weight, not this config field. Switching an exercise to
-`'calisthenics'` forces `weight: null` on every set logged for it going forward (both
-`markDone()`s), so a stray/stale value typed before the toggle existed can't silently leak into
-newly-logged sets once the field is hidden.
+already used for the Reps/Duration toggle right below it). It does **not** reclassify anything
+after the fact — the analytics layer's own weighted-vs-bodyweight decision (`utils/workouts.js`'s
+`isWeighted`, described above) stays exactly as it was, based on whether a completed *set* ever
+had a weight, not this config field.
+
+**The weight field itself is always offered, for both types — `type` only controls its label.**
+This wasn't the original design: `type` originally controlled whether the field was offered *at
+all*, forcing `weight: null` on every set logged for a `'calisthenics'` exercise. That was
+replaced by a direct user request — *"for calisthenics exercises, add a way to log extra weight
+on top of bodyweight (a weighted vest/belt), tracked separately from a plain weighted exercise's
+weight"* — and the cleanest fit turned out to be **not** a separate field at all: the same
+`weight` value already means "total load" for a `'weights'` exercise and "load added on top of
+bodyweight" for a `'calisthenics'` one, so both log into the identical field and feed the
+identical prefill/regression-warning/PR/e1RM/volume pipeline unchanged (`getLastUsedWeight`
+above, `getExercisePR`/`getExerciseVolume`, the Fitness Stats classification below). The only
+change is the label shown at live-logging time — `"Weight (optional)"` vs. `"Added weight
+(optional)"` (`isWeighted ? '...' : '...'` in both `WorkoutSessionView.jsx`'s `field-label` span
+and `WorkoutSessionScreen.kt`'s equivalent `Text`) — plus, naturally, no more forced-null: a
+calisthenics exercise's added weight is a real, intentionally-entered number now, not a stray
+value to be defended against.
 
 **The exercise config itself has no `targetWeight` field at all** — it existed only as the final
 fallback in the weight-prefill chain (`loggedSet?.weight ?? lastUsedWeight ?? targetWeight`)
@@ -351,8 +362,8 @@ only other use was that single first session.
 
 **No backfill/migration needed for exercises saved before this field existed.** `isCalisthenics`
 (JS) / the `isWeighted` local (Kotlin) both treat anything other than an explicit `'calisthenics'`
-— including a totally absent `type` — as weighted, which is exactly the old behavior (the weight
-input always showed, unconditionally). `type` defaults to `'weights'` for brand-new exercises
+— including a totally absent `type` — as weighted, which is exactly the old behavior (a
+`"Weight (optional)"`-labeled field, unconditionally shown). `type` defaults to `'weights'` for brand-new exercises
 (`makeExercise()` in `RoutineForm.jsx`, and the `:shared` `Exercise` data class's default
 parameter) for the same reason: least-surprise continuity with what every existing user is
 already used to seeing, rather than defaulting to the newly-added option. The native JSON parse

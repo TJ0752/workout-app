@@ -186,9 +186,12 @@ fun WorkoutSessionScreen(
 
     val exercise = exercises.getOrNull(exerciseIndex) ?: return
     val isDuration = exercise.unit == "seconds"
-    // Exercises saved before this field existed have no `type` at all - treating anything other
-    // than an explicit "calisthenics" as weighted preserves their old behavior (the weight input
-    // used to always show), rather than needing a one-time backfill/migration.
+    // Purely a label/framing choice now (see the weight block below) - a calisthenics exercise's
+    // weight field is "added weight" (a vest/belt worn on top of bodyweight) rather than
+    // "weight", but both are logged into the same `weight` field and feed the identical
+    // prefill/regression/PR/volume pipeline. Exercises saved before `type` existed have no field
+    // at all - treating anything other than an explicit "calisthenics" as weighted preserves
+    // their old "Weight" labeling, rather than needing a one-time backfill/migration.
     val isWeighted = exercise.type != "calisthenics"
     val totalSets = maxOf(1, exercise.targetSets ?: 1)
     val setsForExercise = logsByExercise[exercise.id] ?: emptyList()
@@ -203,7 +206,7 @@ fun WorkoutSessionScreen(
         if (src.taskId == taskId) src.copy(logsByDate = src.logsByDate + (dateKey to logsByExercise)) else src
     }
     val exerciseKey = exercise.exerciseId ?: exercise.name
-    val lastUsedWeight = if (isWeighted) getLastUsedWeight(effectiveSources, exerciseKey, dateKey) else null
+    val lastUsedWeight = getLastUsedWeight(effectiveSources, exerciseKey, dateKey)
 
     var reps by remember(exerciseIndex, setIndex) {
         mutableStateOf((loggedSet?.reps ?: exercise.targetReps)?.toString() ?: "")
@@ -240,7 +243,7 @@ fun WorkoutSessionScreen(
     }
 
     val currentWeightKg = weightKgText.toDoubleOrNull()
-    val isWeightRegression = isWeighted && lastUsedWeight != null && currentWeightKg != null && currentWeightKg < lastUsedWeight
+    val isWeightRegression = lastUsedWeight != null && currentWeightKg != null && currentWeightKg < lastUsedWeight
 
     fun jumpTo(index: Int) {
         exerciseIndex = index
@@ -272,7 +275,7 @@ fun WorkoutSessionScreen(
     fun markDone() {
         val values = SetValues(
             reps = if (isDuration) null else reps.toIntOrNull(),
-            weight = if (isWeighted) weightKgText.toDoubleOrNull() else null,
+            weight = weightKgText.toDoubleOrNull(),
             durationSeconds = if (isDuration) duration.toIntOrNull() else null,
             completed = true,
         )
@@ -451,65 +454,74 @@ fun WorkoutSessionScreen(
                         }
                     }
 
-                    if (isWeighted) {
-                        if (isWeightRegression) {
-                            Text(
-                                "Lower than last time (${formatNumber(lastUsedWeight ?: 0.0)} kg)",
-                                color = AppPalette.Bad,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp,
-                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                            )
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            val weightBorderColor = if (isWeightRegression) AppPalette.Bad else null
-                            Button(
-                                onClick = { adjustWeight(-WEIGHT_STEP_KG) },
-                                shape = CircleShape,
-                                contentPadding = PaddingValues(0.dp),
-                                modifier = Modifier.size(40.dp),
-                            ) { Text("−") }
-                            OutlinedTextField(
-                                value = weightKgText,
-                                onValueChange = ::handleKgChange,
-                                label = { Text("kg") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                colors = if (weightBorderColor != null) {
-                                    OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = weightBorderColor,
-                                        unfocusedBorderColor = weightBorderColor,
-                                    )
-                                } else {
-                                    OutlinedTextFieldDefaults.colors()
-                                },
-                                modifier = Modifier.weight(1f),
-                            )
-                            OutlinedTextField(
-                                value = weightLbText,
-                                onValueChange = ::handleLbChange,
-                                label = { Text("lb") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                colors = if (weightBorderColor != null) {
-                                    OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = weightBorderColor,
-                                        unfocusedBorderColor = weightBorderColor,
-                                    )
-                                } else {
-                                    OutlinedTextFieldDefaults.colors()
-                                },
-                                modifier = Modifier.weight(1f),
-                            )
-                            Button(
-                                onClick = { adjustWeight(WEIGHT_STEP_KG) },
-                                shape = CircleShape,
-                                contentPadding = PaddingValues(0.dp),
-                                modifier = Modifier.size(40.dp),
-                            ) { Text("+") }
-                        }
+                    // Same label distinction as WorkoutSessionView.jsx's field-label span: a
+                    // calisthenics exercise's field is "added weight" (a vest/belt worn on top
+                    // of bodyweight), not the total lifted weight - both log into the identical
+                    // `weight` field and feed the same prefill/regression/PR/volume pipeline, so
+                    // there's no `isWeighted` gate on the block itself anymore, only the label.
+                    Text(
+                        if (isWeighted) "Weight (optional)" else "Added weight (optional)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppPalette.TextSoft,
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    )
+                    if (isWeightRegression) {
+                        Text(
+                            "Lower than last time (${formatNumber(lastUsedWeight ?: 0.0)} kg)",
+                            color = AppPalette.Bad,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val weightBorderColor = if (isWeightRegression) AppPalette.Bad else null
+                        Button(
+                            onClick = { adjustWeight(-WEIGHT_STEP_KG) },
+                            shape = CircleShape,
+                            contentPadding = PaddingValues(0.dp),
+                            modifier = Modifier.size(40.dp),
+                        ) { Text("−") }
+                        OutlinedTextField(
+                            value = weightKgText,
+                            onValueChange = ::handleKgChange,
+                            label = { Text("kg") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            colors = if (weightBorderColor != null) {
+                                OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = weightBorderColor,
+                                    unfocusedBorderColor = weightBorderColor,
+                                )
+                            } else {
+                                OutlinedTextFieldDefaults.colors()
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                        OutlinedTextField(
+                            value = weightLbText,
+                            onValueChange = ::handleLbChange,
+                            label = { Text("lb") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            colors = if (weightBorderColor != null) {
+                                OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = weightBorderColor,
+                                    unfocusedBorderColor = weightBorderColor,
+                                )
+                            } else {
+                                OutlinedTextFieldDefaults.colors()
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                        Button(
+                            onClick = { adjustWeight(WEIGHT_STEP_KG) },
+                            shape = CircleShape,
+                            contentPadding = PaddingValues(0.dp),
+                            modifier = Modifier.size(40.dp),
+                        ) { Text("+") }
                     }
 
                     Row(
