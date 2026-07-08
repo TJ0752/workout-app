@@ -54,6 +54,11 @@
 *::before,
 *::after {
   box-sizing: border-box;
+  /* Android WebView's default blue/gray flash on every tap - a browser affordance that reads as
+     a rendering glitch once the app has its own tap feedback (button/list-item active states,
+     the workout ring's own bounce animation). Removed app-wide, not per-element, so no tappable
+     surface added later needs to remember to opt out of it individually. */
+  -webkit-tap-highlight-color: transparent;
 }
 
 a {

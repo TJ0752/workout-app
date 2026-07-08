@@ -1498,10 +1498,14 @@ whatever height flex settles on, bounded by `min-height`/`max-height`) is the fi
 (`BoxWithConstraints`-based sizing in `MomentumRing`, `WorkoutSessionScreen.kt`) for the
 same bug in the other implementation of the same screen.
 
-One CSS gotcha already hit twice: the fixed bottom tab bar (`.app-tabbar`) must have an
-opaque `background` (currently the `Canvas` system color) — `background: inherit`
-resolves to transparent here since `.app-shell` sets no background, which only becomes
-visible once a scrollable view is taller than one screen.
+**`-webkit-tap-highlight-color: transparent` is set app-wide** on the universal `*`
+selector in `index.css`, not per-element — Android WebView's default blue/gray flash on
+every tap reads as a rendering glitch once the app already has its own tap feedback
+(button/list-item active states, the workout ring's own bounce animation), and a global
+reset means no tappable surface added later needs to remember to opt out of it
+individually. This replaced a narrower per-element rule that had only ever been added to
+`.workout-ring-tap`, leaving every other tappable element in the app still showing the
+native flash.
 
 ### A recurring ESLint false-positive
 
