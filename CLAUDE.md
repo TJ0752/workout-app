@@ -990,7 +990,7 @@ isolate the tick's own effect, then calls `triggerBackgroundSyncTick()` and conf
 notification picks up the change, before confirming the Stop action removes the notification.
 All five replace the older, single `verify-notification-catchup.mjs` this project started with.
 
-### Live overtime timer for duration-based workout exercises (`WorkoutSessionView.jsx`, web only so far)
+### Live overtime timer for duration-based workout exercises (`WorkoutSessionView.jsx`, `WorkoutSessionScreen.kt`)
 
 A duration-based exercise's set no longer logs from a plain manually-typed number — `DurationTimer`
 (a sub-component in `WorkoutSessionView.jsx`, above the default export) is a live, auto-continuing
@@ -1040,11 +1040,25 @@ same file) covers the same need with far less new surface area.
   per the exercise's `type`, same as every other exercise) is untouched by any of this — a
   weighted plank (added weight on top of bodyweight) logs its weight exactly as it always did,
   independent of which of the three review buttons picked the duration value.
-- **Web-only so far — the native Compose workout session (`WorkoutSessionScreen.kt`,
-  `WorkoutTimerService.kt`) has not been ported to this design yet** and still uses its original
-  manual-entry duration field. Porting it is a known, explicit follow-up, not an oversight — until
-  it lands, a duration-based exercise logged through the native session screen (real Android
-  device/emulator) still behaves like the old manual-entry flow this section replaces on web.
+- **Ported to native Compose as well, with the identical phase/review structure.** The real app's
+  workout session is the native `WorkoutSessionScreen.kt` (see "Native Android workout session"
+  below), not `WorkoutSessionView.jsx` — the web view is only ever reached via `npm run dev` in a
+  browser, so shipping this feature to actual devices required porting it there too, not just
+  building it once on web. `DurationTimer` (a private `@Composable` in the same file, right after
+  `RestRing`) mirrors the JS version's `idle`/`running`/`stopped` phases and review-step choices
+  exactly, reusing the *same* `RestRing` composable the between-sets rest screen already used —
+  `RestRing` gained an optional `labelColor` parameter (defaulting to its prior behavior,
+  non-breaking for its existing call site) so the overtime phase can recolor the countdown text to
+  `AppPalette.GoldInk` without needing a second ring implementation. `MomentumRing` similarly
+  gained `interactive`/`hint` parameters so it can render as a non-clickable progress display (no
+  `clickable` modifier attached at all, not just a no-op `onTap`) with "Use the timer below" for a
+  duration exercise, mirroring the web ring's `.non-interactive` treatment. `markDone()` was split
+  into a shared `logSetValues(SetValues)` plus a thin `markDone()` (ring tap, reps-based) and
+  `markDoneWithDuration(finalSeconds)` (DurationTimer's `onLog` callback) — the exact same
+  refactor `WorkoutSessionView.jsx` needed for the identical reason. The `key(exerciseIndex,
+  setIndex) { DurationTimer(...) }` wrapper is Compose's equivalent of the web version's
+  `<DurationTimer key={...}/>` — forces a full remount (fresh `phase`/`elapsed`/`editing` state) on
+  every set change instead of writing effects to reset it by hand.
 
 ### Native Android workout session (`android/shared/`, `android/app/.../workout/`)
 
