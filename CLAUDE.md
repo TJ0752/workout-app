@@ -990,6 +990,62 @@ isolate the tick's own effect, then calls `triggerBackgroundSyncTick()` and conf
 notification picks up the change, before confirming the Stop action removes the notification.
 All five replace the older, single `verify-notification-catchup.mjs` this project started with.
 
+### Live overtime timer for duration-based workout exercises (`WorkoutSessionView.jsx`, web only so far)
+
+A duration-based exercise's set no longer logs from a plain manually-typed number — `DurationTimer`
+(a sub-component in `WorkoutSessionView.jsx`, above the default export) is a live, auto-continuing
+countdown that replaces this without introducing a new completion type at all: a meditation/plank/
+hold-style activity is still just a `'workout'`-completion-type task with one duration exercise: no
+separate "timer" mode was needed once this existed. This was a deliberate simplification over an
+earlier plan for a wholly separate timer completion type — reusing the existing duration-exercise
+flow (and the rest-timer's already-built depleting-ring visual, see `RestRing` just above it in the
+same file) covers the same need with far less new surface area.
+
+- **Phases: idle → running → stopped (review).** Tapping "Start" begins a countdown from the
+  exercise's `targetDurationSeconds`, visualized with the exact same `RestRing` component the
+  between-sets rest screen uses (same depleting-ring-then-blink-once visual for "target reached") —
+  reused as-is, not duplicated, since it's already a generic `{totalSeconds, resetKey}` component.
+  **At zero, it does not stop or wait for a tap** — the numeric display keeps ticking upward into
+  overtime automatically (`+Ns`, styled in `--gold-ink` — the same "achievement" hue this app
+  reserves for streaks/PRs, since exceeding a target reads as a small win, not a warning) for as
+  long as the user keeps going. There is deliberately no "Continue" button anywhere in this flow —
+  a first draft of this design had one, and it was explicitly rejected: "there should be no manual
+  click needed to continue timing after the initial target time is completed. it should keep
+  going." **The only manual action for the entire set is "Stop."**
+- **Review step, not an immediate log.** Stopping moves to a review screen offering up to three
+  choices, matching a direct product requirement almost verbatim ("give the option to either log
+  or disregard extra time, or even edit and amend extra time, or final logged time"): "Log full
+  time" (target + overtime, the default/primary action), "Log target only" (disregard the
+  overtime — only rendered when `overtime > 0`, since there's nothing to disregard if the user
+  stopped before ever reaching the target), and "Edit custom time" (a plain number input,
+  prefilled with the full elapsed value, with its own Confirm button). All three funnel into the
+  identical `onLog(finalSeconds)` callback → `markDoneWithDuration` → the same `logSetValues`
+  pathway a manually-typed duration always used — no analytics-layer changes were needed at all,
+  since `getExerciseDurationPR`/`getExerciseTotalDuration` already operate on the raw logged
+  value, not the clamped 0–1 completion fraction; confirmed directly against a real
+  `workout_logs` row via a Playwright round-trip (typing 99 into "Edit custom time" for a 2s-target
+  exercise persisted `duration_seconds: 99`, not `2` or a clamped value).
+- **The momentum ring becomes a plain progress display, not a second "mark done" affordance.**
+  For every other completion type, tapping the big central ring *is* how a set gets logged
+  (`onClick={markDone}`). For a duration exercise, logging only ever happens through
+  `DurationTimer`'s Stop → review flow, so the ring gets `disabled` and a `.non-interactive`
+  class (opacity untouched, cursor reset to default) instead, with its hint text changed to "Use
+  the timer below" — having two different ways to log the same set (tap the ring *or* run the
+  timer) would race each other and isn't what was asked for.
+- **Remounted via `key`, not manually reset.** `<DurationTimer key={`${exerciseIndex}-${setIndex}`}
+  .../>` — the parent forces a full remount on every set change instead of writing effects to
+  reset `DurationTimer`'s internal `phase`/`elapsed`/`editing` state by hand, the simplest way to
+  guarantee no state leaks from one set's timer into the next.
+- **Weight still applies.** The weight field below the timer (labeled "Weight" or "Added weight"
+  per the exercise's `type`, same as every other exercise) is untouched by any of this — a
+  weighted plank (added weight on top of bodyweight) logs its weight exactly as it always did,
+  independent of which of the three review buttons picked the duration value.
+- **Web-only so far — the native Compose workout session (`WorkoutSessionScreen.kt`,
+  `WorkoutTimerService.kt`) has not been ported to this design yet** and still uses its original
+  manual-entry duration field. Porting it is a known, explicit follow-up, not an oversight — until
+  it lands, a duration-based exercise logged through the native session screen (real Android
+  device/emulator) still behaves like the old manual-entry flow this section replaces on web.
+
 ### Native Android workout session (`android/shared/`, `android/app/.../workout/`)
 
 The live workout session screen is the one part of the app rebuilt as genuine native

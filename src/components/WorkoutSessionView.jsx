@@ -70,6 +70,110 @@ function RestRing({ totalSeconds, resetKey }) {
   );
 }
 
+/**
+ * A live, auto-continuing timer for a duration-based set. Counts down from the exercise's
+ * target duration, reusing the same depleting-ring/one-time-blink visual as the between-sets
+ * RestRing above for the "target reached" signal, then keeps counting up into overtime
+ * automatically - there is deliberately no "continue" button, matching the plain elapsed
+ * count-up that follows. The only manual action is Stop, which moves to a review step letting
+ * the user log the full time (target + overtime), the target only (disregarding overtime), or a
+ * typed custom value. The parent remounts this via a `key` on exerciseIndex/setIndex, so its own
+ * phase/elapsed state never needs resetting by hand when the user moves to a different set.
+ */
+function DurationTimer({ targetSeconds, initialSeconds, onLog }) {
+  const [phase, setPhase] = useState('idle'); // 'idle' | 'running' | 'stopped'
+  const [elapsed, setElapsed] = useState(0);
+  const [ringKey, setRingKey] = useState(0);
+  const [editing, setEditing] = useState(false);
+  const [customValue, setCustomValue] = useState('');
+
+  useEffect(() => {
+    if (phase !== 'running') return undefined;
+    const t = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => clearInterval(t);
+  }, [phase]);
+
+  const hasTarget = targetSeconds > 0;
+  const overtime = hasTarget ? Math.max(0, elapsed - targetSeconds) : 0;
+  const inOvertime = hasTarget && elapsed >= targetSeconds;
+
+  const start = () => {
+    setElapsed(0);
+    setRingKey((k) => k + 1);
+    setPhase('running');
+  };
+
+  const stop = () => {
+    setPhase('stopped');
+    setEditing(false);
+    setCustomValue(String(elapsed));
+  };
+
+  if (phase === 'stopped') {
+    return (
+      <div className="workout-duration-review">
+        <span className="workout-duration-review-total">{elapsed}s logged</span>
+        {editing ? (
+          <div className="workout-duration-review-edit">
+            <input
+              type="number"
+              min="0"
+              autoFocus
+              value={customValue}
+              onChange={(e) => setCustomValue(e.target.value)}
+            />
+            <button
+              type="button"
+              className="workout-duration-btn primary"
+              onClick={() => onLog(customValue === '' ? 0 : Number(customValue))}
+            >
+              Confirm
+            </button>
+          </div>
+        ) : (
+          <div className="workout-duration-review-actions">
+            <button type="button" className="workout-duration-btn primary" onClick={() => onLog(elapsed)}>
+              {overtime > 0 ? `Log full time (${elapsed}s)` : `Log time (${elapsed}s)`}
+            </button>
+            {overtime > 0 && (
+              <button type="button" className="workout-duration-btn" onClick={() => onLog(targetSeconds)}>
+                Log target only ({targetSeconds}s)
+              </button>
+            )}
+            <button type="button" className="workout-duration-btn ghost" onClick={() => setEditing(true)}>
+              Edit custom time
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="workout-duration-timer">
+      <div className="workout-duration-ring-wrap">
+        {phase === 'running' && hasTarget && <RestRing totalSeconds={targetSeconds} resetKey={ringKey} />}
+        <span className={`workout-duration-countdown ${inOvertime ? 'overtime' : ''}`}>
+          {phase === 'idle'
+            ? `${initialSeconds ?? targetSeconds ?? 0}s`
+            : inOvertime
+              ? `+${overtime}s`
+              : `${elapsed}s`}
+        </span>
+      </div>
+      {phase === 'idle' ? (
+        <button type="button" className="workout-duration-btn primary" onClick={start}>
+          Start
+        </button>
+      ) : (
+        <button type="button" className="workout-duration-btn stop" onClick={stop}>
+          Stop
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function WorkoutSessionView({ task, workoutLogSources, dateKey, logsForDate, onLogSet, onClose }) {
   const exercises = task.exercises || [];
   const start = findNextPosition(exercises, logsForDate) || { exerciseIndex: 0, setIndex: 0 };
@@ -121,14 +225,12 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
   // you're mid-keystroke - only the field you're NOT currently typing into gets recomputed.
   const [weightKgText, setWeightKgText] = useState('');
   const [weightLbText, setWeightLbText] = useState('');
-  const [duration, setDuration] = useState('');
 
   useEffect(() => {
     setReps(loggedSet?.reps ?? exercise?.targetReps ?? '');
     const initialKg = loggedSet?.weight ?? lastUsedWeight ?? '';
     setWeightKgText(initialKg === '' ? '' : String(initialKg));
     setWeightLbText(initialKg === '' ? '' : formatNumber(kgToLb(Number(initialKg))));
-    setDuration(loggedSet?.durationSeconds ?? exercise?.targetDurationSeconds ?? '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [exerciseIndex, setIndex]);
 
@@ -188,13 +290,7 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
     }
   };
 
-  const markDone = () => {
-    const values = {
-      reps: isDuration ? null : reps === '' ? null : Number(reps),
-      weight: weightKgText !== '' ? Number(weightKgText) : null,
-      durationSeconds: isDuration ? (duration === '' ? null : Number(duration)) : null,
-      completed: true,
-    };
+  const logSetValues = (values) => {
     onLogSet(exercise, setIndex, values);
     setSessionLogs((prev) => ({
       ...prev,
@@ -214,6 +310,27 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
     } else {
       setFinished(true);
     }
+  };
+
+  const markDone = () => {
+    logSetValues({
+      reps: reps === '' ? null : Number(reps),
+      weight: weightKgText !== '' ? Number(weightKgText) : null,
+      durationSeconds: null,
+      completed: true,
+    });
+  };
+
+  // The DurationTimer's Stop-then-review flow is the only way a duration set gets logged now -
+  // finalSeconds is whatever the user chose there (full time, target-only, or a typed custom
+  // value), not anything read back out of component state here.
+  const markDoneWithDuration = (finalSeconds) => {
+    logSetValues({
+      reps: null,
+      weight: weightKgText !== '' ? Number(weightKgText) : null,
+      durationSeconds: finalSeconds,
+      completed: true,
+    });
   };
 
   const totalCompletedSets = exercises.reduce((sum, ex) => {
@@ -320,7 +437,16 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
             })}
           </div>
 
-          <button type="button" className="workout-ring-tap" onClick={markDone} aria-label="Mark set done">
+          {/* A duration set is only ever logged through the timer below (Stop -> review), so the
+              momentum ring becomes a plain progress display for it - not clickable - rather than
+              a second, conflicting way to mark the set done. */}
+          <button
+            type="button"
+            className={`workout-ring-tap ${isDuration ? 'non-interactive' : ''}`}
+            onClick={isDuration ? undefined : markDone}
+            disabled={isDuration}
+            aria-label={isDuration ? 'Set progress' : 'Mark set done'}
+          >
             <span key={`pulse-${ringAnimKey}`} className="workout-ring-pulse" />
             <svg className="workout-ring-svg" viewBox="0 0 180 180">
               <circle className="workout-ring-track" cx="90" cy="90" r={RING_RADIUS} />
@@ -335,21 +461,18 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
             <span key={`center-${ringAnimKey}`} className="workout-ring-center">
               <span className="workout-ring-num">{setIndex + 1}</span>
               <span className="workout-ring-of">of {totalSets}</span>
-              <span className="workout-ring-hint">Tap ring to log</span>
+              <span className="workout-ring-hint">{isDuration ? 'Use the timer below' : 'Tap ring to log'}</span>
             </span>
           </button>
 
           <div className="inline-fields">
             {isDuration ? (
-              <label>
-                Duration (sec)
-                <input
-                  type="number"
-                  min="0"
-                  value={duration}
-                  onChange={(e) => setDuration(e.target.value)}
-                />
-              </label>
+              <DurationTimer
+                key={`${exerciseIndex}-${setIndex}`}
+                targetSeconds={Number(exercise.targetDurationSeconds) || 0}
+                initialSeconds={loggedSet?.durationSeconds ?? null}
+                onLog={markDoneWithDuration}
+              />
             ) : (
               <label>
                 Reps

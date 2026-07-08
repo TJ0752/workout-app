@@ -2086,6 +2086,14 @@
   color: var(--text-soft);
 }
 
+.workout-ring-tap.non-interactive {
+  cursor: default;
+}
+
+.workout-ring-tap.non-interactive:disabled {
+  opacity: 1;
+}
+
 @keyframes workoutRingPulse {
   0% {
     opacity: 0.7;
@@ -2278,6 +2286,101 @@
 .workout-rest-next {
   color: var(--text-soft);
   font-size: 0.95em;
+}
+
+/* Duration-exercise live timer (see DurationTimer in WorkoutSessionView.jsx) - reuses the same
+   depleting-ring visual as the between-sets rest timer above for its target countdown. */
+.workout-duration-timer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  flex: 1;
+}
+
+.workout-duration-ring-wrap {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  max-width: 40vw;
+  max-height: 40vw;
+}
+
+.workout-duration-countdown {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.7em;
+  font-weight: 800;
+  color: var(--accent);
+}
+
+/* Reached (or exceeded) the target duration - the same "achievement" hue as streaks/PRs, since
+   exceeding a target reads as a small win rather than a warning. */
+.workout-duration-countdown.overtime {
+  color: var(--gold-ink);
+}
+
+.workout-duration-btn {
+  padding: 0.7rem 1.6rem;
+  border-radius: 999px;
+  border: none;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.workout-duration-btn.primary {
+  background: var(--accent);
+  color: var(--card);
+}
+
+.workout-duration-btn.stop {
+  background: var(--bad-soft);
+  color: var(--bad);
+}
+
+.workout-duration-btn.ghost {
+  background: none;
+  color: var(--text-soft);
+  font-weight: 600;
+  padding: 0.3rem 0.6rem;
+}
+
+.workout-duration-review {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.7rem;
+  flex: 1;
+  width: 100%;
+  text-align: center;
+}
+
+.workout-duration-review-total {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.workout-duration-review-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.workout-duration-review-edit {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.workout-duration-review-edit input {
+  flex: 1;
+  min-width: 0;
 }
 
 .workout-skip-rest-btn {
