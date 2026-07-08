@@ -11,6 +11,7 @@ import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
+import java.io.File
 
 /**
  * Downloads a release APK via Android's own DownloadManager (not a browser round-trip) and, once
@@ -61,13 +62,34 @@ class UpdateInstallerPlugin : Plugin() {
             return
         }
 
-        // A real crash, found via a user's on-device bug report: an uncaught exception here
-        // (e.g. the SecurityException DownloadManager.enqueue() threw before this app declared
-        // android.permission.DOWNLOAD_WITHOUT_NOTIFICATION - see the manifest) propagates all
-        // the way up through Capacitor's plugin-dispatch HandlerThread and crashes the whole
-        // process, not just this one call - caught here so any future unexpected failure
-        // rejects the JS promise instead of taking the app down.
+        // A real bug, found via a user's on-device report: every version downloads to the same
+        // fixed destination filename (see assetNameFor's own doc comment in updateCheck.js - the
+        // name is stable per flavor, only the file's *contents* change between versions), and
+        // nothing ever deleted the previous download once it was installed. DownloadManager.
+        // enqueue() fails outright ("the file already exists") the second time around as a
+        // result - confirmed against Android's own DownloadManager issue tracker, a well-known
+        // pitfall of reusing a destination path. The symptom matched exactly: the first update
+        // (a fresh destination file) worked, every one after silently failed at enqueue() and
+        // got swallowed by the catch block below, with no visible error beyond the "Downloading
+        // update..." toast's own auto-hide timeout. DownloadManager.remove() clears both its own
+        // bookkeeping row and the underlying file in one call, so this always leaves a clean
+        // slate before enqueueing - covers a stale "ready" entry from an update that was already
+        // installed, a stuck/failed prior download, and (the explicit file check, since a failed
+        // download's row may already have been cleared by UpdateDownloadReceiver without
+        // removing its partial file) any leftover file not tracked by the store at all.
+        //
+        // A real crash, found via a separate user's on-device bug report: an uncaught exception
+        // here (e.g. the SecurityException DownloadManager.enqueue() threw before this app
+        // declared android.permission.DOWNLOAD_WITHOUT_NOTIFICATION - see the manifest)
+        // propagates all the way up through Capacitor's plugin-dispatch HandlerThread and
+        // crashes the whole process, not just this one call - caught here so any future
+        // unexpected failure rejects the JS promise instead of taking the app down.
         try {
+            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            existing?.let { downloadManager.remove(it.downloadId) }
+            val destinationFile = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), fileName)
+            if (destinationFile.exists()) destinationFile.delete()
+
             val request = DownloadManager.Request(Uri.parse(url))
                 .setTitle("Daily Routines update")
                 .setMimeType("application/vnd.android.package-archive")
@@ -76,7 +98,6 @@ class UpdateInstallerPlugin : Plugin() {
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_HIDDEN)
                 .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, fileName)
 
-            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             val downloadId = downloadManager.enqueue(request)
             UpdateDownloadStore.save(context, UpdateDownloadState(versionCode, downloadId, STATUS_DOWNLOADING))
 

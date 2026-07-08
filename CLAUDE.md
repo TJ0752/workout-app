@@ -1588,6 +1588,37 @@ something that can be almost entirely automatic.
   update silently isn't offered this time" instead of taking the whole app down. This is
   also the answer to whether this feature was "verified on a real device beyond
   compile-correctness" — it was, and that verification is exactly what caught this.
+- **A real bug, found via a user's on-device report: the second update ever downloaded silently
+  failed.** The first auto-update worked end-to-end; every one after produced the "Downloading
+  update…" toast and then nothing — no notification, no "Install" banner. Root cause: every
+  version downloads to the exact same fixed destination filename (`assetNameFor` returns
+  `app-{flavor}-debug.apk` regardless of version, by design — the filename only needs to identify
+  the flavor, not the version), and nothing ever deleted the previous download once it was
+  installed. `DownloadManager.enqueue()` fails outright the second time a destination file already
+  exists — a well-documented pitfall of reusing a destination path (confirmed against Android's own
+  DownloadManager issue tracker, not assumed), and the resulting exception was swallowed by
+  `downloadUpdate()`'s own `try`/`catch` from the fix above, rejecting the JS promise with no
+  visible error beyond the toast's own auto-hide timeout. Fixed by having `downloadUpdate()` call
+  `DownloadManager.remove(existing.downloadId)` (clears both the bookkeeping row and the
+  underlying file in one call) for whatever entry `UpdateDownloadStore` was already holding, plus
+  an explicit `File.exists()`/`delete()` check on the destination path itself as a second line of
+  defense for a file left over from before this fix existed, or from a failed download whose
+  `UpdateDownloadStore` entry `UpdateDownloadReceiver` already cleared without removing its
+  partial file — both run unconditionally before every `enqueue()` call now, not just when a
+  version mismatch is detected.
+- **`UpdateChecker.jsx` also re-checks on every foreground transition, not just cold app-open** —
+  per a direct user request, since the persistent background-sync process (see above) already
+  keeps the app process alive for long stretches while backgrounded, and a silent check that only
+  ever ran once per fresh launch missed exactly that case. `App.addListener('appStateChange', ({
+  isActive }) => { if (isActive) runCheck(true) })` re-runs the same silent check
+  `checkForUpdate()`/`downloadUpdate()` path used on mount. This surfaced a latent bug of its own:
+  `startDownload()` used to unconditionally set status to `'downloading'` before awaiting
+  `downloadUpdate()`, ignoring what it actually resolved with — harmless when only ever called
+  once per cold open, but a foreground re-check firing while a previous download was already
+  sitting `'ready'` (its Install banner showing) would silently stomp that back to a transient
+  "downloading" toast that then auto-hides to idle, dropping the banner for no real reason. Fixed
+  by checking `response?.status === 'ready'` first and short-circuiting straight back to the
+  `'ready'` state instead of falling through to the downloading-toast path.
 
 ### Design system
 

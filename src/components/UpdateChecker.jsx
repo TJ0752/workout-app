@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
+import { App } from '@capacitor/app';
 import { DownloadCloud, X } from 'lucide-react';
 import { checkForUpdate, downloadUpdate, installReadyUpdate, initUpdateReadyListener } from '../utils/updateCheck';
 
@@ -15,9 +16,19 @@ export default function UpdateChecker() {
   const [status, setStatus] = useState('idle'); // idle | checking | downloading | ready | up-to-date | error
 
   const startDownload = async (result) => {
-    setStatus('downloading');
     try {
-      await downloadUpdate(result);
+      const response = await downloadUpdate(result);
+      // downloadUpdate() no-ops (without re-enqueuing) and resolves with whatever status this
+      // exact versionCode already has if it's already downloading or ready - important now that
+      // runCheck(true) also re-runs on every foreground transition (see below), not just cold
+      // open: without checking this, re-foregrounding the app while an update sat "ready" (its
+      // Install banner showing) would blindly stomp that back to a transient "downloading" toast
+      // that then auto-hides to idle, silently dropping the banner for no actual reason.
+      if (response?.status === 'ready') {
+        setStatus('ready');
+        return;
+      }
+      setStatus('downloading');
       // downloadUpdate() only confirms the download was *enqueued*, not complete - the actual
       // "ready" transition arrives later via initUpdateReadyListener below (or is already true
       // if a prior check's download finished while this component wasn't mounted to see it).
@@ -52,8 +63,17 @@ export default function UpdateChecker() {
   useEffect(() => {
     runCheck(true);
     const listenerPromise = initUpdateReadyListener(() => setStatus('ready'));
+    // Re-checks on every foreground transition, not just the initial mount - a silent check on
+    // cold-open alone missed the common case of an app left running in the background for a
+    // while (the whole point of the persistent background-sync process, see CLAUDE.md) getting
+    // brought back to the foreground without a fresh launch. `isActive` is false on the
+    // corresponding backgrounding transition, which this deliberately ignores.
+    const appStateListenerPromise = App.addListener('appStateChange', ({ isActive }) => {
+      if (isActive) runCheck(true);
+    });
     return () => {
       listenerPromise?.then((handle) => handle.remove());
+      appStateListenerPromise?.then((handle) => handle.remove());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
