@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
+import { App } from '@capacitor/app';
 import { ArrowLeft, DownloadCloud, History, UploadCloud } from 'lucide-react';
 import { exportBackup, importBackup, listAutoBackups, restoreAutoBackup, formatAutoBackupName } from '../backup';
 
@@ -9,10 +10,20 @@ export default function SettingsView({ onClose, onImported }) {
   const [importError, setImportError] = useState('');
   const [autoBackups, setAutoBackups] = useState([]);
   const [restoringName, setRestoringName] = useState(null);
+  const [appInfo, setAppInfo] = useState(null);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
     listAutoBackups().then(setAutoBackups);
+    // Native-only, like everything else this app can't know on web (there's no installed build
+    // to report on) - versionName/versionCode are both set at CI build time from the same GitHub
+    // Actions run number (see android-build.yml), so either one alone already uniquely identifies
+    // exactly which build is installed; showing both just makes that easier to read at a glance.
+    if (Capacitor.isNativePlatform()) {
+      App.getInfo()
+        .then(setAppInfo)
+        .catch(() => {});
+    }
   }, []);
 
   const handleExport = async () => {
@@ -81,6 +92,13 @@ export default function SettingsView({ onClose, onImported }) {
       </header>
 
       <div className="settings-body">
+        {appInfo && (
+          <p className="settings-version">
+            Version {appInfo.version} (build {appInfo.build})
+            {appInfo.id?.endsWith('.dev') ? ' · Test build' : ''}
+          </p>
+        )}
+
         <div className="section-title">Data backup</div>
         <p className="settings-desc">
           A fresh snapshot is saved automatically every time you open the app, so there's always a

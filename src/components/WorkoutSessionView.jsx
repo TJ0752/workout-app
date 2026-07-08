@@ -71,19 +71,55 @@ function RestRing({ totalSeconds, resetKey }) {
 }
 
 /**
+ * The dominant, full-screen tap target for logging a set - the same circle shown whenever a
+ * task/exercise is actively being worked, filling in step by step as `fraction` grows (a spring-
+ * like transition already defined on `.workout-ring-fill`, reused as-is). Shared between the
+ * plain reps-tap flow (interactive, fills as sets complete) and DurationTimer below
+ * (non-interactive, fills as time elapses) - both draw from the identical SVG/CSS, not two
+ * look-alike rings, so "the same circle" is literal, not just visually similar.
+ */
+function MomentumRing({ fraction, interactive, onClick, pulseKey = 0, hint, children }) {
+  const offset = RING_CIRCUMFERENCE - Math.max(0, Math.min(1, fraction)) * RING_CIRCUMFERENCE;
+  return (
+    <button
+      type="button"
+      className={`workout-ring-tap ${interactive ? '' : 'non-interactive'}`}
+      onClick={interactive ? onClick : undefined}
+      disabled={!interactive}
+      aria-label={hint}
+    >
+      <span key={`pulse-${pulseKey}`} className="workout-ring-pulse" />
+      <svg className="workout-ring-svg" viewBox="0 0 180 180">
+        <circle className="workout-ring-track" cx="90" cy="90" r={RING_RADIUS} />
+        <circle
+          className="workout-ring-fill"
+          cx="90"
+          cy="90"
+          r={RING_RADIUS}
+          style={{ strokeDasharray: RING_CIRCUMFERENCE, strokeDashoffset: offset }}
+        />
+      </svg>
+      <span key={`center-${pulseKey}`} className="workout-ring-center">
+        {children}
+      </span>
+    </button>
+  );
+}
+
+/**
  * A live, auto-continuing timer for a duration-based set. Counts down from the exercise's
- * target duration, reusing the same depleting-ring/one-time-blink visual as the between-sets
- * RestRing above for the "target reached" signal, then keeps counting up into overtime
- * automatically - there is deliberately no "continue" button, matching the plain elapsed
- * count-up that follows. The only manual action is Stop, which moves to a review step letting
- * the user log the full time (target + overtime), the target only (disregarding overtime), or a
- * typed custom value. The parent remounts this via a `key` on exerciseIndex/setIndex, so its own
- * phase/elapsed state never needs resetting by hand when the user moves to a different set.
+ * target duration - shown in the same MomentumRing every other set type uses, filling up as
+ * elapsed time approaches the target rather than a separate depleting ring - then keeps counting
+ * up into overtime automatically once it reaches zero: there is deliberately no "continue"
+ * button. The only manual actions are Stop (moves to a review step letting the user log the full
+ * time, the target only, or a typed custom value) and, from that review step, "Start again" (an
+ * explicit redo that discards this attempt with nothing logged, for a mis-timed or aborted set).
+ * The parent remounts this via a `key` on exerciseIndex/setIndex, so its own phase/elapsed state
+ * never needs resetting by hand when the user moves to a different set.
  */
 function DurationTimer({ targetSeconds, initialSeconds, onLog }) {
   const [phase, setPhase] = useState('idle'); // 'idle' | 'running' | 'stopped'
   const [elapsed, setElapsed] = useState(0);
-  const [ringKey, setRingKey] = useState(0);
   const [editing, setEditing] = useState(false);
   const [customValue, setCustomValue] = useState('');
 
@@ -96,10 +132,14 @@ function DurationTimer({ targetSeconds, initialSeconds, onLog }) {
   const hasTarget = targetSeconds > 0;
   const overtime = hasTarget ? Math.max(0, elapsed - targetSeconds) : 0;
   const inOvertime = hasTarget && elapsed >= targetSeconds;
+  // Fills up toward 1 as elapsed approaches the target (mirroring how the same ring fills as
+  // sets complete elsewhere), then just stays full through overtime rather than continuing past
+  // a full circle.
+  const fraction = phase === 'idle' ? 0 : hasTarget ? Math.min(1, elapsed / targetSeconds) : 0;
 
   const start = () => {
     setElapsed(0);
-    setRingKey((k) => k + 1);
+    setEditing(false);
     setPhase('running');
   };
 
@@ -111,66 +151,79 @@ function DurationTimer({ targetSeconds, initialSeconds, onLog }) {
 
   if (phase === 'stopped') {
     return (
-      <div className="workout-duration-review">
-        <span className="workout-duration-review-total">{elapsed}s logged</span>
-        {editing ? (
-          <div className="workout-duration-review-edit">
-            <input
-              type="number"
-              min="0"
-              autoFocus
-              value={customValue}
-              onChange={(e) => setCustomValue(e.target.value)}
-            />
-            <button
-              type="button"
-              className="workout-duration-btn primary"
-              onClick={() => onLog(customValue === '' ? 0 : Number(customValue))}
-            >
-              Confirm
-            </button>
-          </div>
-        ) : (
-          <div className="workout-duration-review-actions">
-            <button type="button" className="workout-duration-btn primary" onClick={() => onLog(elapsed)}>
-              {overtime > 0 ? `Log full time (${elapsed}s)` : `Log time (${elapsed}s)`}
-            </button>
-            {overtime > 0 && (
-              <button type="button" className="workout-duration-btn" onClick={() => onLog(targetSeconds)}>
-                Log target only ({targetSeconds}s)
+      <>
+        <MomentumRing fraction={fraction} interactive={false} hint="Duration set progress">
+          <span className="workout-ring-num">{elapsed}s</span>
+          <span className="workout-ring-hint">Logged</span>
+        </MomentumRing>
+        <div className="workout-duration-review">
+          <span className="workout-duration-review-total">{elapsed}s logged</span>
+          {editing ? (
+            <div className="workout-duration-review-edit">
+              <input
+                type="number"
+                min="0"
+                autoFocus
+                value={customValue}
+                onChange={(e) => setCustomValue(e.target.value)}
+              />
+              <button
+                type="button"
+                className="workout-duration-btn primary"
+                onClick={() => onLog(customValue === '' ? 0 : Number(customValue))}
+              >
+                Confirm
               </button>
-            )}
-            <button type="button" className="workout-duration-btn ghost" onClick={() => setEditing(true)}>
-              Edit custom time
-            </button>
-          </div>
-        )}
-      </div>
+            </div>
+          ) : (
+            <div className="workout-duration-review-actions">
+              <button type="button" className="workout-duration-btn primary" onClick={() => onLog(elapsed)}>
+                {overtime > 0 ? `Log full time (${elapsed}s)` : `Log time (${elapsed}s)`}
+              </button>
+              {overtime > 0 && (
+                <button type="button" className="workout-duration-btn" onClick={() => onLog(targetSeconds)}>
+                  Log target only ({targetSeconds}s)
+                </button>
+              )}
+              <button type="button" className="workout-duration-btn ghost" onClick={() => setEditing(true)}>
+                Edit custom time
+              </button>
+              <button type="button" className="workout-duration-btn ghost" onClick={start}>
+                Start again
+              </button>
+            </div>
+          )}
+        </div>
+      </>
     );
   }
 
   return (
-    <div className="workout-duration-timer">
-      <div className="workout-duration-ring-wrap">
-        {phase === 'running' && hasTarget && <RestRing totalSeconds={targetSeconds} resetKey={ringKey} />}
-        <span className={`workout-duration-countdown ${inOvertime ? 'overtime' : ''}`}>
+    <>
+      <MomentumRing fraction={fraction} interactive={false} hint="Duration timer">
+        <span className={`workout-ring-num ${inOvertime ? 'overtime' : ''}`}>
           {phase === 'idle'
             ? `${initialSeconds ?? targetSeconds ?? 0}s`
             : inOvertime
               ? `+${overtime}s`
               : `${elapsed}s`}
         </span>
+        <span className="workout-ring-hint">
+          {phase === 'idle' ? 'Ready' : inOvertime ? 'Overtime' : hasTarget ? 'Target' : 'Elapsed'}
+        </span>
+      </MomentumRing>
+      <div className="workout-duration-timer">
+        {phase === 'idle' ? (
+          <button type="button" className="workout-duration-btn primary" onClick={start}>
+            Start
+          </button>
+        ) : (
+          <button type="button" className="workout-duration-btn stop" onClick={stop}>
+            Stop
+          </button>
+        )}
       </div>
-      {phase === 'idle' ? (
-        <button type="button" className="workout-duration-btn primary" onClick={start}>
-          Start
-        </button>
-      ) : (
-        <button type="button" className="workout-duration-btn stop" onClick={stop}>
-          Stop
-        </button>
-      )}
-    </div>
+    </>
   );
 }
 
@@ -362,7 +415,6 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
 
   const completedCount = setsForExercise.filter((s) => s.completed).length;
   const ringFraction = completedCount / totalSets;
-  const ringOffset = RING_CIRCUMFERENCE - ringFraction * RING_CIRCUMFERENCE;
 
   return (
     <div className="workout-session">
@@ -437,49 +489,31 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
             })}
           </div>
 
-          {/* A duration set is only ever logged through the timer below (Stop -> review), so the
-              momentum ring becomes a plain progress display for it - not clickable - rather than
-              a second, conflicting way to mark the set done. */}
-          <button
-            type="button"
-            className={`workout-ring-tap ${isDuration ? 'non-interactive' : ''}`}
-            onClick={isDuration ? undefined : markDone}
-            disabled={isDuration}
-            aria-label={isDuration ? 'Set progress' : 'Mark set done'}
-          >
-            <span key={`pulse-${ringAnimKey}`} className="workout-ring-pulse" />
-            <svg className="workout-ring-svg" viewBox="0 0 180 180">
-              <circle className="workout-ring-track" cx="90" cy="90" r={RING_RADIUS} />
-              <circle
-                className="workout-ring-fill"
-                cx="90"
-                cy="90"
-                r={RING_RADIUS}
-                style={{ strokeDasharray: RING_CIRCUMFERENCE, strokeDashoffset: ringOffset }}
-              />
-            </svg>
-            <span key={`center-${ringAnimKey}`} className="workout-ring-center">
-              <span className="workout-ring-num">{setIndex + 1}</span>
-              <span className="workout-ring-of">of {totalSets}</span>
-              <span className="workout-ring-hint">{isDuration ? 'Use the timer below' : 'Tap ring to log'}</span>
-            </span>
-          </button>
-
-          <div className="inline-fields">
-            {isDuration ? (
-              <DurationTimer
-                key={`${exerciseIndex}-${setIndex}`}
-                targetSeconds={Number(exercise.targetDurationSeconds) || 0}
-                initialSeconds={loggedSet?.durationSeconds ?? null}
-                onLog={markDoneWithDuration}
-              />
-            ) : (
-              <label>
-                Reps
-                <input type="number" min="0" value={reps} onChange={(e) => setReps(e.target.value)} />
-              </label>
-            )}
-          </div>
+          {/* A duration set is only ever logged through DurationTimer's own Stop -> review flow
+              (it renders its own copy of this same ring), so there's nothing to render here for
+              it beyond that component itself. */}
+          {isDuration ? (
+            <DurationTimer
+              key={`${exerciseIndex}-${setIndex}`}
+              targetSeconds={Number(exercise.targetDurationSeconds) || 0}
+              initialSeconds={loggedSet?.durationSeconds ?? null}
+              onLog={markDoneWithDuration}
+            />
+          ) : (
+            <>
+              <MomentumRing fraction={ringFraction} interactive onClick={markDone} pulseKey={ringAnimKey} hint="Mark set done">
+                <span className="workout-ring-num">{setIndex + 1}</span>
+                <span className="workout-ring-of">of {totalSets}</span>
+                <span className="workout-ring-hint">Tap ring to log</span>
+              </MomentumRing>
+              <div className="inline-fields">
+                <label>
+                  Reps
+                  <input type="number" min="0" value={reps} onChange={(e) => setReps(e.target.value)} />
+                </label>
+              </div>
+            </>
+          )}
 
           <div className="workout-weight-block">
             <span className="field-label">
@@ -539,7 +573,7 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
             >
               <ChevronLeft size={26} />
             </button>
-            <span className="workout-set-nav-hint">Tap the ring to log the set</span>
+            <span className="workout-set-nav-hint">{isDuration ? 'Use the timer above' : 'Tap the ring to log the set'}</span>
             <button
               type="button"
               className="workout-set-nav-btn"

@@ -1002,63 +1002,76 @@ flow (and the rest-timer's already-built depleting-ring visual, see `RestRing` j
 same file) covers the same need with far less new surface area.
 
 - **Phases: idle → running → stopped (review).** Tapping "Start" begins a countdown from the
-  exercise's `targetDurationSeconds`, visualized with the exact same `RestRing` component the
-  between-sets rest screen uses (same depleting-ring-then-blink-once visual for "target reached") —
-  reused as-is, not duplicated, since it's already a generic `{totalSeconds, resetKey}` component.
-  **At zero, it does not stop or wait for a tap** — the numeric display keeps ticking upward into
-  overtime automatically (`+Ns`, styled in `--gold-ink` — the same "achievement" hue this app
-  reserves for streaks/PRs, since exceeding a target reads as a small win, not a warning) for as
-  long as the user keeps going. There is deliberately no "Continue" button anywhere in this flow —
-  a first draft of this design had one, and it was explicitly rejected: "there should be no manual
-  click needed to continue timing after the initial target time is completed. it should keep
-  going." **The only manual action for the entire set is "Stop."**
-- **Review step, not an immediate log.** Stopping moves to a review screen offering up to three
-  choices, matching a direct product requirement almost verbatim ("give the option to either log
-  or disregard extra time, or even edit and amend extra time, or final logged time"): "Log full
-  time" (target + overtime, the default/primary action), "Log target only" (disregard the
-  overtime — only rendered when `overtime > 0`, since there's nothing to disregard if the user
-  stopped before ever reaching the target), and "Edit custom time" (a plain number input,
-  prefilled with the full elapsed value, with its own Confirm button). All three funnel into the
-  identical `onLog(finalSeconds)` callback → `markDoneWithDuration` → the same `logSetValues`
-  pathway a manually-typed duration always used — no analytics-layer changes were needed at all,
-  since `getExerciseDurationPR`/`getExerciseTotalDuration` already operate on the raw logged
-  value, not the clamped 0–1 completion fraction; confirmed directly against a real
-  `workout_logs` row via a Playwright round-trip (typing 99 into "Edit custom time" for a 2s-target
-  exercise persisted `duration_seconds: 99`, not `2` or a clamped value).
-- **The momentum ring becomes a plain progress display, not a second "mark done" affordance.**
-  For every other completion type, tapping the big central ring *is* how a set gets logged
-  (`onClick={markDone}`). For a duration exercise, logging only ever happens through
-  `DurationTimer`'s Stop → review flow, so the ring gets `disabled` and a `.non-interactive`
-  class (opacity untouched, cursor reset to default) instead, with its hint text changed to "Use
-  the timer below" — having two different ways to log the same set (tap the ring *or* run the
-  timer) would race each other and isn't what was asked for.
+  exercise's `targetDurationSeconds`. **At zero, it does not stop or wait for a tap** — the
+  numeric display keeps ticking upward into overtime automatically (`+Ns`, styled in
+  `--gold-ink`/`AppPalette.GoldInk` — the same "achievement" hue this app reserves for
+  streaks/PRs, since exceeding a target reads as a small win, not a warning) for as long as the
+  user keeps going. There is deliberately no "Continue" button anywhere in this flow — a first
+  draft of this design had one, and it was explicitly rejected: "there should be no manual click
+  needed to continue timing after the initial target time is completed. it should keep going."
+  The only manual actions are "Stop" (below) and, once stopped, "Start again" (see the review
+  step below) — there is no in-place pause/resume.
+- **The countdown renders inside the exact same ring used everywhere else progress "fills in
+  step by step"** — the momentum ring that fills as sets complete on every other completion
+  type — not a second, differently-styled ring, per explicit product feedback ("use the same
+  circle as shown on the start screen"). Both platforms refactored their momentum-ring
+  composable/component to take a `fraction` (elapsed/target, capped at 1, instead of
+  completed-sets/total-sets) plus custom center content, so `DurationTimer` renders its own copy
+  of the identical ring rather than a separate `RestRing`-style depleting ring: web extracted a
+  standalone `MomentumRing({fraction, interactive, onClick, pulseKey, hint, children})` function
+  component (previously this markup was inlined directly in `WorkoutSessionView`'s render); native
+  changed `MomentumRing`'s signature from `(currentSetNumber, totalSets, completedCount, hint)` to
+  `(fraction, centerContent: @Composable () -> Unit)`. The ring fills up (0 → 1) as elapsed
+  approaches the target and then just stays full through overtime, rather than draining down the
+  way the between-sets `RestRing` does — a deliberate visual distinction from resting, matching
+  how progress "fills up" everywhere else in this app rather than depleting.
+- **Review step, not an immediate log.** Stopping moves to a review screen (still shown below
+  the same ring, now frozen at its final fill/value) offering choices matching a direct product
+  requirement almost verbatim ("give the option to either log or disregard extra time, or even
+  edit and amend extra time, or final logged time"): "Log full time" (target + overtime, the
+  default/primary action), "Log target only" (disregard the overtime — only rendered when
+  `overtime > 0`, since there's nothing to disregard if the user stopped before ever reaching the
+  target), "Edit custom time" (a plain number input, prefilled with the full elapsed value, with
+  its own Confirm button), and **"Start again"** (discards this attempt entirely with nothing
+  logged and immediately restarts the timer from zero — a direct redo affordance for a mis-timed
+  or aborted set, added per explicit request; it's just `start()` called from the review step
+  rather than a separate code path). All four/log options funnel into the identical
+  `onLog(finalSeconds)` callback → `markDoneWithDuration` → the same `logSetValues` pathway a
+  manually-typed duration always used — no analytics-layer changes were needed at all, since
+  `getExerciseDurationPR`/`getExerciseTotalDuration` already operate on the raw logged value, not
+  the clamped 0–1 completion fraction; confirmed directly against a real `workout_logs` row via a
+  Playwright round-trip (typing 99 into "Edit custom time" for a 2s-target exercise persisted
+  `duration_seconds: 99`, not `2` or a clamped value).
+- **`markDone()` split into a shared `logSetValues`/`onLogSet` core plus two thin entry points** —
+  a reps-based `markDone()` (the ring's own tap, non-duration only) and
+  `markDoneWithDuration(finalSeconds)` (`DurationTimer`'s `onLog` callback) — on both platforms,
+  since a duration set is now only ever logged through `DurationTimer`'s own Stop → review flow,
+  never by tapping a ring directly (the reps-mode ring keeps its original tap-to-log behavior
+  unchanged, using its own `MomentumRing`/`fraction` call with `interactive = true`).
 - **Remounted via `key`, not manually reset.** `<DurationTimer key={`${exerciseIndex}-${setIndex}`}
-  .../>` — the parent forces a full remount on every set change instead of writing effects to
-  reset `DurationTimer`'s internal `phase`/`elapsed`/`editing` state by hand, the simplest way to
-  guarantee no state leaks from one set's timer into the next.
+  .../>` on web, `key(exerciseIndex, setIndex) { DurationTimer(...) }` on native — the parent
+  forces a full remount on every set change instead of writing effects to reset `DurationTimer`'s
+  internal `phase`/`elapsed`/`editing` state by hand, the simplest way to guarantee no state leaks
+  from one set's timer into the next.
 - **Weight still applies.** The weight field below the timer (labeled "Weight" or "Added weight"
   per the exercise's `type`, same as every other exercise) is untouched by any of this — a
   weighted plank (added weight on top of bodyweight) logs its weight exactly as it always did,
-  independent of which of the three review buttons picked the duration value.
-- **Ported to native Compose as well, with the identical phase/review structure.** The real app's
-  workout session is the native `WorkoutSessionScreen.kt` (see "Native Android workout session"
-  below), not `WorkoutSessionView.jsx` — the web view is only ever reached via `npm run dev` in a
-  browser, so shipping this feature to actual devices required porting it there too, not just
-  building it once on web. `DurationTimer` (a private `@Composable` in the same file, right after
-  `RestRing`) mirrors the JS version's `idle`/`running`/`stopped` phases and review-step choices
-  exactly, reusing the *same* `RestRing` composable the between-sets rest screen already used —
-  `RestRing` gained an optional `labelColor` parameter (defaulting to its prior behavior,
-  non-breaking for its existing call site) so the overtime phase can recolor the countdown text to
-  `AppPalette.GoldInk` without needing a second ring implementation. `MomentumRing` similarly
-  gained `interactive`/`hint` parameters so it can render as a non-clickable progress display (no
-  `clickable` modifier attached at all, not just a no-op `onTap`) with "Use the timer below" for a
-  duration exercise, mirroring the web ring's `.non-interactive` treatment. `markDone()` was split
-  into a shared `logSetValues(SetValues)` plus a thin `markDone()` (ring tap, reps-based) and
-  `markDoneWithDuration(finalSeconds)` (DurationTimer's `onLog` callback) — the exact same
-  refactor `WorkoutSessionView.jsx` needed for the identical reason. The `key(exerciseIndex,
-  setIndex) { DurationTimer(...) }` wrapper is Compose's equivalent of the web version's
-  `<DurationTimer key={...}/>` — forces a full remount (fresh `phase`/`elapsed`/`editing` state) on
-  every set change instead of writing effects to reset it by hand.
+  independent of which review option picked the duration value.
+- **Native gotcha: `Modifier.weight()` only resolves inside a `ColumnScope`/`RowScope` receiver.**
+  `DurationTimer` is a plain `@Composable` function, not a `ColumnScope` extension, so its own
+  internal wrapping `Column` cannot call `.weight(1f)` on itself the way the reps-mode ring's
+  direct parent `Column` can (that one compiles because the `MomentumRing(modifier =
+  Modifier.weight(1f), ...)` call for reps sits lexically inside the *outer* `WorkoutSessionScreen`
+  `Column`, which is genuinely a `ColumnScope`). `DurationTimer`'s own ring uses a fixed
+  `Modifier.fillMaxWidth().height(230.dp)` instead — sized to match the reps ring's typical
+  rendered size (both are capped at 230dp by `MomentumRing`'s own `BoxWithConstraints` logic
+  either way) without needing an extension-function receiver dance.
+- **Ported to native Compose with the identical phase/review structure.** The real app's workout
+  session is the native `WorkoutSessionScreen.kt` (see "Native Android workout session" below),
+  not `WorkoutSessionView.jsx` — the web view is only ever reached via `npm run dev` in a browser,
+  so shipping this feature to actual devices required porting it there too, not just building it
+  once on web (a real gap: a user tried the timer on-device before this port landed and saw the
+  unchanged old manual-entry field, since native hadn't been touched yet).
 
 ### Native Android workout session (`android/shared/`, `android/app/.../workout/`)
 
@@ -1450,6 +1463,16 @@ confirms this explicitly before touching anything, since it can't be undone.
   above. Import needs no native file-picker plugin at all on either platform — a hidden
   `<input type="file" accept="application/json">` already gets a real native file-chooser from the
   Android WebView, standard HTML5 behavior Capacitor doesn't need to wrap.
+
+**Version display.** `SettingsView.jsx` shows "Version {versionName} (build {versionCode})" right
+below the header, native-only (`Capacitor.isNativePlatform()`, fetched via `App.getInfo()`) since
+there's no installed build to report on web. Added per a direct user request to "easily identify
+which version my app is on" — both numbers are set at CI build time from the same GitHub Actions
+run number (`versionName = 1.0.{run_number}`, `versionCode = {run_number}`, see
+`android-build.yml`), so either alone already uniquely identifies the exact build; showing both
+just makes it easier to read at a glance. Appends "· Test build" when `applicationId` ends in
+`.dev`, so it's obvious at a glance which of the two installed flavors (see "Test app / product
+flavors" below) is being looked at.
 
 ### Android signing (`android/debug.keystore`)
 

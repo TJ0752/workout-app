@@ -446,19 +446,10 @@ fun WorkoutSessionScreen(
                         }
                     }
 
-                    // A duration set is only ever logged through DurationTimer's Stop -> review
-                    // flow below, so the ring becomes a plain progress display for it - not
-                    // interactive - rather than a second, conflicting way to mark the set done.
-                    MomentumRing(
-                        modifier = Modifier.weight(1f),
-                        currentSetNumber = setIndex + 1,
-                        totalSets = totalSets,
-                        completedCount = setsForExercise.count { it.completed },
-                        interactive = !isDuration,
-                        hint = if (isDuration) "Use the timer below" else "Tap ring to log",
-                        onTap = ::markDone,
-                    )
-
+                    // A duration set is only ever logged through DurationTimer's own Stop -> review
+                    // flow, and it renders its own copy of this same ring internally - see
+                    // MomentumRing/DurationTimer below - so there's nothing to render here for it
+                    // beyond that one component call.
                     if (isDuration) {
                         // key(...), not a remember(exerciseIndex, setIndex) inside DurationTimer -
                         // forces a full remount (phase/elapsed/editing all reset) on every set
@@ -471,6 +462,17 @@ fun WorkoutSessionScreen(
                             )
                         }
                     } else {
+                        MomentumRing(
+                            modifier = Modifier.weight(1f),
+                            fraction = setsForExercise.count { it.completed }.toFloat() / totalSets.toFloat(),
+                            interactive = true,
+                            onTap = ::markDone,
+                        ) {
+                            Text("${setIndex + 1}", fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onBackground)
+                            Text("of $totalSets", fontSize = 13.sp, letterSpacing = 1.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(6.dp))
+                            Text("Tap ring to log", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -599,7 +601,6 @@ private fun RestRing(
     resetKey: Int,
     remainingLabel: String,
     modifier: Modifier = Modifier,
-    labelColor: Color? = null,
 ) {
     val fraction = remember { Animatable(1f) }
     val blinkAlpha = remember { Animatable(1f) }
@@ -643,20 +644,21 @@ private fun RestRing(
                 style = Stroke(width = stroke, cap = StrokeCap.Round),
             )
         }
-        Text(remainingLabel, fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = labelColor ?: numberColor)
+        Text(remainingLabel, fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = numberColor)
     }
 }
 
 /**
  * A live, auto-continuing timer for a duration-based set - the native counterpart of
- * WorkoutSessionView.jsx's DurationTimer. Counts down from the exercise's target duration,
- * reusing RestRing above for the same depleting-ring/one-time-blink "target reached" visual, then
- * keeps counting up into overtime automatically once it reaches zero - there is deliberately no
- * "continue" button. The only manual action is Stop, which moves to a review step letting the
- * user log the full time (target + overtime), the target only (disregarding overtime - only
- * offered when there's overtime to disregard), or a typed custom value. The caller wraps this in
- * `key(exerciseIndex, setIndex) { ... }` so its own phase/elapsed state never needs resetting by
- * hand when the user moves to a different set.
+ * WorkoutSessionView.jsx's DurationTimer. Counts down from the exercise's target duration, shown
+ * in the same MomentumRing every other set type uses (filling up as elapsed time approaches the
+ * target, rather than a separate depleting ring), then keeps counting up into overtime
+ * automatically once it reaches zero - there is deliberately no "continue" button. The only
+ * manual actions are Stop (moves to a review step letting the user log the full time, the target
+ * only, or a typed custom value) and, from that review step, "Start again" (an explicit redo that
+ * discards this attempt with nothing logged, for a mis-timed or aborted set). The caller wraps
+ * this in `key(exerciseIndex, setIndex) { ... }` so its own phase/elapsed state never needs
+ * resetting by hand when the user moves to a different set.
  */
 @Composable
 private fun DurationTimer(
@@ -666,7 +668,6 @@ private fun DurationTimer(
 ) {
     var phase by remember { mutableStateOf("idle") } // "idle" | "running" | "stopped"
     var elapsed by remember { mutableStateOf(0) }
-    var ringKey by remember { mutableStateOf(0) }
     var editing by remember { mutableStateOf(false) }
     var customValue by remember { mutableStateOf("") }
 
@@ -680,10 +681,14 @@ private fun DurationTimer(
     val hasTarget = targetSeconds > 0
     val overtime = if (hasTarget) maxOf(0, elapsed - targetSeconds) else 0
     val inOvertime = hasTarget && elapsed >= targetSeconds
+    // Fills up toward 1 as elapsed approaches the target (mirroring how the same ring fills as
+    // sets complete elsewhere), then just stays full through overtime rather than continuing
+    // past a full circle.
+    val fraction = if (phase != "idle" && hasTarget) (elapsed.toFloat() / targetSeconds.toFloat()).coerceAtMost(1f) else 0f
 
     fun start() {
         elapsed = 0
-        ringKey += 1
+        editing = false
         phase = "running"
     }
 
@@ -695,10 +700,14 @@ private fun DurationTimer(
 
     if (phase == "stopped") {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+            modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("${elapsed}s logged", fontWeight = FontWeight.Bold, color = AppPalette.TextMain)
+            MomentumRing(modifier = Modifier.fillMaxWidth().height(230.dp), fraction = fraction, interactive = false) {
+                Text("${elapsed}s", fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onBackground)
+                Text("Logged", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text("${elapsed}s logged", fontWeight = FontWeight.Bold, color = AppPalette.TextMain, modifier = Modifier.padding(top = 10.dp))
             Spacer(Modifier.height(10.dp))
             if (editing) {
                 Row(
@@ -745,6 +754,9 @@ private fun DurationTimer(
                     TextButton(onClick = { editing = true }, modifier = Modifier.fillMaxWidth()) {
                         Text("Edit custom time", color = AppPalette.TextSoft)
                     }
+                    TextButton(onClick = ::start, modifier = Modifier.fillMaxWidth()) {
+                        Text("Start again", color = AppPalette.TextSoft)
+                    }
                 }
             }
         }
@@ -752,41 +764,37 @@ private fun DurationTimer(
     }
 
     Column(
-        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+        modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        when {
-            phase == "running" && hasTarget ->
-                RestRing(
-                    totalSeconds = targetSeconds,
-                    resetKey = ringKey,
-                    remainingLabel = if (inOvertime) "+${overtime}s" else "${elapsed}s",
-                    labelColor = if (inOvertime) AppPalette.GoldInk else null,
-                )
-            phase == "running" ->
-                // No configured target duration - a plain stopwatch count-up, no ring to deplete.
-                Text(
-                    "${elapsed}s",
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = AppPalette.Accent,
-                    modifier = Modifier.padding(vertical = 32.dp),
-                )
-            else ->
-                // Idle: show whatever was already logged for this set, if anything, else the
-                // configured target - matching WorkoutSessionView.jsx's identical fallback order.
-                Text(
-                    "${initialSeconds ?: targetSeconds}s",
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = AppPalette.Accent,
-                    modifier = Modifier.padding(vertical = 32.dp),
-                )
+        MomentumRing(modifier = Modifier.fillMaxWidth().height(230.dp), fraction = fraction, interactive = false) {
+            Text(
+                text = when {
+                    phase == "idle" -> "${initialSeconds ?: targetSeconds}s"
+                    inOvertime -> "+${overtime}s"
+                    else -> "${elapsed}s"
+                },
+                fontSize = 48.sp,
+                fontWeight = FontWeight.ExtraBold,
+                // Reached (or exceeded) the target duration - the same "achievement" hue as
+                // streaks/PRs, since exceeding a target reads as a small win, not a warning.
+                color = if (inOvertime) AppPalette.GoldInk else MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+                when {
+                    phase == "idle" -> "Ready"
+                    inOvertime -> "Overtime"
+                    hasTarget -> "Target"
+                    else -> "Elapsed"
+                },
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         Button(
             onClick = if (phase == "idle") ::start else ::stop,
             shape = RoundedCornerShape(999.dp),
-            modifier = Modifier.height(52.dp).padding(top = 8.dp),
+            modifier = Modifier.height(52.dp).padding(top = 10.dp),
             colors = if (phase == "running") {
                 ButtonDefaults.buttonColors(containerColor = AppPalette.Bad.copy(alpha = 0.15f), contentColor = AppPalette.Bad)
             } else {
@@ -808,14 +816,12 @@ private fun DurationTimer(
 @Composable
 private fun MomentumRing(
     modifier: Modifier = Modifier,
-    currentSetNumber: Int,
-    totalSets: Int,
-    completedCount: Int,
+    fraction: Float,
     interactive: Boolean = true,
-    hint: String = "Tap ring to log",
-    onTap: () -> Unit,
+    onTap: () -> Unit = {},
+    centerContent: @Composable () -> Unit,
 ) {
-    val targetFraction = completedCount.toFloat() / totalSets.toFloat()
+    val targetFraction = fraction.coerceIn(0f, 1f)
     val animatedFraction = remember { Animatable(targetFraction) }
     LaunchedEffect(targetFraction) {
         animatedFraction.animateTo(
@@ -831,8 +837,6 @@ private fun MomentumRing(
 
     val ringColor = MaterialTheme.colorScheme.primary
     val trackColor = MaterialTheme.colorScheme.outlineVariant
-    val numberColor = MaterialTheme.colorScheme.onBackground
-    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
 
     // BoxWithConstraints, not a fixed .size(230.dp) - the column that hosts this ring passes
     // Modifier.weight(1f), and a fixed size on top of a weight-derived height allocation lets
@@ -914,10 +918,7 @@ private fun MomentumRing(
                 )
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("$currentSetNumber", fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = numberColor)
-                Text("of $totalSets", fontSize = 13.sp, letterSpacing = 1.sp, color = labelColor)
-                Spacer(Modifier.height(6.dp))
-                Text(hint, fontSize = 11.sp, color = labelColor)
+                centerContent()
             }
         }
     }
