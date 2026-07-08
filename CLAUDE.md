@@ -1441,15 +1441,26 @@ something that can be almost entirely automatic.
   render on `Capacitor.isNativePlatform()` and the native plugin is registered unconditionally
   alongside every other plugin in `MainActivity.java`, the same way this codebase treats every
   other "native-only, no web fallback needed" feature.
-- **Not yet verified on a real device beyond compile-correctness** — this dev environment has no
-  Android SDK and the manual-dispatch emulator harness would need a real newer GitHub Release to
-  exercise the actual download+notification+install path meaningfully, which isn't something this
-  session can trigger deterministically. `DownloadManager` + `ACTION_DOWNLOAD_COMPLETE` +
-  `getUriForDownloadedFile()` + `REQUEST_INSTALL_PACKAGES` is a long-established, widely-used
-  Android pattern (unlike the more version-specific APIs this project has been burned by before),
-  but real-device confirmation from an actual release is still pending — documented here as an
-  open item, not claimed as proven, consistent with this project's standing practice for native
-  work this environment can't directly verify.
+- **A real crash, found via a user's on-device bug report, not CI or the emulator harness.**
+  `DownloadManager.Request.setNotificationVisibility(VISIBILITY_HIDDEN)` throws
+  `SecurityException: Invalid value for visibility: 2` from `DownloadManager.enqueue()`
+  unconditionally unless the app declares `android.permission.DOWNLOAD_WITHOUT_NOTIFICATION`
+  — confirmed against AOSP's `DownloadProvider` manifest source
+  (`protectionLevel="normal"`, so a plain manifest declaration is sufficient, no runtime
+  prompt) rather than assumed. This app hadn't declared it, so the very first silent
+  auto-download after this feature shipped crashed the app on every reopen — a genuine
+  crash loop, since the same check-and-download runs again on every app open until the
+  update is actually installed. Fixed by adding the permission. This also exposed a second,
+  more structural gap: the exception was thrown *inside* a `@PluginMethod` body with no
+  `try`/`catch`, and it propagated uncaught through Capacitor's plugin-dispatch
+  `HandlerThread` and killed the whole process — an uncaught exception on *any* thread
+  crashes the app by default, not just the main thread, the same failure class as the boot
+  receivers' credential-storage crash above. Both `downloadUpdate()`/`installReadyUpdate()`
+  and `UpdateDownloadReceiver.onReceive()` now wrap their bodies in `try`/`catch` and
+  `call.reject(...)`/no-op respectively, so a future unexpected failure degrades to "the
+  update silently isn't offered this time" instead of taking the whole app down. This is
+  also the answer to whether this feature was "verified on a real device beyond
+  compile-correctness" — it was, and that verification is exactly what caught this.
 
 ### Design system
 

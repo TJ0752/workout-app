@@ -154,4 +154,11 @@
          fires, Android shows a one-time "allow installs from Daily Routines" settings toggle if
          not already granted, then proceeds normally on every install after that. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- For UpdateInstallerPlugin's DownloadManager.Request.VISIBILITY_HIDDEN - a real crash
+         found via a user's on-device bug report: without this, DownloadManager.enqueue() throws
+         SecurityException("Invalid value for visibility: 2") unconditionally, since hiding a
+         download's own notification is gated behind this permission (confirmed against AOSP's
+         DownloadProvider manifest source: protectionLevel="normal", so a plain manifest
+         declaration is sufficient - no runtime prompt). -->
+    <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />
 </manifest>

@@ -24,24 +24,32 @@ class UpdateDownloadReceiver : BroadcastReceiver() {
         val state = UpdateDownloadStore.read(context) ?: return
         if (completedId != state.downloadId) return
 
-        val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val cursor = downloadManager.query(DownloadManager.Query().setFilterById(completedId))
-        val succeeded = cursor.use {
-            if (!it.moveToFirst()) return@use false
-            val statusIndex = it.getColumnIndex(DownloadManager.COLUMN_STATUS)
-            statusIndex >= 0 && it.getInt(statusIndex) == DownloadManager.STATUS_SUCCESSFUL
-        }
-        if (!succeeded) {
-            // Cleared, not left "downloading" forever, so the next check can retry from scratch
-            // rather than getting stuck thinking a (failed) download is still in flight.
-            UpdateDownloadStore.clear(context)
-            return
-        }
+        // An uncaught exception in a BroadcastReceiver crashes the whole app process, not just
+        // this one broadcast delivery - the exact failure mode a real crash (the boot receivers'
+        // credential-storage IllegalStateException, and UpdateInstallerPlugin's own
+        // DownloadManager SecurityException) has already hit twice elsewhere in this app.
+        try {
+            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val cursor = downloadManager.query(DownloadManager.Query().setFilterById(completedId))
+            val succeeded = cursor.use {
+                if (!it.moveToFirst()) return@use false
+                val statusIndex = it.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                statusIndex >= 0 && it.getInt(statusIndex) == DownloadManager.STATUS_SUCCESSFUL
+            }
+            if (!succeeded) {
+                // Cleared, not left "downloading" forever, so the next check can retry from
+                // scratch rather than getting stuck thinking a (failed) download is in flight.
+                UpdateDownloadStore.clear(context)
+                return
+            }
 
-        val uri = downloadManager.getUriForDownloadedFile(completedId) ?: return
-        UpdateDownloadStore.save(context, state.copy(status = STATUS_READY))
-        ensureUpdateChannel(context)
-        NotificationManagerCompat.from(context).notify(UPDATE_READY_NOTIFICATION_ID, buildUpdateReadyNotification(context, uri))
-        UpdateInstallerBridge.onReady?.invoke(state.versionCode)
+            val uri = downloadManager.getUriForDownloadedFile(completedId) ?: return
+            UpdateDownloadStore.save(context, state.copy(status = STATUS_READY))
+            ensureUpdateChannel(context)
+            NotificationManagerCompat.from(context).notify(UPDATE_READY_NOTIFICATION_ID, buildUpdateReadyNotification(context, uri))
+            UpdateInstallerBridge.onReady?.invoke(state.versionCode)
+        } catch (e: Exception) {
+            UpdateDownloadStore.clear(context)
+        }
     }
 }

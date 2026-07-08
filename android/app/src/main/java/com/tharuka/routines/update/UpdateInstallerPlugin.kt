@@ -61,19 +61,29 @@ class UpdateInstallerPlugin : Plugin() {
             return
         }
 
-        val request = DownloadManager.Request(Uri.parse(url))
-            .setTitle("Daily Routines update")
-            .setMimeType("application/vnd.android.package-archive")
-            // Hidden - buildUpdateReadyNotification posts our own notification once the
-            // download completes instead, so the tap target is unambiguously this app.
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_HIDDEN)
-            .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, fileName)
+        // A real crash, found via a user's on-device bug report: an uncaught exception here
+        // (e.g. the SecurityException DownloadManager.enqueue() threw before this app declared
+        // android.permission.DOWNLOAD_WITHOUT_NOTIFICATION - see the manifest) propagates all
+        // the way up through Capacitor's plugin-dispatch HandlerThread and crashes the whole
+        // process, not just this one call - caught here so any future unexpected failure
+        // rejects the JS promise instead of taking the app down.
+        try {
+            val request = DownloadManager.Request(Uri.parse(url))
+                .setTitle("Daily Routines update")
+                .setMimeType("application/vnd.android.package-archive")
+                // Hidden - buildUpdateReadyNotification posts our own notification once the
+                // download completes instead, so the tap target is unambiguously this app.
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_HIDDEN)
+                .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, fileName)
 
-        val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val downloadId = downloadManager.enqueue(request)
-        UpdateDownloadStore.save(context, UpdateDownloadState(versionCode, downloadId, STATUS_DOWNLOADING))
+            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val downloadId = downloadManager.enqueue(request)
+            UpdateDownloadStore.save(context, UpdateDownloadState(versionCode, downloadId, STATUS_DOWNLOADING))
 
-        call.resolve(JSObject().apply { put("status", STATUS_DOWNLOADING) })
+            call.resolve(JSObject().apply { put("status", STATUS_DOWNLOADING) })
+        } catch (e: Exception) {
+            call.reject("Failed to enqueue update download", e)
+        }
     }
 
     /**
@@ -89,13 +99,17 @@ class UpdateInstallerPlugin : Plugin() {
             call.resolve(JSObject().apply { put("installed", false) })
             return
         }
-        val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val uri = downloadManager.getUriForDownloadedFile(state.downloadId)
-        if (uri == null) {
-            call.resolve(JSObject().apply { put("installed", false) })
-            return
+        try {
+            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val uri = downloadManager.getUriForDownloadedFile(state.downloadId)
+            if (uri == null) {
+                call.resolve(JSObject().apply { put("installed", false) })
+                return
+            }
+            context.startActivity(installIntentFor(uri))
+            call.resolve(JSObject().apply { put("installed", true) })
+        } catch (e: Exception) {
+            call.reject("Failed to launch install intent", e)
         }
-        context.startActivity(installIntentFor(uri))
-        call.resolve(JSObject().apply { put("installed", true) })
     }
 }
