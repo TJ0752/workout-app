@@ -185,12 +185,14 @@ function DurationTimer({ targetSeconds, initialSeconds, onLog }) {
                   Log target only ({targetSeconds}s)
                 </button>
               )}
-              <button type="button" className="workout-duration-btn ghost" onClick={() => setEditing(true)}>
-                Edit custom time
-              </button>
-              <button type="button" className="workout-duration-btn ghost" onClick={start}>
-                Start again
-              </button>
+              <div className="workout-duration-review-secondary">
+                <button type="button" className="workout-duration-btn ghost" onClick={() => setEditing(true)}>
+                  Edit custom time
+                </button>
+                <button type="button" className="workout-duration-btn ghost" onClick={start}>
+                  Start again
+                </button>
+              </div>
             </div>
           )}
         </div>

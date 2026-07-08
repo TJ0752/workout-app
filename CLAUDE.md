@@ -1072,6 +1072,15 @@ same file) covers the same need with far less new surface area.
   so shipping this feature to actual devices required porting it there too, not just building it
   once on web (a real gap: a user tried the timer on-device before this port landed and saw the
   unchanged old manual-entry field, since native hadn't been touched yet).
+- **A real on-device layout bug: the review screen's extra content pushed the weight field
+  toward/past the bottom of the screen.** Found via a real device screenshot, not the emulator or
+  browser testing — the review step stacks more content than any other state of this screen (ring
+  + total + up to three log buttons), and on a real phone's actual viewport height that was
+  visibly tight, unlike the idle/running states which only ever show one Start/Stop button below
+  the ring. Fixed per direct user feedback by combining "Edit custom time" and "Start again" onto
+  one shared row (`.workout-duration-review-secondary` on web, a plain `Row` on native, each
+  button taking half width) instead of each getting its own full-width stacked row — reclaims one
+  row's height unconditionally, regardless of whether "Log target only" is also showing.
 
 ### Native Android workout session (`android/shared/`, `android/app/.../workout/`)
 

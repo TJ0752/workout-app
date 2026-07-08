@@ -751,11 +751,17 @@ private fun DurationTimer(
                             Text("Log target only (${targetSeconds}s)", fontWeight = FontWeight.Bold)
                         }
                     }
-                    TextButton(onClick = { editing = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Edit custom time", color = AppPalette.TextSoft)
-                    }
-                    TextButton(onClick = ::start, modifier = Modifier.fillMaxWidth()) {
-                        Text("Start again", color = AppPalette.TextSoft)
+                    // Sharing one row instead of each taking a full stacked row - on a real
+                    // device, the review screen's extra content (ring + total + log buttons +
+                    // these two) stacked taller than a normal set screen and could push the
+                    // weight field below the visible viewport; this reclaims one row's height.
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = { editing = true }, modifier = Modifier.weight(1f)) {
+                            Text("Edit custom time", color = AppPalette.TextSoft)
+                        }
+                        TextButton(onClick = ::start, modifier = Modifier.weight(1f)) {
+                            Text("Start again", color = AppPalette.TextSoft)
+                        }
                     }
                 }
             }
