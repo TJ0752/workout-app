@@ -747,6 +747,31 @@
   font-weight: 600;
 }
 
+.routines-view-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.routines-view-header .add-btn {
+  flex: 1;
+  margin: 1rem 0;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.85em;
+  padding: 0.4em 0.2em;
+  white-space: nowrap;
+}
+
+.archived-heading {
+  margin: 0.5rem 0 0.75rem;
+}
+
 .routine-list {
   list-style: none;
   padding: 0;

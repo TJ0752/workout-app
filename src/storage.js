@@ -33,6 +33,8 @@ function rowToRoutine(row, tasks) {
     icon: row.icon || null,
     notes: row.notes || '',
     active: Boolean(row.active),
+    archived: Boolean(row.archived_at),
+    archivedAt: row.archived_at || null,
     defaultDays: JSON.parse(row.default_days),
     createdAt: row.created_at,
     tasks: tasks || [],
@@ -55,8 +57,8 @@ async function closeCurrentVersion(db, table, idCol, id, now) {
 async function insertRoutineVersion(db, routineId, fields, effectiveFrom, changeType, changedFields) {
   await db.run(
     `INSERT INTO routine_versions
-       (id, routine_id, effective_from, effective_to, title, icon, notes, active, default_days, change_type, changed_fields)
-     VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, routine_id, effective_from, effective_to, title, icon, notes, active, archived_at, default_days, change_type, changed_fields)
+     VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       generateId(),
       routineId,
@@ -65,6 +67,7 @@ async function insertRoutineVersion(db, routineId, fields, effectiveFrom, change
       fields.icon,
       fields.notes,
       fields.active,
+      fields.archived_at ?? null,
       fields.default_days,
       changeType,
       JSON.stringify(changedFields),
@@ -351,24 +354,67 @@ export async function upsertRoutine(routine) {
   return getRoutines();
 }
 
-export async function deleteRoutine(routineId) {
+/**
+ * Archives a routine: hides it from Today/Routines/notifications going forward, without
+ * touching a single row of its tasks/versions/completions - the whole point is that its history
+ * stays exactly as complete as an un-archived routine's. `archived_at` is a timestamp, not a
+ * flag, so getRoutineFraction (utils/date.js) can treat it as a one-time cutover: every day
+ * before this moment still computes normally, only this moment and afterward becomes "nothing
+ * due" - see the migration comment in db.js for the full rationale.
+ */
+export async function archiveRoutine(routineId) {
   const db = await ready();
   const now = new Date().toISOString();
-
-  const routineRows = await db.query('SELECT * FROM routines WHERE id = ?', [routineId]);
-  const routine = (routineRows.values || [])[0];
+  const rows = await db.query('SELECT * FROM routines WHERE id = ?', [routineId]);
+  const routine = (rows.values || [])[0];
   if (routine) {
-    await db.run('UPDATE routines SET deleted = 1, active = 0 WHERE id = ?', [routineId]);
+    await db.run('UPDATE routines SET archived_at = ? WHERE id = ?', [now, routineId]);
     await closeCurrentVersion(db, 'routine_versions', 'routine_id', routineId, now);
-    await insertRoutineVersion(db, routineId, { ...routine, active: 0 }, now, 'deleted', ['deleted']);
+    await insertRoutineVersion(db, routineId, { ...routine, archived_at: now }, now, 'archived', ['archived_at']);
   }
+  await persist();
+  return getRoutines();
+}
 
-  const taskRows = await db.query('SELECT * FROM tasks WHERE routine_id = ? AND deleted = 0', [routineId]);
-  for (const task of taskRows.values || []) {
-    await db.run('UPDATE tasks SET deleted = 1, active = 0 WHERE id = ?', [task.id]);
-    await closeCurrentVersion(db, 'task_versions', 'task_id', task.id, now);
-    await insertTaskVersion(db, task.id, routineId, { ...task, active: 0 }, now, 'deleted', ['deleted']);
+/** Undoes archiveRoutine - the routine and every day of its history return exactly as they were. */
+export async function restoreRoutine(routineId) {
+  const db = await ready();
+  const now = new Date().toISOString();
+  const rows = await db.query('SELECT * FROM routines WHERE id = ?', [routineId]);
+  const routine = (rows.values || [])[0];
+  if (routine) {
+    await db.run('UPDATE routines SET archived_at = NULL WHERE id = ?', [routineId]);
+    await closeCurrentVersion(db, 'routine_versions', 'routine_id', routineId, now);
+    await insertRoutineVersion(db, routineId, { ...routine, archived_at: null }, now, 'restored', ['archived_at']);
   }
+  await persist();
+  return getRoutines();
+}
+
+/**
+ * A genuine, irreversible hard delete - the one place in this codebase that actually erases
+ * rows instead of soft-deleting/versioning them (see CLAUDE.md's append-only versioning
+ * philosophy). Only ever allowed for an already-archived routine, enforced here rather than
+ * just in the UI, since "permanently delete" is a real data-loss action a stray call anywhere
+ * else must not be able to trigger. Sequential per-task loop, not Promise.all, matching
+ * resolveExerciseIds' documented reason: the web SQLite backend's db.query/db.run aren't safe
+ * to run concurrently on one connection.
+ */
+export async function permanentlyDeleteRoutine(routineId) {
+  const db = await ready();
+  const routineRows = await db.query('SELECT archived_at FROM routines WHERE id = ?', [routineId]);
+  const routine = (routineRows.values || [])[0];
+  if (!routine || !routine.archived_at) return getRoutines();
+
+  const taskRows = await db.query('SELECT id FROM tasks WHERE routine_id = ?', [routineId]);
+  for (const task of taskRows.values || []) {
+    await db.run('DELETE FROM completions WHERE task_id = ?', [task.id]);
+    await db.run('DELETE FROM workout_logs WHERE task_id = ?', [task.id]);
+    await db.run('DELETE FROM task_versions WHERE task_id = ?', [task.id]);
+  }
+  await db.run('DELETE FROM tasks WHERE routine_id = ?', [routineId]);
+  await db.run('DELETE FROM routine_versions WHERE routine_id = ?', [routineId]);
+  await db.run('DELETE FROM routines WHERE id = ?', [routineId]);
 
   await persist();
   return getRoutines();

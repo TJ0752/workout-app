@@ -80,6 +80,10 @@ export function getRoutineFraction(routine, taskVersionsMap, completions, date) 
   // pause, which is versioned for historical accuracy) - pausing/resuming a
   // routine takes effect for all dates immediately, including past ones.
   if (!routine.active) return null;
+  // Archiving, unlike pausing, IS date-aware: a day before archivedAt computes exactly as if
+  // the routine were never archived (its full history stays intact), while archivedAt itself
+  // and every day after are treated as "nothing due" - see db.js's migration comment.
+  if (routine.archivedAt && startOfDay(date) >= startOfDay(new Date(routine.archivedAt))) return null;
 
   const fractions = [];
   for (const task of routine.tasks) {

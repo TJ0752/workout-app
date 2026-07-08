@@ -194,6 +194,7 @@ export function getDayBreakdown(routines, taskVersionsMap, completions, date) {
   const routineBreakdowns = [];
   for (const routine of routines) {
     if (!routine.active) continue;
+    if (routine.archivedAt && startOfDay(date) >= startOfDay(new Date(routine.archivedAt))) continue;
     const taskItems = [];
     for (const task of routine.tasks) {
       const versions = taskVersionsMap[task.id];

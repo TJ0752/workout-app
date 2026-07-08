@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 
 const DB_NAME = 'routines';
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 
 const sqlite = new SQLiteConnection(CapacitorSQLite);
 let dbInstance = null;
@@ -191,6 +191,23 @@ const MIGRATIONS = [
         created_at TEXT NOT NULL
       );`,
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_name_nocase ON exercises(name COLLATE NOCASE);`,
+    ],
+  },
+  {
+    // Archive is a third, distinct lifecycle state from `active` (a simple non-date-aware pause
+    // gate, checked directly against "today" regardless of which date is being evaluated) and
+    // `deleted` (soft, but excluded from analytics entirely - see getTaskVersionsForAnalytics).
+    // archived_at is a nullable *timestamp*, not a boolean, specifically so getRoutineFraction
+    // can treat it like a one-time cutover: every day before archived_at still computes exactly
+    // as if the routine were never archived (preserving 100% of its historical analytics), while
+    // archived_at itself and every day after are treated as "nothing due" - the same outcome a
+    // day that was simply never scheduled produces. Restoring just clears it back to NULL.
+    // Permanently deleting a routine (only ever allowed once archived - see
+    // storage.js's permanentlyDeleteRoutine) is a genuine hard delete with no column here at all.
+    toVersion: 7,
+    statements: [
+      `ALTER TABLE routines ADD COLUMN archived_at TEXT;`,
+      `ALTER TABLE routine_versions ADD COLUMN archived_at TEXT;`,
     ],
   },
 ];

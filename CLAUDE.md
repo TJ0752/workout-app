@@ -174,9 +174,11 @@ mechanism behind three separate features at once:
   the change forward; past dashboard numbers don't shift retroactively.
 - **The audit log** (`ActivityLogView`, and "View history" inside the routine editor) —
   the version tables *are* the log; there's no separate event-logging system.
-- **Soft delete** — deleting a routine/task inserts a terminal version
-  (`change_type: 'deleted'`) and flips a `deleted` flag rather than removing the row, so
-  the audit log still has something to show for it.
+- **Soft delete** — deleting a task (e.g. removing it from a routine mid-edit) inserts a
+  terminal version (`change_type: 'deleted'`) and flips a `deleted` flag rather than removing
+  the row, so the audit log still has something to show for it. A whole *routine* no longer has
+  an equivalent one-step delete at all — see "Routine archive, restore, and permanent delete"
+  below for what replaced it.
 
 Version cutover is day-granular: which version applies to a given calendar day is
 "the latest version whose `effective_from` date is `<=` that day" — see
@@ -189,6 +191,61 @@ which is versioned like everything else. This was a scope cut made explicit duri
 design: task-pause needed historical accuracy, routine-pause (pre-dating the task/version
 work) stayed simple. If routine-level pause ever needs to become historically accurate
 too, this is the spot.
+
+### Routine archive, restore, and permanent delete (`src/storage.js`, `RoutinesView.jsx`)
+
+Archiving replaced the old "Delete" button on a routine entirely — per an explicit product
+decision, a routine is never destructively removed from the active-routines UI in one step
+anymore. `routines.archived_at` (nullable, added via `DB_VERSION = 7`'s migration, alongside
+the same column on `routine_versions` for audit-log parity) is a **timestamp, not a boolean**,
+specifically so it can be *date-aware* the way routine-level `active` (above) deliberately
+isn't: `getRoutineFraction` treats a routine's archive moment as a one-time cutover — every day
+strictly before `archivedAt` computes its fraction exactly as if the routine had never been
+archived (so a routine's entire pre-archive History/Dashboard picture stays 100% intact),
+while `archivedAt` itself and every day after are treated as "nothing due," the same outcome a
+day that was simply never scheduled produces. This is why archiving can't reuse the `active`
+flag's gate above: `active`'s current-value check applies uniformly to every date including
+past ones, which would have retroactively erased an archived routine's history instead of
+preserving it. `getDayBreakdown` (`utils/analytics.js`, the Dashboard heatmap/consistency-chart
+drill-down) duplicates this same date comparison rather than routing through
+`getRoutineFraction`, since it iterates task versions directly for its per-day breakdown — kept
+in sync by hand, the same way its pre-existing `!routine.active` check already had to be.
+
+- **Archiving** (`archiveRoutine` in `storage.js`) sets `archived_at` to now, closes the
+  routine's current `routine_versions` row, and inserts a new one (`change_type: 'archived'`)
+  — the audit log gets a real entry, matching every other lifecycle change. `App.jsx`'s
+  `handleArchiveRoutine` also cancels every one of the routine's task notifications and its
+  group summary first, exactly like the old delete handler did, since an archived routine must
+  stop generating reminders immediately. `scheduleTaskNotifications`/`updateRoutineGroupSummary`
+  in `notifications.js` also gate directly on `routine.archived` (in addition to the existing
+  `routine.active`/`task.active` checks) as a second line of defense — `syncAllNotifications`
+  re-syncs *every* routine's tasks on *any* save, so this gate is what keeps a resync from
+  silently re-arming an archived routine's reminders.
+- **Restoring** (`restoreRoutine`) clears `archived_at` back to `NULL` and inserts a
+  `'restored'` version — the routine and its entire history return exactly as they were, since
+  nothing about its versions/completions/workout-logs was ever touched. `handleRestoreRoutine`
+  re-runs `scheduleTaskNotifications`/`updateRoutineGroupSummary` for its tasks, the same as
+  resuming a paused routine would.
+- **Permanently deleting** (`permanentlyDeleteRoutine`) is the one genuine hard delete
+  anywhere in this codebase — it actually erases the routine's `routines`, `routine_versions`,
+  `tasks`, `task_versions`, `completions`, and `workout_logs` rows, a deliberate, explicit
+  exception to the append-only versioning philosophy described above. **Only ever allowed for
+  an already-archived routine** — enforced in `storage.js` itself (it silently no-ops if
+  `archived_at` is `NULL`), not just by the UI only exposing the button on the Archived list,
+  since a stray call anywhere else must not be able to trigger real data loss. `App.jsx`'s
+  `handlePermanentlyDeleteRoutine` shows an explicit warning confirmation
+  (`confirm(...)`) before calling it, per the product requirement that this action must never
+  fire without the user explicitly acknowledging it's irreversible. Deletes each task's
+  `completions`/`workout_logs`/`task_versions` rows in a sequential `for` loop, not
+  `Promise.all`, matching `resolveExerciseIds`' documented reason: the web SQLite backend's
+  `db.query`/`db.run` aren't safe to call concurrently on the same connection.
+- **UI** (`RoutinesView.jsx`) is a single component with two render branches, toggled by local
+  `showArchived` state rather than a separate route/tab — a "Archived (N)" link sits next to
+  "+ Add routine" on the normal list, and an archived routine's card shows only "Restore" and
+  "Delete permanently" (no Edit/Pause/Archive, which don't make sense for something already
+  archived). `TodayView.jsx`'s routine filter gained `&& !routine.archived` alongside its
+  existing `routine.active` check — Today needs both: a routine can be currently active-flagged
+  but archived, and must still disappear from the checklist.
 
 ### Fraction-based completion math (`src/utils/date.js`, `src/utils/analytics.js`)
 

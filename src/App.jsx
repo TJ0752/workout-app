@@ -22,7 +22,9 @@ import {
 import {
   getRoutines,
   upsertRoutine,
-  deleteRoutine as deleteRoutineFromStore,
+  archiveRoutine as archiveRoutineFromStore,
+  restoreRoutine as restoreRoutineFromStore,
+  permanentlyDeleteRoutine as permanentlyDeleteRoutineFromStore,
   upsertTask,
   deleteTask as deleteTaskFromStore,
   getCompletions,
@@ -198,13 +200,43 @@ function App() {
     await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
   };
 
-  const handleDeleteRoutine = async (routine) => {
-    if (!confirm(`Delete "${routine.title}"? This removes all its tasks too.`)) return;
+  const handleArchiveRoutine = async (routine) => {
+    if (
+      !confirm(
+        `Archive "${routine.title}"? It'll disappear from Today and stop sending reminders, but every bit of its history stays intact. You can restore it anytime from Archived routines.`
+      )
+    )
+      return;
     for (const task of routine.tasks) {
       await cancelTaskNotifications(task);
     }
     await cancelRoutineGroupSummary(routine.id);
-    await deleteRoutineFromStore(routine.id);
+    await archiveRoutineFromStore(routine.id);
+    const state = await refreshAll();
+    await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
+  };
+
+  const handleRestoreRoutine = async (routine) => {
+    await restoreRoutineFromStore(routine.id);
+    const state = await refreshAll();
+    const savedRoutine = state.routines.find((r) => r.id === routine.id);
+    if (savedRoutine) {
+      for (const task of savedRoutine.tasks) {
+        await scheduleTaskNotifications(task, savedRoutine, state.completions);
+      }
+      await updateRoutineGroupSummary(savedRoutine, state.completions);
+    }
+    await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
+  };
+
+  const handlePermanentlyDeleteRoutine = async (routine) => {
+    if (
+      !confirm(
+        `Permanently delete "${routine.title}"? This erases all of its tasks, completions, and history from this device. This cannot be undone.`
+      )
+    )
+      return;
+    await permanentlyDeleteRoutineFromStore(routine.id);
     const state = await refreshAll();
     await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
   };
@@ -377,7 +409,9 @@ function App() {
             completions={completions}
             taskVersionsMap={taskVersionsMap}
             onSaveRoutine={handleSaveRoutine}
-            onDeleteRoutine={handleDeleteRoutine}
+            onArchiveRoutine={handleArchiveRoutine}
+            onRestoreRoutine={handleRestoreRoutine}
+            onPermanentlyDeleteRoutine={handlePermanentlyDeleteRoutine}
             onToggleRoutineActive={handleToggleRoutineActive}
             onToggleTaskActive={handleToggleTaskActive}
           />

@@ -107,7 +107,7 @@ export async function updateRoutineGroupSummary(routine, completions = {}) {
   // Only worth a group summary once there are 2+ *active* tasks to collapse -
   // routine.tasks.length alone (used for the `group` tag on individual
   // reminders) undercounts a routine that's mostly paused down to one task.
-  if (!routine.active || activeTasks.length <= 1) {
+  if (!routine.active || routine.archived || activeTasks.length <= 1) {
     await cancelRoutineGroupSummary(routine.id);
     return;
   }
@@ -122,7 +122,7 @@ export async function cancelRoutineGroupSummary(routineId) {
 
 export async function scheduleTaskNotifications(task, routine, completions = {}) {
   if (!Capacitor.isNativePlatform()) return;
-  if (!task.active || task.days.length === 0 || routine?.active === false) {
+  if (!task.active || task.days.length === 0 || routine?.active === false || routine?.archived) {
     await nativeCancelDueReminder(task.id);
     await nativeCancelExtraReminders(task.id);
     if (routine) await updateRoutineGroupSummary(routine, completions);

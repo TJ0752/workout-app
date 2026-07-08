@@ -258,7 +258,7 @@ export default function TodayView({
     : selectedDate.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 
   const dueRoutines = routines
-    .filter((routine) => routine.active)
+    .filter((routine) => routine.active && !routine.archived)
     .map((routine) => ({
       routine,
       dueTasks: routine.tasks.filter((t) => isTaskDueOn(t, taskVersionsMap, selectedDate)),
