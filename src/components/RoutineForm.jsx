@@ -535,7 +535,7 @@ function TaskFields({ task, onChange, showTitle, exerciseNames }) {
           {task.quantityMode === 'timer' ? (
             <>
               <DurationHMSInput
-                label="Target duration"
+                label={task.autoUpdateTarget ? 'Target duration (your current best)' : 'Target duration'}
                 totalSeconds={task.target}
                 onChange={(secs) => onChange({ ...task, target: secs })}
               />
@@ -549,7 +549,9 @@ function TaskFields({ task, onChange, showTitle, exerciseNames }) {
               </label>
               <p className="field-hint">
                 When on, logging a time longer than the current target raises the target to that
-                new best for next time.
+                new best for next time. The field above is always editable by hand too - lower it
+                anytime (a bad session inflated it, you're deloading, etc.) and the next real best
+                will raise it again from there.
               </p>
             </>
           ) : (
