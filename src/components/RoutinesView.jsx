@@ -17,11 +17,13 @@ export default function RoutinesView({
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   const activeRoutines = routines.filter((r) => !r.archived);
   const archivedRoutines = routines.filter((r) => r.archived);
 
   const startEdit = (routine) => {
+    setSaveError('');
     setEditing(routine);
     setShowForm(true);
   };
@@ -29,11 +31,23 @@ export default function RoutinesView({
   const closeForm = () => {
     setShowForm(false);
     setEditing(null);
+    setSaveError('');
   };
 
+  // Previously any error here (a native SQLite failure, for instance) just silently left the
+  // form open with no feedback at all - the save promise rejected and closeForm() below it never
+  // ran, but nothing ever surfaced why. Catching and showing the real message turns "Save does
+  // nothing" into an actual diagnosable error, and lets the user retry without losing their
+  // in-progress form input (the form deliberately stays open on failure, same as before).
   const handleSave = async (payload) => {
-    await onSaveRoutine(payload);
-    closeForm();
+    setSaveError('');
+    try {
+      await onSaveRoutine(payload);
+      closeForm();
+    } catch (err) {
+      console.warn('Failed to save routine', err);
+      setSaveError(err?.message || 'Something went wrong saving this routine. Please try again.');
+    }
   };
 
   if (showArchived) {
@@ -82,7 +96,13 @@ export default function RoutinesView({
     <div className="routines-view">
       <div className="routines-view-header">
         {!showForm && (
-          <button className="add-btn" onClick={() => setShowForm(true)}>
+          <button
+            className="add-btn"
+            onClick={() => {
+              setSaveError('');
+              setShowForm(true);
+            }}
+          >
             + Add routine
           </button>
         )}
@@ -91,7 +111,12 @@ export default function RoutinesView({
         </button>
       </div>
 
-      {showForm && <RoutineForm initial={editing} onSave={handleSave} onCancel={closeForm} />}
+      {showForm && (
+        <>
+          {saveError && <p className="form-error">{saveError}</p>}
+          <RoutineForm initial={editing} onSave={handleSave} onCancel={closeForm} />
+        </>
+      )}
 
       {activeRoutines.length === 0 && !showForm && (
         <p className="empty-state">No routines yet. Add your first one above.</p>

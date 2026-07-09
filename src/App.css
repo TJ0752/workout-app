@@ -187,6 +187,15 @@
   color: var(--bad);
 }
 
+.form-error {
+  color: var(--bad);
+  background: var(--bad-soft);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.8rem;
+  font-size: 0.9em;
+  margin: 0.5rem 0 0;
+}
+
 .auto-backup-list {
   display: flex;
   flex-direction: column;
