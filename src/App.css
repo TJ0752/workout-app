@@ -918,6 +918,42 @@
   font-size: 0.9em;
 }
 
+.field-hint {
+  font-size: 0.82em;
+  color: var(--text-soft);
+  margin: -0.4rem 0 0;
+}
+
+.routine-form label.checkbox-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.checkbox-field input[type='checkbox'] {
+  width: auto;
+}
+
+.hms-input-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+
+.hms-part {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85em;
+  color: var(--text-soft);
+}
+
+.routine-form .hms-part input {
+  width: 3.4rem;
+  text-align: center;
+}
+
 .day-buttons,
 .icon-buttons {
   display: flex;

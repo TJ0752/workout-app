@@ -9,4 +9,9 @@ import com.getcapacitor.JSObject
  */
 object WorkoutSessionBridge {
     var onSetLogged: ((JSObject) -> Unit)? = null
+
+    // Fired once when a "pure timer" (quantity-as-timer) session logs its one value - see
+    // WorkoutSessionActivity's pureTimer branch. A separate field rather than reusing onSetLogged
+    // since a pure timer has no Exercise/setIndex at all, just {taskId, dateKey, seconds}.
+    var onQuantityTimerLogged: ((JSObject) -> Unit)? = null
 }

@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 
 const DB_NAME = 'routines';
-const DB_VERSION = 7;
+const DB_VERSION = 8;
 
 const sqlite = new SQLiteConnection(CapacitorSQLite);
 let dbInstance = null;
@@ -208,6 +208,23 @@ const MIGRATIONS = [
     statements: [
       `ALTER TABLE routines ADD COLUMN archived_at TEXT;`,
       `ALTER TABLE routine_versions ADD COLUMN archived_at TEXT;`,
+    ],
+  },
+  {
+    // A quantity task's target can now be entered/logged as a duration timer instead of a plain
+    // number - quantity_mode distinguishes the two ('number', the pre-existing behavior, stays
+    // the default so every existing quantity task renders unchanged). target/unit are unchanged
+    // by this: in 'timer' mode target still holds the same REAL column, just interpreted as
+    // whole seconds instead of an arbitrary unit amount. auto_update_target is a per-task opt-in
+    // (default off, matching every other new boolean flag added to this table so far) that lets
+    // a timer-mode quantity task raise its own target to the newly logged time whenever that time
+    // exceeds the current target - see handleLogQuantityTimer in App.jsx.
+    toVersion: 8,
+    statements: [
+      `ALTER TABLE tasks ADD COLUMN quantity_mode TEXT NOT NULL DEFAULT 'number';`,
+      `ALTER TABLE tasks ADD COLUMN auto_update_target INTEGER NOT NULL DEFAULT 0;`,
+      `ALTER TABLE task_versions ADD COLUMN quantity_mode TEXT NOT NULL DEFAULT 'number';`,
+      `ALTER TABLE task_versions ADD COLUMN auto_update_target INTEGER NOT NULL DEFAULT 0;`,
     ],
   },
 ];

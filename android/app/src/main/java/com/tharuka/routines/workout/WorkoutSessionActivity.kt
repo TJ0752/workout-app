@@ -54,11 +54,48 @@ class WorkoutSessionActivity : ComponentActivity() {
         taskId = payload?.optString("taskId")
         dateKey = payload?.optString("dateKey")
         val taskTitle = payload?.optString("taskTitle") ?: ""
+        // A quantity task set up as a timer (RoutineForm's "Input as: Timer" mode) launches this
+        // same Activity/foreground-service/plugin with a much smaller payload - just a target,
+        // no exercises/logs/workoutLogSources at all - and renders QuantityTimerScreen instead of
+        // the full WorkoutSessionScreen. Reusing this host (rather than a plain in-WebView JS
+        // timer) is what lets a long-running quantity timer survive backgrounding/screen-lock via
+        // the same real foreground service + chronometer notification a workout session gets.
+        val pureTimer = payload?.optBoolean("pureTimer", false) ?: false
+
+        startTimerServiceOncePermitted(taskTitle)
+
+        if (pureTimer) {
+            val targetSeconds = payload?.optIntOrNull("targetSeconds") ?: 0
+            val initialSeconds = payload?.optIntOrNull("initialSeconds")
+            setContent {
+                MaterialTheme(colorScheme = WorkoutColorScheme) {
+                    Surface {
+                        QuantityTimerScreen(
+                            taskTitle = taskTitle,
+                            targetSeconds = targetSeconds,
+                            initialSeconds = initialSeconds,
+                            onLog = { seconds ->
+                                val event = JSObject()
+                                event.put("taskId", taskId)
+                                event.put("dateKey", dateKey)
+                                event.put("seconds", seconds)
+                                WorkoutSessionBridge.onQuantityTimerLogged?.invoke(event)
+                                // A pure timer logs one value, not a sequence of sets - nothing
+                                // more to do in this screen once it's logged, so close it the same
+                                // way tapping the X does.
+                                finishWithResult()
+                            },
+                            onClose = { finishWithResult() },
+                        )
+                    }
+                }
+            }
+            return
+        }
+
         val exercises = parseExercises(payload?.optJSONArray("exercises"))
         val logsForDate = parseLogsForDate(payload?.optJSONObject("logsForDate"))
         val workoutLogSources = parseWorkoutLogSources(payload?.optJSONArray("workoutLogSources"))
-
-        startTimerServiceOncePermitted(taskTitle)
 
         setContent {
             MaterialTheme(colorScheme = WorkoutColorScheme) {

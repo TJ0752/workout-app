@@ -18,6 +18,12 @@ class WorkoutSessionPlugin : Plugin() {
         WorkoutSessionBridge.onSetLogged = { data ->
             notifyListeners("workoutSetLogged", data, true)
         }
+        // Fired by the "pure timer" (quantity-as-timer) flow - see WorkoutSessionActivity's
+        // pureTimer branch and QuantityTimerScreen. Same start()/plugin registration as a real
+        // workout session; only the payload shape and this one extra listener differ.
+        WorkoutSessionBridge.onQuantityTimerLogged = { data ->
+            notifyListeners("quantityTimerLogged", data, true)
+        }
     }
 
     @PluginMethod
