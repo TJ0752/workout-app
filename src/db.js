@@ -229,6 +229,28 @@ const MIGRATIONS = [
   },
 ];
 
+/**
+ * Defensive self-heal for a real bug seen on a device already updated to DB_VERSION 8:
+ * PRAGMA user_version had correctly advanced to 8, but the toVersion:8 ALTER TABLE statements
+ * (adding quantity_mode/auto_update_target) never actually applied, surfacing as "table tasks
+ * has no column named quantity_mode" on every routine save from then on -
+ * capacitor-community/sqlite's upgrade runner apparently doesn't guarantee the version number
+ * and the statements actually succeeding stay in lockstep if something goes wrong mid-batch.
+ * Once that happens, addUpgradeStatement's normal mechanism never retries (it only acts when
+ * the stored version is behind DB_VERSION), so this checks for the column directly - cheap,
+ * and a no-op on every device where the migration ran correctly - and adds it if missing,
+ * without requiring a destructive uninstall/reinstall to recover.
+ */
+async function ensureQuantityModeColumns(db) {
+  const info = await db.query(`PRAGMA table_info(tasks);`);
+  const hasColumn = (info.values || []).some((col) => col.name === 'quantity_mode');
+  if (hasColumn) return;
+  await db.run(`ALTER TABLE tasks ADD COLUMN quantity_mode TEXT NOT NULL DEFAULT 'number';`);
+  await db.run(`ALTER TABLE tasks ADD COLUMN auto_update_target INTEGER NOT NULL DEFAULT 0;`);
+  await db.run(`ALTER TABLE task_versions ADD COLUMN quantity_mode TEXT NOT NULL DEFAULT 'number';`);
+  await db.run(`ALTER TABLE task_versions ADD COLUMN auto_update_target INTEGER NOT NULL DEFAULT 0;`);
+}
+
 async function openDatabase() {
   const isWeb = Capacitor.getPlatform() === 'web';
   if (isWeb) {
@@ -243,6 +265,7 @@ async function openDatabase() {
     : await sqlite.createConnection(DB_NAME, false, 'no-encryption', DB_VERSION, false);
 
   await db.open();
+  await ensureQuantityModeColumns(db);
   return db;
 }
 
