@@ -28,6 +28,17 @@
   min-width: 34px;
 }
 
+.app-version-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-soft);
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+  white-space: nowrap;
+}
+
 .update-check-btn {
   margin-left: auto;
   position: relative;
@@ -2304,6 +2315,16 @@
   gap: 0.6rem;
   width: 100%;
   margin-top: 10px;
+}
+
+/* The configured target duration, shown as a plain number alongside the ring's live
+   elapsed/overtime count - the ring's own "Target" hint only labels *what kind* of value is
+   showing, not what the target actually is. */
+.workout-duration-target {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-soft);
+  margin-top: 6px;
 }
 
 /* Reached (or exceeded) the target duration - the same "achievement" hue as streaks/PRs, since

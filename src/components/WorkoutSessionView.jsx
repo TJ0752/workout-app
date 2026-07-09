@@ -157,6 +157,7 @@ function DurationTimer({ targetSeconds, initialSeconds, onLog }) {
           <span className="workout-ring-hint">Logged</span>
         </MomentumRing>
         <div className="workout-duration-review">
+          {hasTarget && <span className="workout-duration-target">Target: {targetSeconds}s</span>}
           <span className="workout-duration-review-total">{elapsed}s logged</span>
           {editing ? (
             <div className="workout-duration-review-edit">
@@ -214,6 +215,7 @@ function DurationTimer({ targetSeconds, initialSeconds, onLog }) {
           {phase === 'idle' ? 'Ready' : inOvertime ? 'Overtime' : hasTarget ? 'Target' : 'Elapsed'}
         </span>
       </MomentumRing>
+      {hasTarget && <div className="workout-duration-target">Target: {targetSeconds}s</div>}
       <div className="workout-duration-timer">
         {phase === 'idle' ? (
           <button type="button" className="workout-duration-btn primary" onClick={start}>

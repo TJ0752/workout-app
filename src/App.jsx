@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { App as CapacitorApp } from '@capacitor/app';
 import { Sun, ListTodo, BarChart3, Calendar, Settings as SettingsIcon } from 'lucide-react';
 import './App.css';
 import TodayView from './components/TodayView';
@@ -77,6 +79,7 @@ function App() {
   const [activeSession, setActiveSession] = useState(null);
   const [focusTarget, setFocusTarget] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [appVersion, setAppVersion] = useState(null);
   const handleLogWorkoutSetRef = useRef(null);
 
   const refreshAll = async () => {
@@ -109,6 +112,16 @@ function App() {
     await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
     return state;
   };
+
+  // Native-only, like SettingsView's own identical fetch - there's no installed build to report
+  // on web. Surfaced right in the header (not just inside Settings) so which release is running
+  // is visible at a glance, without an extra tap.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    CapacitorApp.getInfo()
+      .then((info) => setAppVersion(info.version))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -376,6 +389,7 @@ function App() {
           <Logo size={20} />
         </span>
         <h1>Daily Routines</h1>
+        {appVersion && <span className="app-version-badge">v{appVersion}</span>}
         <UpdateChecker />
         <button
           type="button"
