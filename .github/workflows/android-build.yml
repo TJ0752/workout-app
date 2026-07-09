@@ -84,7 +84,13 @@ jobs:
         # test app, so grabbing the newest work-in-progress build doesn't require digging through
         # this run's artifact list - install this over the previous dev build any time to try the
         # latest work without touching the real (`main`-gated) app at all.
-        if: github.ref == 'refs/heads/claude/android-routines-app-mvp-gjl4kh'
+        #
+        # Tracks any non-main branch rather than one hardcoded name - a prior version pinned this
+        # to a single working branch (claude/android-routines-app-mvp-gjl4kh), which silently
+        # stopped publishing the moment a later session used a differently-named branch (e.g.
+        # claude/new-session-r4rs03), leaving latest-android-dev stale for days with no error.
+        # Matches this workflow's own catch-all `branches: ['**']` push trigger.
+        if: github.ref != 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-android-dev
