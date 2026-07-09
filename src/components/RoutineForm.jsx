@@ -648,13 +648,22 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
     if (editingTaskId === taskId) setEditingTaskId(null);
   };
 
-  const hasUnnamedTask = !isSimple && tasks.some((t) => !t.title.trim());
-  const hasTaskWithNoDays = tasks.some((t) => t.days.length === 0);
-  const hasInvalidWorkout = tasks.some(
+  // "Task N" (1-indexed position, not the task's own possibly-blank title) so a multi-task
+  // routine's validation errors below say exactly which task needs attention, instead of a
+  // single generic message that gives no clue which of several tasks (especially a newly-added
+  // one still mid-setup, like a quantity task just switched to Timer mode) is the problem.
+  const taskLabel = (t) => t.title.trim() || `Task ${tasks.indexOf(t) + 1}`;
+
+  const unnamedTasks = isSimple ? [] : tasks.filter((t) => !t.title.trim());
+  const hasUnnamedTask = unnamedTasks.length > 0;
+  const noDaysTasks = tasks.filter((t) => t.days.length === 0);
+  const hasTaskWithNoDays = noDaysTasks.length > 0;
+  const invalidWorkoutTasks = tasks.filter(
     (t) =>
       t.completionType === 'workout' &&
       (!t.exercises?.length || t.exercises.some((ex) => !ex.name.trim()))
   );
+  const hasInvalidWorkout = invalidWorkoutTasks.length > 0;
   const invalidTask = hasUnnamedTask || hasTaskWithNoDays || hasInvalidWorkout;
 
   const handleSubmit = (e) => {
@@ -780,10 +789,30 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
         </div>
       )}
 
-      {hasUnnamedTask && <p className="form-error">Every task needs a name.</p>}
-      {hasTaskWithNoDays && <p className="form-error">Every task needs at least one day selected.</p>}
+      {hasUnnamedTask && (
+        <p className="form-error">
+          {unnamedTasks.length === 1
+            ? `${taskLabel(unnamedTasks[0])} needs a name.`
+            : `${unnamedTasks.map(taskLabel).join(', ')} need a name.`}
+        </p>
+      )}
+      {hasTaskWithNoDays && (
+        <p className="form-error">
+          {isSimple
+            ? 'This task needs at least one day selected.'
+            : noDaysTasks.length === 1
+              ? `${taskLabel(noDaysTasks[0])} needs at least one day selected.`
+              : `${noDaysTasks.map(taskLabel).join(', ')} need at least one day selected.`}
+        </p>
+      )}
       {hasInvalidWorkout && (
-        <p className="form-error">Every workout task needs at least one named exercise.</p>
+        <p className="form-error">
+          {isSimple
+            ? 'Every workout task needs at least one named exercise.'
+            : invalidWorkoutTasks.length === 1
+              ? `${taskLabel(invalidWorkoutTasks[0])} needs at least one named exercise.`
+              : `${invalidWorkoutTasks.map(taskLabel).join(', ')} need at least one named exercise.`}
+        </p>
       )}
 
       <label>
