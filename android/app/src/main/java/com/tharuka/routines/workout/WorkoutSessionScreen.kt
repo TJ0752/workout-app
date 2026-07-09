@@ -707,6 +707,15 @@ private fun DurationTimer(
                 Text("${elapsed}s", fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onBackground)
                 Text("Logged", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            if (hasTarget) {
+                Text(
+                    "Target: ${targetSeconds}s",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
             Text("${elapsed}s logged", fontWeight = FontWeight.Bold, color = AppPalette.TextMain, modifier = Modifier.padding(top = 10.dp))
             Spacer(Modifier.height(10.dp))
             if (editing) {
@@ -795,6 +804,15 @@ private fun DurationTimer(
                 },
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (hasTarget) {
+            Text(
+                "Target: ${targetSeconds}s",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp),
             )
         }
         Button(
