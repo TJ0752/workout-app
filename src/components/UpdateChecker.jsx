@@ -89,7 +89,7 @@ export default function UpdateChecker() {
         aria-label="Check for updates"
         title="Check for updates"
       >
-        <DownloadCloud size={17} className={status === 'checking' || status === 'downloading' ? 'spin' : ''} />
+        <DownloadCloud size={15} className={status === 'checking' || status === 'downloading' ? 'spin' : ''} />
         {status === 'ready' && <span className="update-dot" />}
       </button>
 

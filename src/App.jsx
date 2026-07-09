@@ -386,7 +386,7 @@ function App() {
     <div className="app-shell">
       <header className="app-header">
         <span className="icon-badge app-logo-badge">
-          <Logo size={20} />
+          <Logo size={17} />
         </span>
         <h1>Daily Routines</h1>
         {appVersion && <span className="app-version-badge">v{appVersion}</span>}
@@ -398,7 +398,7 @@ function App() {
           aria-label="Settings"
           title="Settings"
         >
-          <SettingsIcon size={17} />
+          <SettingsIcon size={15} />
         </button>
       </header>
 

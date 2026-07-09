@@ -16,35 +16,50 @@
 
 .app-header {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 0.7rem;
+  gap: 0.5rem;
   padding: 1.4rem 1.2rem 1rem;
 }
 
-.app-logo-badge {
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
+.app-header h1 {
+  flex-shrink: 1;
+  min-width: 0;
+  font-size: 1.2em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Combined selector (not just .app-logo-badge alone) so this reliably beats .icon-badge's own
+   38px sizing regardless of the two rules' order in the stylesheet - same specificity, equal
+   source order otherwise leaves the outcome to whichever rule happens to be declared later. */
+.icon-badge.app-logo-badge {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  flex-shrink: 0;
 }
 
 .app-version-badge {
-  font-size: 0.7rem;
+  flex-shrink: 0;
+  font-size: 0.65rem;
   font-weight: 600;
   color: var(--text-soft);
   background: var(--card);
   border: 1px solid var(--card-border);
   border-radius: 999px;
-  padding: 0.15rem 0.5rem;
+  padding: 0.15rem 0.4rem;
   white-space: nowrap;
 }
 
 .update-check-btn {
   margin-left: auto;
   position: relative;
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
   padding: 0;
   border-radius: 999px;
   border: 1px solid var(--card-border);
@@ -66,9 +81,10 @@
 }
 
 .settings-btn {
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
   padding: 0;
   border-radius: 999px;
   border: 1px solid var(--card-border);
@@ -82,7 +98,7 @@
 /* Sits after UpdateChecker's own margin-left: auto, so this one shouldn't repeat it - only the
    first flex-pushed item in the header needs to claim the remaining space. */
 .update-check-btn + .settings-btn {
-  margin-left: 0.5rem;
+  margin-left: 0.4rem;
 }
 
 .settings-view {
