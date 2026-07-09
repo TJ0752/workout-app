@@ -11,10 +11,13 @@ import Logo from './components/Logo';
 import UpdateChecker from './components/UpdateChecker';
 import SettingsView from './components/SettingsView';
 import WorkoutSessionView from './components/WorkoutSessionView';
+import QuantityTimerView from './components/QuantityTimerView';
 import {
   isNativeWorkoutSessionAvailable,
   startNativeWorkoutSession,
   initWorkoutSetListener,
+  startNativeQuantityTimer,
+  initQuantityTimerListener,
 } from './nativeWorkoutSession';
 import {
   initDueReminderActionListener,
@@ -81,6 +84,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [appVersion, setAppVersion] = useState(null);
   const handleLogWorkoutSetRef = useRef(null);
+  const handleLogQuantityTimerRef = useRef(null);
 
   const refreshAll = async () => {
     const [storedRoutines, storedCompletions, versionsMap, workoutLogs] = await Promise.all([
@@ -181,6 +185,14 @@ function App() {
       if (task) await handleLogWorkoutSetRef.current(task, dateKey, exercise, setIndex, values);
     });
 
+    // Fired once when the native "pure timer" screen (a quantity task set up as a timer) logs
+    // its one value - see nativeWorkoutSession.js's startNativeQuantityTimer/QuantityTimerScreen.
+    const quantityTimerListenerPromise = initQuantityTimerListener(async (taskId, dateKey, seconds) => {
+      const state = await refreshAll();
+      const task = findTask(state.routines, taskId);
+      if (task) await handleLogQuantityTimerRef.current(task, dateKey, seconds);
+    });
+
     // Fired roughly every 15 minutes by the native background-sync foreground service (see
     // BackgroundSyncService.kt) as long as the app process is alive, foreground or backgrounded
     // - keeps digest/summary/streak-risk content fresh without requiring the user to reopen the
@@ -195,6 +207,7 @@ function App() {
       dueReminderListenerPromise?.then((handle) => handle.remove());
       notificationTapListenerPromise?.then((handle) => handle.remove());
       workoutListenerPromise?.then((handle) => handle.remove());
+      quantityTimerListenerPromise?.then((handle) => handle.remove());
       backgroundSyncListenerPromise?.then((handle) => handle.remove());
     };
   }, []);
@@ -331,6 +344,20 @@ function App() {
     setActiveSession({ task, routine, dateKey });
   };
 
+  // A quantity task set up as a timer (RoutineForm's "Input as: Timer" mode) launches the same
+  // native foreground-service-backed screen a workout session does (see
+  // nativeWorkoutSession.js's startNativeQuantityTimer) - deliberately not a plain in-WebView JS
+  // timer, so a long run survives backgrounding/screen-lock. `activeSession` is reused as-is for
+  // the web/dev fallback; the render branch below picks WorkoutSessionView vs QuantityTimerView
+  // by completionType.
+  const handleStartQuantityTimer = (task, routine, dateKey) => {
+    if (isNativeWorkoutSessionAvailable()) {
+      startNativeQuantityTimer(task, dateKey);
+      return;
+    }
+    setActiveSession({ task, routine, dateKey });
+  };
+
   const handleCloseSession = () => {
     setActiveSession(null);
   };
@@ -351,8 +378,41 @@ function App() {
   };
   handleLogWorkoutSetRef.current = handleLogWorkoutSet;
 
+  // The one value a quantity-as-timer session logs - additive (via handleAddQuantity), matching
+  // the plain quick-add buttons' own semantics, since a timer can reasonably be run more than
+  // once in a day (e.g. two separate meditation sessions) and each run should add to the day's
+  // total rather than overwrite it. "New best" for the auto-update-target opt-in is judged
+  // against this one run's own seconds, not the day's accumulated total - a single 65s hold
+  // against a 60s target is a new best regardless of what else was logged that day.
+  const handleLogQuantityTimer = async (task, dateKey, seconds) => {
+    await handleAddQuantity(task, seconds, dateKey);
+    if (task.autoUpdateTarget && seconds > (task.target || 0)) {
+      await upsertTask({ ...task, target: seconds });
+      const state = await refreshAll();
+      const savedRoutine = state.routines.find((r) => r.id === task.routineId);
+      const savedTask = savedRoutine?.tasks.find((t) => t.id === task.id);
+      if (savedTask) await scheduleTaskNotifications(savedTask, savedRoutine, state.completions);
+    }
+  };
+  handleLogQuantityTimerRef.current = handleLogQuantityTimer;
+
   if (loading) {
     return <div className="app-shell loading">Loading…</div>;
+  }
+
+  if (activeSession && activeSession.task.completionType === 'quantity') {
+    return (
+      <div className="app-shell">
+        <QuantityTimerView
+          task={activeSession.task}
+          onLog={async (seconds) => {
+            await handleLogQuantityTimer(activeSession.task, activeSession.dateKey, seconds);
+            handleCloseSession();
+          }}
+          onClose={handleCloseSession}
+        />
+      </div>
+    );
   }
 
   if (activeSession) {
@@ -412,6 +472,7 @@ function App() {
             onAddQuantity={handleAddQuantity}
             onSetQuantity={handleSetQuantity}
             onStartWorkout={handleStartWorkout}
+            onStartQuantityTimer={handleStartQuantityTimer}
             focusTaskId={focusTarget?.taskId}
             focusRoutineId={focusTarget?.routineId}
             onFocusHandled={() => setFocusTarget(null)}

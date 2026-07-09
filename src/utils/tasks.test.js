@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { todayKey } from './date.js';
-import { MAX_EXTRA_REMINDERS, isTaskDoneToday, parseQuickAddText, quickAddAmountsFor } from './tasks.js';
+import {
+  MAX_EXTRA_REMINDERS,
+  formatHms,
+  hmsToSeconds,
+  isTaskDoneToday,
+  parseQuickAddText,
+  quickAddAmountsFor,
+  secondsToHms,
+} from './tasks.js';
 
 describe('MAX_EXTRA_REMINDERS', () => {
   it('is a fixed positive integer (notification id slots depend on this being stable)', () => {
@@ -30,6 +38,37 @@ describe('parseQuickAddText', () => {
 
   it('returns an empty array for blank input', () => {
     expect(parseQuickAddText('')).toEqual([]);
+  });
+});
+
+describe('formatHms', () => {
+  it('formats under a minute as 0:SS', () => {
+    expect(formatHms(0)).toBe('0:00');
+    expect(formatHms(45)).toBe('0:45');
+  });
+
+  it('formats under an hour as M:SS', () => {
+    expect(formatHms(125)).toBe('2:05');
+    expect(formatHms(599)).toBe('9:59');
+  });
+
+  it('formats an hour or more as H:MM:SS', () => {
+    expect(formatHms(3665)).toBe('1:01:05');
+    expect(formatHms(3600)).toBe('1:00:00');
+  });
+});
+
+describe('hmsToSeconds / secondsToHms', () => {
+  it('combines separate h/m/s parts into total seconds', () => {
+    expect(hmsToSeconds(1, 2, 3)).toBe(3723);
+    expect(hmsToSeconds(0, 0, 45)).toBe(45);
+    expect(hmsToSeconds('', '', '')).toBe(0);
+  });
+
+  it('round-trips through secondsToHms', () => {
+    expect(secondsToHms(3723)).toEqual({ hours: 1, minutes: 2, seconds: 3 });
+    expect(secondsToHms(45)).toEqual({ hours: 0, minutes: 0, seconds: 45 });
+    expect(secondsToHms(0)).toEqual({ hours: 0, minutes: 0, seconds: 0 });
   });
 });
 

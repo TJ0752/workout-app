@@ -661,7 +661,7 @@ private fun RestRing(
  * resetting by hand when the user moves to a different set.
  */
 @Composable
-private fun DurationTimer(
+fun DurationTimer(
     targetSeconds: Int,
     initialSeconds: Int?,
     onLog: (Int) -> Unit,
@@ -670,6 +670,7 @@ private fun DurationTimer(
     var elapsed by remember { mutableStateOf(0) }
     var editing by remember { mutableStateOf(false) }
     var customValue by remember { mutableStateOf("") }
+    var runId by remember { mutableStateOf(0) }
 
     LaunchedEffect(phase, elapsed) {
         if (phase == "running") {
@@ -681,15 +682,19 @@ private fun DurationTimer(
     val hasTarget = targetSeconds > 0
     val overtime = if (hasTarget) maxOf(0, elapsed - targetSeconds) else 0
     val inOvertime = hasTarget && elapsed >= targetSeconds
+    val remaining = if (hasTarget) maxOf(0, targetSeconds - elapsed) else elapsed
     // Fills up toward 1 as elapsed approaches the target (mirroring how the same ring fills as
     // sets complete elsewhere), then just stays full through overtime rather than continuing
-    // past a full circle.
+    // past a full circle. Only used as the static fallback fraction (idle/stopped) now - the
+    // running phase drives the ring via MomentumRing's own animateSeconds/animateKey instead, a
+    // single continuous linear sweep instead of a spring catch-up every second.
     val fraction = if (phase != "idle" && hasTarget) (elapsed.toFloat() / targetSeconds.toFloat()).coerceAtMost(1f) else 0f
 
     fun start() {
         elapsed = 0
         editing = false
         phase = "running"
+        runId += 1
     }
 
     fun stop() {
@@ -704,19 +709,19 @@ private fun DurationTimer(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             MomentumRing(modifier = Modifier.fillMaxWidth().height(230.dp), fraction = fraction, interactive = false) {
-                Text("${elapsed}s", fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onBackground)
+                Text(formatHms(elapsed), fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onBackground)
                 Text("Logged", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (hasTarget) {
                 Text(
-                    "Target: ${targetSeconds}s",
+                    "Target: ${formatHms(targetSeconds)}",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp),
                 )
             }
-            Text("${elapsed}s logged", fontWeight = FontWeight.Bold, color = AppPalette.TextMain, modifier = Modifier.padding(top = 10.dp))
+            Text("${formatHms(elapsed)} logged", fontWeight = FontWeight.Bold, color = AppPalette.TextMain, modifier = Modifier.padding(top = 10.dp))
             Spacer(Modifier.height(10.dp))
             if (editing) {
                 Row(
@@ -743,7 +748,7 @@ private fun DurationTimer(
                         shape = RoundedCornerShape(999.dp),
                     ) {
                         Text(
-                            if (overtime > 0) "Log full time (${elapsed}s)" else "Log time (${elapsed}s)",
+                            if (overtime > 0) "Log full time (${formatHms(elapsed)})" else "Log time (${formatHms(elapsed)})",
                             fontWeight = FontWeight.Bold,
                         )
                     }
@@ -757,7 +762,7 @@ private fun DurationTimer(
                                 contentColor = AppPalette.Accent,
                             ),
                         ) {
-                            Text("Log target only (${targetSeconds}s)", fontWeight = FontWeight.Bold)
+                            Text("Log target only (${formatHms(targetSeconds)})", fontWeight = FontWeight.Bold)
                         }
                     }
                     // Sharing one row instead of each taking a full stacked row - on a real
@@ -782,12 +787,18 @@ private fun DurationTimer(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        MomentumRing(modifier = Modifier.fillMaxWidth().height(230.dp), fraction = fraction, interactive = false) {
+        MomentumRing(
+            modifier = Modifier.fillMaxWidth().height(230.dp),
+            fraction = fraction,
+            interactive = false,
+            animateSeconds = if (phase == "running" && hasTarget) targetSeconds else null,
+            animateKey = runId,
+        ) {
             Text(
                 text = when {
-                    phase == "idle" -> "${initialSeconds ?: targetSeconds}s"
-                    inOvertime -> "+${overtime}s"
-                    else -> "${elapsed}s"
+                    phase == "idle" -> formatHms(initialSeconds ?: targetSeconds)
+                    inOvertime -> "+${formatHms(overtime)}"
+                    else -> formatHms(remaining)
                 },
                 fontSize = 48.sp,
                 fontWeight = FontWeight.ExtraBold,
@@ -799,7 +810,7 @@ private fun DurationTimer(
                 when {
                     phase == "idle" -> "Ready"
                     inOvertime -> "Overtime"
-                    hasTarget -> "Target"
+                    hasTarget -> "Remaining"
                     else -> "Elapsed"
                 },
                 fontSize = 13.sp,
@@ -808,7 +819,7 @@ private fun DurationTimer(
         }
         if (hasTarget) {
             Text(
-                "Target: ${targetSeconds}s",
+                "Target: ${formatHms(targetSeconds)}",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -843,15 +854,33 @@ private fun MomentumRing(
     fraction: Float,
     interactive: Boolean = true,
     onTap: () -> Unit = {},
+    // When set (DurationTimer's running phase only), the ring fills via a single continuous
+    // linear animation spanning `animateSeconds` real seconds, restarted on every `animateKey`
+    // change - the same LinearEasing tween RestRing already uses for its own depleting sweep,
+    // just filling instead. This replaces the spring-driven `fraction` animation below for as
+    // long as it's active: re-deriving `fraction` from `elapsed` once a second and re-triggering
+    // a fresh spring catch-up each time reads as discrete steps, not the continuous sweep a
+    // countdown ring should have.
+    animateSeconds: Int? = null,
+    animateKey: Int = 0,
     centerContent: @Composable () -> Unit,
 ) {
     val targetFraction = fraction.coerceIn(0f, 1f)
     val animatedFraction = remember { Animatable(targetFraction) }
-    LaunchedEffect(targetFraction) {
-        animatedFraction.animateTo(
-            targetFraction,
-            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
-        )
+    if (animateSeconds != null) {
+        LaunchedEffect(animateKey) {
+            animatedFraction.snapTo(0f)
+            if (animateSeconds > 0) {
+                animatedFraction.animateTo(1f, animationSpec = tween(animateSeconds * 1000, easing = LinearEasing))
+            }
+        }
+    } else {
+        LaunchedEffect(targetFraction) {
+            animatedFraction.animateTo(
+                targetFraction,
+                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+            )
+        }
     }
 
     val scale = remember { Animatable(1f) }
@@ -1031,4 +1060,18 @@ private fun WorkoutCompleteScreen(totalCompletedSets: Int, totalPlannedSets: Int
 private fun formatNumber(value: Double): String {
     val rounded = (value * 10).roundToInt() / 10.0
     return if (rounded == rounded.toLong().toDouble()) rounded.toLong().toString() else rounded.toString()
+}
+
+/** Formats whole seconds as M:SS, or H:MM:SS once an hour is involved - mirrors
+ * src/utils/tasks.js's formatHms exactly, for every timer display on this screen and
+ * QuantityTimerScreen's pure-timer flow. */
+fun formatHms(totalSeconds: Int): String {
+    val sign = if (totalSeconds < 0) "-" else ""
+    val s = kotlin.math.abs(totalSeconds)
+    val hours = s / 3600
+    val minutes = (s % 3600) / 60
+    val seconds = s % 60
+    val mm = if (hours > 0) minutes.toString().padStart(2, '0') else minutes.toString()
+    val ss = seconds.toString().padStart(2, '0')
+    return if (hours > 0) "$sign$hours:$mm:$ss" else "$sign$mm:$ss"
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { List, X } from 'lucide-react';
-import { parseQuickAddText, MAX_EXTRA_REMINDERS } from '../utils/tasks';
+import { parseQuickAddText, MAX_EXTRA_REMINDERS, formatHms, hmsToSeconds, secondsToHms } from '../utils/tasks';
 import { DAY_LABELS } from '../utils/date';
 import { ICON_OPTIONS, suggestIconId } from '../utils/icons';
 import { generateId } from '../utils/id';
@@ -23,6 +23,8 @@ function makeTask(days) {
     target: null,
     unit: null,
     quickAdd: null,
+    quantityMode: 'number',
+    autoUpdateTarget: false,
     exercises: [],
     active: true,
     createdAt: new Date().toISOString(),
@@ -69,6 +71,64 @@ function QuickAddInput({ task, onChange }) {
         onChange={(e) => handleChange(e.target.value)}
       />
     </label>
+  );
+}
+
+/**
+ * Every timer-related target in the app (exercise duration, quantity-as-timer) is set up through
+ * this shared hours/minutes/seconds triplet instead of a single raw-seconds field - much easier
+ * to enter a real-world duration like "10 minutes" than to do the mental math to 600. Storage/
+ * versioning is untouched by this: task.target and exercise.targetDurationSeconds still hold a
+ * single total-seconds number either way (see utils/tasks.js's hmsToSeconds/secondsToHms), so no
+ * schema change was needed to support this input style.
+ */
+function DurationHMSInput({ totalSeconds, onChange, label }) {
+  const { hours, minutes, seconds } = secondsToHms(totalSeconds);
+
+  const update = (patch) => {
+    const next = { hours, minutes, seconds, ...patch };
+    const combined = hmsToSeconds(next.hours, next.minutes, next.seconds);
+    onChange(combined || null);
+  };
+
+  return (
+    <div className="hms-input">
+      {label && <span className="field-label">{label}</span>}
+      <div className="hms-input-row">
+        <label className="hms-part">
+          <input
+            type="number"
+            min="0"
+            placeholder="0"
+            value={hours || ''}
+            onChange={(e) => update({ hours: e.target.value ? Number(e.target.value) : 0 })}
+          />
+          <span>h</span>
+        </label>
+        <label className="hms-part">
+          <input
+            type="number"
+            min="0"
+            max="59"
+            placeholder="0"
+            value={minutes || ''}
+            onChange={(e) => update({ minutes: e.target.value ? Number(e.target.value) : 0 })}
+          />
+          <span>m</span>
+        </label>
+        <label className="hms-part">
+          <input
+            type="number"
+            min="0"
+            max="59"
+            placeholder="0"
+            value={seconds || ''}
+            onChange={(e) => update({ seconds: e.target.value ? Number(e.target.value) : 0 })}
+          />
+          <span>s</span>
+        </label>
+      </div>
+    </div>
   );
 }
 
@@ -317,19 +377,11 @@ function ExerciseListEditor({ task, onChange, exerciseNames }) {
                 />
               </label>
               {ex.unit === 'seconds' ? (
-                <label>
-                  Duration/set (sec)
-                  <input
-                    type="number"
-                    min="1"
-                    value={ex.targetDurationSeconds ?? ''}
-                    onChange={(e) =>
-                      updateExercise(ex.id, {
-                        targetDurationSeconds: e.target.value ? Number(e.target.value) : null,
-                      })
-                    }
-                  />
-                </label>
+                <DurationHMSInput
+                  label="Duration/set"
+                  totalSeconds={ex.targetDurationSeconds}
+                  onChange={(secs) => updateExercise(ex.id, { targetDurationSeconds: secs })}
+                />
               ) : (
                 <label>
                   Reps/set
@@ -430,7 +482,14 @@ function TaskFields({ task, onChange, showTitle, exerciseNames }) {
           <button
             type="button"
             className={task.completionType === 'quantity' ? 'active' : ''}
-            onClick={() => onChange({ ...task, completionType: 'quantity', target: task.target ?? 10 })}
+            onClick={() =>
+              onChange({
+                ...task,
+                completionType: 'quantity',
+                target: task.target ?? 10,
+                quantityMode: task.quantityMode || 'number',
+              })
+            }
           >
             Quantity target
           </button>
@@ -454,27 +513,70 @@ function TaskFields({ task, onChange, showTitle, exerciseNames }) {
       </div>
       {task.completionType === 'quantity' && (
         <>
-          <div className="inline-fields">
-            <label>
-              Target
-              <input
-                type="number"
-                min="1"
-                value={task.target ?? ''}
-                onChange={(e) => onChange({ ...task, target: e.target.value ? Number(e.target.value) : null })}
-              />
-            </label>
-            <label>
-              Unit (optional)
-              <input
-                type="text"
-                placeholder="reps, pages…"
-                value={task.unit ?? ''}
-                onChange={(e) => onChange({ ...task, unit: e.target.value })}
-              />
-            </label>
+          <div>
+            <span className="field-label">Input as</span>
+            <div className="type-toggle">
+              <button
+                type="button"
+                className={task.quantityMode !== 'timer' ? 'active' : ''}
+                onClick={() => onChange({ ...task, quantityMode: 'number', target: null })}
+              >
+                Number
+              </button>
+              <button
+                type="button"
+                className={task.quantityMode === 'timer' ? 'active' : ''}
+                onClick={() => onChange({ ...task, quantityMode: 'timer', target: null, unit: null, quickAdd: null })}
+              >
+                Timer
+              </button>
+            </div>
           </div>
-          <QuickAddInput task={task} onChange={onChange} />
+          {task.quantityMode === 'timer' ? (
+            <>
+              <DurationHMSInput
+                label="Target duration"
+                totalSeconds={task.target}
+                onChange={(secs) => onChange({ ...task, target: secs })}
+              />
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={Boolean(task.autoUpdateTarget)}
+                  onChange={(e) => onChange({ ...task, autoUpdateTarget: e.target.checked })}
+                />
+                Auto-update target to new best
+              </label>
+              <p className="field-hint">
+                When on, logging a time longer than the current target raises the target to that
+                new best for next time.
+              </p>
+            </>
+          ) : (
+            <>
+              <div className="inline-fields">
+                <label>
+                  Target
+                  <input
+                    type="number"
+                    min="1"
+                    value={task.target ?? ''}
+                    onChange={(e) => onChange({ ...task, target: e.target.value ? Number(e.target.value) : null })}
+                  />
+                </label>
+                <label>
+                  Unit (optional)
+                  <input
+                    type="text"
+                    placeholder="reps, pages…"
+                    value={task.unit ?? ''}
+                    onChange={(e) => onChange({ ...task, unit: e.target.value })}
+                  />
+                </label>
+              </div>
+              <QuickAddInput task={task} onChange={onChange} />
+            </>
+          )}
         </>
       )}
       {task.completionType === 'workout' && (
@@ -646,7 +748,9 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
                     <div className="meta">
                       {task.time} · {task.days.length === 7 ? 'Every day' : `${task.days.length}/week`} ·{' '}
                       {task.completionType === 'quantity' &&
-                        `Target ${task.target ?? '?'} ${task.unit || ''}`}
+                        (task.quantityMode === 'timer'
+                          ? `Target ${task.target ? formatHms(task.target) : '?'}`
+                          : `Target ${task.target ?? '?'} ${task.unit || ''}`)}
                       {task.completionType === 'workout' &&
                         `${task.exercises?.length ?? 0} exercise${task.exercises?.length === 1 ? '' : 's'}`}
                       {task.completionType === 'boolean' && 'Yes/No'}

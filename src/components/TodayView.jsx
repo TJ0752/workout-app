@@ -5,7 +5,7 @@ import { getRoutineFraction, getTaskFraction, dateToKey, todayKey, startOfDay, c
 // Below this, a streak badge reads as noise rather than a meaningful "you're on a roll" signal.
 const STREAK_BADGE_MIN = 3;
 import { getRoutineIcon } from '../utils/icons';
-import { quickAddAmountsFor } from '../utils/tasks';
+import { quickAddAmountsFor, formatHms } from '../utils/tasks';
 
 function isTaskDueOn(task, taskVersionsMap, date) {
   const versions = taskVersionsMap[task.id];
@@ -106,12 +106,25 @@ function StreakBadge({ streak }) {
   );
 }
 
-function QuantityControl({ task, completions, dateKey, onAddQuantity, onSetQuantity, now, showCountdown, routineStreak }) {
+function QuantityControl({
+  task,
+  routine,
+  completions,
+  dateKey,
+  onAddQuantity,
+  onSetQuantity,
+  onStartQuantityTimer,
+  now,
+  showCountdown,
+  isToday,
+  routineStreak,
+}) {
   const actual = completions[task.id]?.[dateKey] || 0;
   const target = task.target || 0;
   const pct = target ? Math.min(100, Math.round((actual / target) * 100)) : 0;
   const isComplete = target > 0 && actual >= target;
   const isPartial = actual > 0 && !isComplete;
+  const isTimer = task.quantityMode === 'timer';
   const quickAmounts = quickAddAmountsFor(task);
 
   return (
@@ -122,7 +135,7 @@ function QuantityControl({ task, completions, dateKey, onAddQuantity, onSetQuant
           <StreakBadge streak={routineStreak} />
         </span>
         <span className={`qty-value ${isComplete ? 'complete' : isPartial ? 'partial' : ''}`}>
-          {actual} / {target} {task.unit || ''}
+          {isTimer ? `${formatHms(actual)} / ${formatHms(target)}` : `${actual} / ${target} ${task.unit || ''}`}
         </span>
       </div>
       <CountdownLabel
@@ -136,23 +149,37 @@ function QuantityControl({ task, completions, dateKey, onAddQuantity, onSetQuant
         <div className={`qty-fill ${isPartial ? 'partial' : ''}`} style={{ width: `${pct}%` }} />
       </div>
       <div className="qty-actions">
-        {quickAmounts.map((amount) => (
-          <button key={amount} className="qty-btn primary" onClick={() => onAddQuantity(task, amount, dateKey)}>
-            + {amount}
+        {isTimer ? (
+          <button
+            type="button"
+            className="qty-btn primary"
+            disabled={!isToday}
+            onClick={() => onStartQuantityTimer(task, routine, dateKey)}
+          >
+            Start timer
           </button>
-        ))}
-        <button
-          className="qty-btn"
-          onClick={() => {
-            const input = window.prompt(`Set ${task.title} total for this day:`, String(actual));
-            if (input === null) return;
-            const parsed = Number(input);
-            if (!Number.isNaN(parsed) && parsed >= 0) onSetQuantity(task, parsed, dateKey);
-          }}
-        >
-          Custom…
-        </button>
+        ) : (
+          <>
+            {quickAmounts.map((amount) => (
+              <button key={amount} className="qty-btn primary" onClick={() => onAddQuantity(task, amount, dateKey)}>
+                + {amount}
+              </button>
+            ))}
+            <button
+              className="qty-btn"
+              onClick={() => {
+                const input = window.prompt(`Set ${task.title} total for this day:`, String(actual));
+                if (input === null) return;
+                const parsed = Number(input);
+                if (!Number.isNaN(parsed) && parsed >= 0) onSetQuantity(task, parsed, dateKey);
+              }}
+            >
+              Custom…
+            </button>
+          </>
+        )}
         {isPartial && <span className="badge-partial">Partial</span>}
+        {isTimer && !isToday && <span className="badge-partial">Today only</span>}
       </div>
     </div>
   );
@@ -202,6 +229,7 @@ export default function TodayView({
   onAddQuantity,
   onSetQuantity,
   onStartWorkout,
+  onStartQuantityTimer,
   focusTaskId,
   focusRoutineId,
   onFocusHandled,
@@ -317,12 +345,15 @@ export default function TodayView({
                     </span>
                     <QuantityControl
                       task={task}
+                      routine={routine}
                       completions={completions}
                       dateKey={dateKey}
                       onAddQuantity={onAddQuantity}
                       onSetQuantity={onSetQuantity}
+                      onStartQuantityTimer={onStartQuantityTimer}
                       now={now}
                       showCountdown={isToday}
+                      isToday={isToday}
                       routineStreak={routineStreak}
                     />
                   </div>
@@ -414,12 +445,15 @@ export default function TodayView({
                         <li className="task-row" key={task.id} id={`today-task-${task.id}`} style={{ alignItems: 'flex-start' }}>
                           <QuantityControl
                             task={task}
+                            routine={routine}
                             completions={completions}
                             dateKey={dateKey}
                             onAddQuantity={onAddQuantity}
                             onSetQuantity={onSetQuantity}
+                            onStartQuantityTimer={onStartQuantityTimer}
                             now={now}
                             showCountdown={isToday}
+                            isToday={isToday}
                           />
                         </li>
                       );
