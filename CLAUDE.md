@@ -143,7 +143,10 @@ days, active flag, and completion type:
 - `boolean` — plain done/not-done.
 - `quantity` — a numeric `target` (+ optional `unit` and `quickAdd` shortcut amounts);
   completion is `actual / target`, clamped to 1, producing a genuine partial-completion
-  fraction rather than a boolean.
+  fraction rather than a boolean. `quantityMode` (`'number'`, the default, or `'timer'`)
+  switches how the target is set up/logged without changing this math at all — a timer-mode
+  task's `target`/`actual` are still plain seconds flowing through the identical
+  `actual / target` fraction; see "Quantity-as-timer" below.
 
 A task's `time` is its due-by moment — the one used for "was this due/complete on day X"
 analytics (below) and the anchor for its main reminder. `windowStart` (default `'00:00'`,
@@ -323,6 +326,43 @@ migrating from a different storage system entirely, not a schema version bump).
 `storage.js` functions always return a fresh read after any write (`return getRoutines()`
 / `return getCompletions()`) rather than trusting in-memory state — callers in `App.jsx`
 rely on this.
+
+**A real bug found on a real device, not CI or the browser: a migration can report success
+(`PRAGMA user_version` correctly advances) while its own `ALTER TABLE` statements silently never
+applied.** `DB_VERSION = 8` added `quantity_mode`/`auto_update_target` columns to
+`tasks`/`task_versions` (see "Quantity-as-timer" below) using the exact same
+`ALTER TABLE ... ADD COLUMN ... NOT NULL DEFAULT ...` pattern every prior migration had already
+used successfully in production. On at least one real device it didn't take: `user_version` was
+genuinely at 8, but the columns were missing, surfacing as `table tasks has no column named
+quantity_mode` on every single routine save from then on — `addUpgradeStatement`'s own upgrade
+runner only ever acts when the stored version is *behind* `DB_VERSION`, so once this happens it
+never retries and the device is stuck permanently, with no obvious recovery short of an
+uninstall (which loses all data). `openDatabase()` now runs `ensureQuantityModeColumns()` after
+every `db.open()` — a cheap `PRAGMA table_info(tasks)` check for the column, adding it directly
+via the same `ALTER TABLE` statements if it's missing. A no-op on any device where the migration
+ran correctly; a silent, non-destructive repair on one where it didn't. Verified by deliberately
+rebuilding a live database's `tasks` table without the column (simulating exactly this broken
+state) and confirming the very next `openDatabase()` call repairs it before any save is attempted.
+This pattern (verify the actual schema state directly rather than trusting the version-number
+bookkeeping alone) is the template to reach for again if a future migration is ever suspected of
+the same partial-apply failure — `@capacitor-community/sqlite`'s upgrade mechanism does not
+appear to guarantee the two stay in lockstep.
+
+**Save failures were completely silent before this was found.** The bug above was only
+diagnosable at all because `RoutinesView.jsx`'s `handleSave` previously had no error handling —
+`closeForm()` was chained directly after `await onSaveRoutine(payload)`, so any rejected promise
+(this migration bug, or any future storage-layer exception) just left the form sitting open with
+zero feedback, indistinguishable from the form simply not responding to the Save tap. Wrapped in
+try/catch now: the real `err.message` renders above the form (`.form-error`, the same class the
+pre-existing per-task validation messages below already used) and the form stays open with the
+user's input intact, turning "Save does nothing" into an actual diagnosable error message. The
+three pre-existing validation messages (unnamed task / no days selected / workout needs a named
+exercise, `RoutineForm.jsx`) were separately improved to name *which* task is the problem
+(`Task N needs a name.`) instead of one generic sentence with no indication of which of several
+tasks needs attention — found while chasing a report of this same failure down a different,
+initially-plausible-looking path (a multi-task routine's second task missing its own "Task name"
+field, easy to miss since it's a small field above whatever new fields drew the user's attention)
+before the real migration bug was isolated.
 
 ### Exercise repository (`src/storage.js`, `RoutineForm.jsx`)
 
@@ -1081,6 +1121,50 @@ same file) covers the same need with far less new surface area.
   one shared row (`.workout-duration-review-secondary` on web, a plain `Row` on native, each
   button taking half width) instead of each getting its own full-width stacked row — reclaims one
   row's height unconditionally, regardless of whether "Log target only" is also showing.
+- **Counts down by default, not up — a later, deliberate reversal of the original "always counts
+  up from zero" design above.** The live number now shows *remaining* (`target - elapsed`) while
+  short of the target, matching an ordinary kitchen-timer expectation, then switches to the exact
+  same `+overtime` count-up display once it's reached — nothing about the overtime phase changed,
+  only what's shown before it. Every displayed time (the ring's own number, the "Target: …"
+  label, and the review step's button text/logged totals) now goes through a shared `formatHms`
+  (`src/utils/tasks.js` / a Kotlin mirror in `WorkoutSessionScreen.kt`) rendering `M:SS` or
+  `H:MM:SS` instead of a raw `Ns` string — a duration target long enough to need H:M:S setup input
+  (see below) needs a matching display, not just a bigger number of seconds.
+- **The ring now fills with one continuous sweep instead of a once-a-second step.** The original
+  design (described above) re-derived `fraction` from `elapsed` every second and let
+  `MomentumRing`'s existing spring animation catch up to the new value each time — technically
+  smooth-looking per step, but a fresh spring "catch-up" motion every second reads as discrete
+  jumps, not the single continuous fill the rest screen's `RestRing` already had. Fixed by giving
+  `MomentumRing` a second animation mode: an optional `animateSeconds` (+ `animateKey` to restart
+  it) that, when set, switches from the per-render spring toward `fraction` to a single linear
+  animation from empty to full spanning that many real seconds — web via the same two-frame CSS
+  `transition: stroke-dashoffset {n}s linear` trick `RestRing` already used (just filling instead
+  of depleting), native via the identical `Animatable`/`tween(..., easing = LinearEasing)` pattern
+  `RestRing` already used. `DurationTimer` passes `animateSeconds` only while `phase === "running"`
+  and target > 0; the idle/stopped states and the reps-tap ring elsewhere are untouched, still
+  driven by the original spring-toward-`fraction` path. Because both the ring's sweep and the
+  once-a-second `elapsed` counter derive from the same real wall-clock time independently, the
+  ring naturally finishes exactly as overtime begins with no explicit hand-off logic needed —
+  matching the same "deliberately decoupled from the numeric countdown" relationship `RestRing`
+  already had between its ring and its own remaining-seconds label.
+- **`MomentumRing`/`DurationTimer` moved out of `WorkoutSessionView.jsx` into their own shared
+  file, `src/components/DurationTimer.jsx`**, once a second, unrelated feature (quantity-as-timer
+  tasks, below) needed the identical widget with none of the surrounding exercise/weight/reps
+  chrome. `DurationTimer` never referenced any of that chrome to begin with, so this was a
+  straight extraction, not a rewrite — `WorkoutSessionView.jsx` now imports both and is otherwise
+  unchanged. The native side has no equivalent extraction to make: `DurationTimer`/`MomentumRing`
+  were already plain top-level `@Composable` functions in `WorkoutSessionScreen.kt`, just marked
+  `private`; making `DurationTimer` (not `MomentumRing`, never called directly outside this file)
+  non-private was the only change needed for `QuantityTimerScreen.kt` to reuse it (see
+  "Quantity-as-timer" below).
+- **Setup-time durations (the exercise's "Duration/set", and the new quantity-timer target below)
+  are now entered as separate hours/minutes/seconds fields instead of one raw-seconds number** —
+  `DurationHMSInput` in `RoutineForm.jsx`, backed by `hmsToSeconds`/`secondsToHms`
+  (`src/utils/tasks.js`, both pure and unit-tested) converting to/from the single total-seconds
+  value that's all that's ever actually persisted (no schema/versioning change was needed for this
+  input style — it's purely a setup-form affordance). Typing "10 minutes" as `600` was always
+  possible but never pleasant; this replaced the plain number input outright rather than adding it
+  as a second, togglable mode.
 
 ### Native Android workout session (`android/shared/`, `android/app/.../workout/`)
 
@@ -1325,6 +1409,66 @@ driving a native Compose screen that has nothing to do with the WebView. The
 or a future API-36 CI emulator image — `android-emulator-verify.yml` currently runs API 30,
 which exercises the unchanged plain-notification fallback path, not the new one.
 
+### Quantity-as-timer (`RoutineForm.jsx`, `TodayView.jsx`, `QuantityTimerView.jsx`, native `workout/QuantityTimerScreen.kt`)
+
+A `quantity`-completionType task can be set up as a timer instead of a plain number —
+RoutineForm's "Input as: Number / Timer" toggle sets a new `task.quantityMode` (`'number'`, the
+existing/default behavior, or `'timer'`). In timer mode the task's `target` (still the same `REAL`
+column, still fed straight into the existing `actual/target` fraction math with zero analytics
+changes) is interpreted as whole seconds and set up via the same `DurationHMSInput` the exercise
+duration field uses, and completion is logged by running the identical `DurationTimer`
+widget/review-flow the workout session's duration exercises use (count down, overtime, "Log full
+time"/"Log target only"/"Edit custom time"/"Start again") — with none of the weight/reps/exercise
+chrome around it, since `DurationTimer` never touched those fields to begin with. `unit` and
+`quickAdd` are cleared and hidden in timer mode; they don't apply to a duration.
+
+- **Runs natively on-device, not as a plain WebView `setInterval` — a direct product
+  requirement** ("I also want the timer to be native, add it needs to be able to run for a long
+  time and avoid backgrounding"), since Android throttles/suspends JS timers the moment the app
+  backgrounds, and a meditation/hold-style timer is exactly the kind of task likely to be run with
+  the screen off or the app backgrounded. Rather than build a whole second native
+  Activity/Service/plugin from scratch, a timer-mode quantity task reuses the *exact* same
+  `WorkoutSessionActivity`/`WorkoutTimerService`/`WorkoutSessionPlugin` foreground-service host a
+  real workout session already uses (see "Native Android workout session" above) via a much
+  smaller `pureTimer: true` payload (`startNativeQuantityTimer`, `nativeWorkoutSession.js` — same
+  file/plugin as the workout session launcher, not a separate registration, since it's the same
+  underlying Activity) carrying just `targetSeconds`/`initialSeconds`, no
+  exercises/logs/workoutLogSources at all. `WorkoutSessionActivity.onCreate()` branches on
+  `pureTimer` before parsing anything exercise-related, rendering `QuantityTimerScreen` (a new,
+  minimal file: `TopAppBar` + the shared `DurationTimer`, nothing else) instead of the full
+  `WorkoutSessionScreen`. `startTimerServiceOncePermitted()`/the foreground service/its
+  chronometer notification are reused completely unchanged — a "Ready"/"Remaining"/"Overtime"
+  chronometer notification is exactly as meaningful for a plain timer as for a workout, and this
+  is what actually gives it the backgrounding survival the request asked for. Logging fires a new
+  `quantityTimerLogged` bridge event (`WorkoutSessionBridge.onQuantityTimerLogged`, mirroring the
+  existing `onSetLogged` field/idiom) instead of the workout session's `workoutSetLogged`, since a
+  pure timer has no `Exercise`/`setIndex` to attach to the event — and, unlike a workout set
+  (which stays on screen for the next set), immediately calls the same `finishWithResult()` the
+  close (✕) button does, since a quantity task logs exactly one value per run, not a sequence.
+  `WorkoutSessionView.jsx`'s web/dev-loop counterpart is `QuantityTimerView.jsx` — same
+  `DurationTimer` reuse, reached the same way (`activeSession`, branched by
+  `task.completionType` in `App.jsx`, `isNativeWorkoutSessionAvailable()` gating which path is
+  taken) as the workout session's own web fallback.
+- **Logs additively (`onAddQuantity`), not as an absolute set** — a timer can reasonably be run
+  more than once in a day (two separate meditation sessions), and each run should add to the
+  day's total the same way the plain quick-add buttons already do, not overwrite it.
+- **Auto-update-target opt-in ("new best").** A per-task `autoUpdateTarget` checkbox (default
+  off, versioned like every other task field) makes a timer-mode task raise its own `target` to
+  whatever was just logged, whenever that run's own seconds exceed the *current* target — judged
+  against the single run's value, not the day's accumulated total, since a 65s hold against a 60s
+  target is a new best regardless of what else was logged that day. `handleLogQuantityTimer`
+  (`App.jsx`) does the additive completion write via the existing `handleAddQuantity`, then
+  separately `upsertTask`s the raised target (a genuine new task version, same as any manual
+  RoutineForm edit) if the condition holds. The "Target duration" field the task was set up with
+  *is* this same value — editing it directly in RoutineForm afterward (including lowering it, no
+  floor enforced) is how a fluke session or a deliberate deload gets corrected; the field's label
+  switches to "Target duration (your current best)" and its hint text says so explicitly once
+  `autoUpdateTarget` is on, since otherwise nothing distinguishes "a value you set" from "a value
+  the app silently raised for you."
+- **Countdown, H:M:S formatting, and the smooth-fill ring are inherited for free** from the
+  `DurationTimer` changes described in "Live overtime timer for duration-based workout exercises"
+  above — this feature shares the identical component, not a parallel implementation.
+
 ### Fitness Stats (`src/components/DashboardView.jsx`, `src/utils/workouts.js`)
 
 Unlike the workout session screen above, this is **not** native — it's a second sub-tab
@@ -1540,6 +1684,18 @@ left in place (no tool available to delete a release asset from this environment
 that it's never matched by name, but worth knowing about if the "one `.apk` asset per release"
 assumption is relied on again anywhere else.
 
+**A third bug, found by the "check what version am I on" workflow this section's own version
+badge exists for**: the "publish dev release" step's `if:` condition was hardcoded to one
+specific working-branch name (`refs/heads/claude/android-routines-app-mvp-gjl4kh`, a leftover
+from the session that introduced flavors). It silently stopped publishing the moment a later
+session's working branch had a different name — `latest-android-dev` sat stuck on a days-old
+build with no error surfaced anywhere, since the workflow step itself still reported success
+(it just skipped, matching its `if:` being false). Found only because the app header's version
+badge (see "Design system" below) let a user notice the installed build's number wasn't moving.
+Fixed by changing the condition to `github.ref != 'refs/heads/main'` — tracks whatever branch is
+actively being pushed to, matching the workflow's own catch-all `branches: ['**']` push trigger,
+so it can't go stale the same way again the next time a session's branch is named differently.
+
 ### In-app update installer (`android/app/.../update/`, `src/utils/updateCheck.js`)
 
 This app is sideloaded, not distributed through the Play Store — only a privileged installer
@@ -1707,6 +1863,26 @@ reset means no tappable surface added later needs to remember to opt out of it
 individually. This replaced a narrower per-element rule that had only ever been added to
 `.workout-ring-tap`, leaving every other tappable element in the app still showing the
 native flash.
+
+**App header version badge, and the wrapping bug it caused.** `App.jsx`'s header shows a tiny
+`v{version}` badge (native-only, `App.getInfo()`, the same call `SettingsView.jsx` already made)
+next to "Daily Routines" specifically so which build is installed is visible at a glance without
+opening Settings — this is what let a user notice `latest-android-dev` had stopped updating (see
+the CI branch-tracking bug in "Test app / product flavors" above). Adding it as a fifth flex
+child to `.app-header` (logo, title, version badge, update-check button, settings button)
+overflowed a real device's narrower width and wrapped the settings gear onto a second row. Fixed
+by shrinking every header icon button (34px → 30px, glyphs scaled down to match), tightening the
+title's font-size, and letting the title itself ellipsis-truncate (`overflow: hidden;
+text-overflow: ellipsis; white-space: nowrap`) under real width pressure instead of wrapping —
+verified down to 320px, this app's own declared `body { min-width: 320px }`. Fixing this also
+surfaced a real, unrelated, already-present bug: `.app-logo-badge`'s size override
+(`width/height: 34px`, now 30px) had never actually applied, because the generic `.icon-badge`
+rule (38px) has identical selector specificity and happened to be declared later in `App.css` —
+equal specificity means whichever rule is later in source order wins, regardless of which one
+"looks" more specific to a reader. The logo badge had been rendering at 38px this whole time.
+Fixed with a combined selector (`.icon-badge.app-logo-badge`, genuinely higher specificity)
+instead of relying on source order, which is what any future override needs too if it can't
+guarantee it'll always be declared after `.icon-badge` in the file.
 
 ### A recurring ESLint false-positive
 
