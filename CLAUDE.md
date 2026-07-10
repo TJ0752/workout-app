@@ -1808,6 +1808,71 @@ something that can be almost entirely automatic.
   by checking `response?.status === 'ready'` first and short-circuiting straight back to the
   `'ready'` state instead of falling through to the downloading-toast path.
 
+### AI-generated routine import (`src/aiImport.js`, `SettingsView.jsx`)
+
+V1 of "generate routines with AI": a plain paste-JSON importer in Settings, not a chat interface
+embedded in the app — a direct product decision to ship something useful now rather than building
+an AI integration (API key storage, streaming, cost) as a first step. The actual workflow is: copy
+a schema prompt out of Settings, paste it into any AI chat (ChatGPT, Claude, etc. — genuinely
+chat-agnostic, since the mechanism is just "paste text, get JSON back"), ask it to generate a
+routine, copy its JSON reply back into the same Settings screen. Chosen specifically because it
+works from a mobile browser tab with zero setup — no API key, no new permission, no native code —
+matching the explicit ask ("something I can easily copy and get out of chatgpt chat even on
+mobile, maybe json format?").
+
+- **Additive only, never destructive.** Unlike `backup.js`'s full-replace restore (which the
+  Settings screen already warns is irreversible), an AI import only ever calls `upsertRoutine`/
+  `upsertTask` with fresh `generateId()`-generated ids for entirely new routines — it never reads,
+  diffs, or touches anything already in the app. `App.jsx`'s `handleAiImport(results)` loops
+  `upsertRoutine` + `upsertTask` per `{routine, tasks}` pair exactly the same way
+  `handleSaveRoutine` already does for a normal form save, then calls the same `refreshAllAndSync()`
+  helper `SettingsView`'s backup-restore path already reuses (full state refresh + notification
+  resync) — no new orchestration pattern was needed.
+- **One module is both the schema documentation and the validator, so they can't drift apart.**
+  `AI_IMPORT_PROMPT` (the copyable text shown in Settings) is a template literal built from the
+  exact same constants (`ICON_OPTIONS`, the completion-type/quantity-mode/exercise-type enums)
+  that `parseAiImportText`'s conversion functions (`convertRoutine`/`convertTask`/`convertExercise`)
+  validate against — there's no second, independently-maintained copy of "what fields exist" to
+  keep in sync by hand. **This is also the one place in the codebase explicitly flagged to update
+  whenever a new task/exercise config option is added** — a new field needs one change here (both
+  the prompt text and the corresponding `convert*` function), not a parallel schema file elsewhere.
+- **Never fails the whole import over one bad field.** Every routine/task/exercise that couldn't be
+  used at all, or a field that got silently defaulted to something reasonable (an invalid `time`,
+  an out-of-range `days` array, a missing `target`), is pushed onto a shared `notes` array rather
+  than raising — a partially-generated AI response still imports whatever parts of it were valid.
+  `parseAiImportText` only throws (`AiImportError`, carrying the full `issues`/`notes` list) if
+  literally nothing survived validation — the JSON didn't parse, or the input wasn't a
+  routine/array-of-routines/`{routines:[...]}` shape at all, or every routine in it was invalid.
+  Accepts a bare routine object, a bare array of routines, or `{"routines": [...]}` without the
+  caller needing to specify which, since it's genuinely unpredictable which of those an AI chat
+  will produce even when the prompt asks for one specific shape.
+- **Simple-routine title handling matches `RoutineForm`'s own "flat when simple" convention.** A
+  single-task routine's task doesn't need its own `title` in the input JSON at all — `convertTask`
+  reuses the routine's own title for it (`isSimple ? routineTitle : ...`), the same rule
+  `RoutineForm.jsx` already applies when rendering a one-task routine flat.
+- **Workout exercises resolve into the shared exercise repository for free, no special-casing
+  needed.** A `convertExercise` result carries only a fresh per-task-instance `id`, no
+  `exerciseId` — exactly the shape `upsertTask`'s existing `resolveExerciseIds` call already
+  expects for a brand-new exercise (see "Exercise repository" above), so an AI-imported "Bench
+  Press" resolves/merges into the repository, and any later PR/volume history, through the exact
+  same path a manually-typed new exercise name would.
+- **Settings UI** (`SettingsView.jsx`) adds a new "Import from AI" section below the existing
+  "Recent local backups" list: a "Copy AI prompt" button (`navigator.clipboard.writeText`, a
+  3-second "Prompt copied" confirmation matching the existing export/import status-message
+  pattern), a plain paste `<textarea>`, and an "Import" button (disabled while empty or mid-import)
+  that calls `parseAiImportText` and reports either a success count, a hard error
+  (`.ai-import-error`, `white-space: pre-line` since `AiImportError.message` can be multiple
+  newline-joined issues), or the soft-defaulted-field `notes` list (`.ai-import-notes`) alongside a
+  success message — a successful import can still have notes if some fields were defaulted, not
+  just on a hard failure.
+- Verified via a Playwright round-trip in the browser dev loop (this project's standard
+  verification method — see "Testing changes without an emulator" above): malformed JSON shows the
+  parse-error message; a JSON payload with one valid simple routine, one valid multi-task workout
+  routine, and one routine missing its required `title` imports the two valid ones (confirmed
+  actually present in the Routines list after closing Settings, including opening the workout
+  task's edit form and confirming its exercise resolved correctly) while surfacing a note
+  explaining why the third was skipped.
+
 ### Design system
 
 Single committed light theme (a warmer revision of the original "Soft Paper" look — warm

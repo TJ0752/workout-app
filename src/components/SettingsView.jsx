@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { App } from '@capacitor/app';
-import { ArrowLeft, DownloadCloud, History, UploadCloud } from 'lucide-react';
+import { ArrowLeft, Check, Clipboard, DownloadCloud, History, Sparkles, UploadCloud } from 'lucide-react';
 import { exportBackup, importBackup, listAutoBackups, restoreAutoBackup, formatAutoBackupName } from '../backup';
+import { AI_IMPORT_PROMPT, AiImportError, parseAiImportText } from '../aiImport';
 
-export default function SettingsView({ onClose, onImported }) {
+export default function SettingsView({ onClose, onImported, onAiImport }) {
   const [exportStatus, setExportStatus] = useState('idle'); // idle | exporting | done | error
   const [importStatus, setImportStatus] = useState('idle'); // idle | importing | done | error
   const [importError, setImportError] = useState('');
@@ -12,6 +13,13 @@ export default function SettingsView({ onClose, onImported }) {
   const [restoringName, setRestoringName] = useState(null);
   const [appInfo, setAppInfo] = useState(null);
   const fileInputRef = useRef(null);
+
+  const [promptCopied, setPromptCopied] = useState(false);
+  const [aiImportText, setAiImportText] = useState('');
+  const [aiImportStatus, setAiImportStatus] = useState('idle'); // idle | importing | done | error
+  const [aiImportError, setAiImportError] = useState('');
+  const [aiImportNotes, setAiImportNotes] = useState([]);
+  const [aiImportCount, setAiImportCount] = useState(0);
 
   useEffect(() => {
     listAutoBackups().then(setAutoBackups);
@@ -79,6 +87,36 @@ export default function SettingsView({ onClose, onImported }) {
       setImportError(err.message || 'Something went wrong restoring that snapshot.');
     } finally {
       setRestoringName(null);
+    }
+  };
+
+  const handleCopyPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(AI_IMPORT_PROMPT);
+      setPromptCopied(true);
+      setTimeout(() => setPromptCopied(false), 3000);
+    } catch (err) {
+      console.warn('Copy failed', err);
+    }
+  };
+
+  const handleAiImportSubmit = async () => {
+    setAiImportStatus('importing');
+    setAiImportError('');
+    setAiImportNotes([]);
+    try {
+      const { results, notes } = parseAiImportText(aiImportText);
+      await onAiImport?.(results);
+      setAiImportStatus('done');
+      setAiImportCount(results.length);
+      setAiImportNotes(notes);
+      setAiImportText('');
+    } catch (err) {
+      console.warn('AI import failed', err);
+      setAiImportStatus('error');
+      setAiImportError(
+        err instanceof AiImportError ? err.issues.join('\n') : err.message || 'Something went wrong reading that JSON.'
+      );
     }
   };
 
@@ -172,6 +210,55 @@ export default function SettingsView({ onClose, onImported }) {
               </ul>
             )}
           </>
+        )}
+
+        <div className="section-title">Import from AI</div>
+        <p className="settings-desc">
+          Ask ChatGPT (or any AI chat) to generate a routine, copy the prompt below into it first
+          so it knows the exact shape to output, then paste its JSON reply back in here. This adds
+          new routines alongside what's already in the app - it never replaces or overwrites
+          anything.
+        </p>
+
+        <div className="settings-actions">
+          <button type="button" className="settings-action-btn" onClick={handleCopyPrompt}>
+            {promptCopied ? <Check size={16} /> : <Clipboard size={16} />}
+            {promptCopied ? 'Prompt copied' : 'Copy AI prompt'}
+          </button>
+        </div>
+
+        <textarea
+          className="ai-import-textarea"
+          placeholder="Paste the AI's JSON reply here…"
+          value={aiImportText}
+          onChange={(e) => setAiImportText(e.target.value)}
+          rows={6}
+        />
+
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="settings-action-btn"
+            onClick={handleAiImportSubmit}
+            disabled={aiImportStatus === 'importing' || !aiImportText.trim()}
+          >
+            <Sparkles size={16} className={aiImportStatus === 'importing' ? 'spin' : ''} />
+            Import
+          </button>
+        </div>
+
+        {aiImportStatus === 'done' && (
+          <p className="settings-status success">
+            Imported {aiImportCount} {aiImportCount === 1 ? 'routine' : 'routines'}.
+          </p>
+        )}
+        {aiImportStatus === 'error' && <p className="settings-status error ai-import-error">{aiImportError}</p>}
+        {aiImportNotes.length > 0 && (
+          <ul className="ai-import-notes">
+            {aiImportNotes.map((note, i) => (
+              <li key={i}>{note}</li>
+            ))}
+          </ul>
         )}
       </div>
     </div>

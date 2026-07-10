@@ -226,6 +226,20 @@ function App() {
     await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
   };
 
+  // One upsertRoutine + upsertTask pass per {routine, tasks} pair aiImport.js's parseAiImportText
+  // produced - identical to handleSaveRoutine's own write pattern above, since these are genuine
+  // new routines with fresh ids, not an edit to an existing one. Purely additive: nothing already
+  // in the app is read, diffed, or touched.
+  const handleAiImport = async (results) => {
+    for (const { routine, tasks } of results) {
+      await upsertRoutine(routine);
+      for (const task of tasks) {
+        await upsertTask({ ...task, routineId: routine.id });
+      }
+    }
+    await refreshAllAndSync();
+  };
+
   const handleArchiveRoutine = async (routine) => {
     if (
       !confirm(
@@ -437,7 +451,11 @@ function App() {
   if (showSettings) {
     return (
       <div className="app-shell">
-        <SettingsView onClose={() => setShowSettings(false)} onImported={refreshAllAndSync} />
+        <SettingsView
+          onClose={() => setShowSettings(false)}
+          onImported={refreshAllAndSync}
+          onAiImport={handleAiImport}
+        />
       </div>
     );
   }

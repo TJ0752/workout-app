@@ -207,6 +207,35 @@
   color: var(--text-soft);
 }
 
+.ai-import-textarea {
+  width: 100%;
+  margin: 0.7rem 0;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.9em;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.ai-import-error {
+  white-space: pre-line;
+}
+
+.ai-import-notes {
+  margin: 0.5rem 0 0;
+  padding: 0.6rem 0.8rem 0.6rem 1.6rem;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--text-soft);
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+
 .auto-backup-when {
   flex: 1;
   color: var(--text);
