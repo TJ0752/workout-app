@@ -8,6 +8,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 analytics. React + Vite web app packaged as a native Android app via Capacitor. All data
 is stored on-device in SQLite; there is no backend.
 
+## Ground rules for any Claude Code session working here
+
+These apply regardless of which session or which chat is doing the work — read them before
+making changes, not just once at project init.
+
+- **Ask before guessing on anything ambiguous, product-decision-shaped, or destructive.** If a
+  request could reasonably be done more than one way, or depends on something only the user
+  knows (a real-world constraint, a preference, which of two reasonable defaults they want),
+  ask rather than silently picking one and running with it. This has been the actual working
+  pattern throughout this project's history — e.g. confirming the canonical weight unit was kg
+  before building last-used-weight prefill, confirming before merging any branch into `main`.
+  Don't treat that as a one-off; treat it as the default.
+- **Keep the AI-import JSON schema in lockstep with the app's real config options.** Every time a
+  task/routine/exercise field is added, renamed, removed, or changes meaning, update *both*
+  `AI_IMPORT_PROMPT` and the matching `convert*` function in `src/aiImport.js` in the same
+  change — see "AI-generated routine import" below for why this lives as one module instead of
+  two independently-maintained schemas that could drift apart. This is part of what "done" means
+  for that change, not a follow-up to do later.
+- **Dev-test before pushing to production.** Only `main` builds/publishes the real
+  `latest-android` release that the in-app updater installs (see "Test app / product flavors"
+  below) — any other branch only ever reaches the `.dev` test app. Verify a change first (at
+  minimum a browser Playwright round-trip per "Testing changes without an emulator" below; the
+  `android-emulator-verify.yml` real-device harness for anything native-only/notification/SQLite-
+  lifecycle related) on a working branch, run `npm run lint`/`npm test`/`npm run build`, and only
+  merge to `main` once the user has explicitly confirmed they're happy with it — never push
+  straight to `main` unprompted.
+
 ## Commands
 
 ```bash
