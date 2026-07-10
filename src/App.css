@@ -2402,9 +2402,25 @@
   color: var(--card);
 }
 
+.workout-duration-btn.pause {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
 .workout-duration-btn.stop {
   background: var(--bad-soft);
   color: var(--bad);
+}
+
+/* Running/paused each show two buttons side by side (Pause+Stop, Resume+Stop) instead of the
+   single centered Start/Stop button idle/every other phase gets. */
+.workout-duration-timer-row {
+  display: flex;
+  gap: 0.5rem;
+  width: 100%;
+}
+.workout-duration-timer-row .workout-duration-btn {
+  flex: 1;
 }
 
 .workout-duration-btn.ghost {

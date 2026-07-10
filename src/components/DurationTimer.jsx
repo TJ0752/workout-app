@@ -85,11 +85,19 @@ export function MomentumRing({
  * clock), so the ring simply stays full through overtime with no extra logic needed.
  */
 export function DurationTimer({ targetSeconds, initialSeconds, onLog }) {
-  const [phase, setPhase] = useState('idle'); // 'idle' | 'running' | 'stopped'
+  const [phase, setPhase] = useState('idle'); // 'idle' | 'running' | 'paused' | 'stopped'
   const [elapsed, setElapsed] = useState(0);
   const [editing, setEditing] = useState(false);
   const [customValue, setCustomValue] = useState('');
   const [runId, setRunId] = useState(0);
+  // Once a run has been paused/resumed, the ring falls back to its plain step-by-step fraction
+  // fill for the rest of that run instead of the continuous animateSeconds sweep - the sweep is a
+  // single CSS transition that always runs from 0 to 1 over the *full* targetSeconds starting at
+  // animateKey, so resuming mid-run has no way to restart it from the correct partial fraction
+  // over just the remaining time without either jumping the ring or re-timing the sweep. An
+  // uninterrupted run still gets the smooth sweep; a paused one gets a correctly-tracking (if
+  // less silky) once-a-second update instead, which is a fair trade for a much smaller change.
+  const [everPaused, setEverPaused] = useState(false);
 
   useEffect(() => {
     if (phase !== 'running') return undefined;
@@ -106,8 +114,16 @@ export function DurationTimer({ targetSeconds, initialSeconds, onLog }) {
   const start = () => {
     setElapsed(0);
     setEditing(false);
+    setEverPaused(false);
     setPhase('running');
     setRunId((n) => n + 1);
+  };
+
+  const pause = () => setPhase('paused');
+
+  const resume = () => {
+    setEverPaused(true);
+    setPhase('running');
   };
 
   const stop = () => {
@@ -174,7 +190,7 @@ export function DurationTimer({ targetSeconds, initialSeconds, onLog }) {
         fraction={fraction}
         interactive={false}
         hint="Duration timer"
-        animateSeconds={phase === 'running' && hasTarget ? targetSeconds : undefined}
+        animateSeconds={phase === 'running' && hasTarget && !everPaused ? targetSeconds : undefined}
         animateKey={runId}
       >
         <span className={`workout-ring-num ${inOvertime ? 'overtime' : ''}`}>
@@ -185,19 +201,43 @@ export function DurationTimer({ targetSeconds, initialSeconds, onLog }) {
               : formatHms(remaining)}
         </span>
         <span className="workout-ring-hint">
-          {phase === 'idle' ? 'Ready' : inOvertime ? 'Overtime' : hasTarget ? 'Remaining' : 'Elapsed'}
+          {phase === 'idle'
+            ? 'Ready'
+            : phase === 'paused'
+              ? 'Paused'
+              : inOvertime
+                ? 'Overtime'
+                : hasTarget
+                  ? 'Remaining'
+                  : 'Elapsed'}
         </span>
       </MomentumRing>
       {hasTarget && <div className="workout-duration-target">Target: {formatHms(targetSeconds)}</div>}
       <div className="workout-duration-timer">
-        {phase === 'idle' ? (
+        {phase === 'idle' && (
           <button type="button" className="workout-duration-btn primary" onClick={start}>
             Start
           </button>
-        ) : (
-          <button type="button" className="workout-duration-btn stop" onClick={stop}>
-            Stop
-          </button>
+        )}
+        {phase === 'running' && (
+          <div className="workout-duration-timer-row">
+            <button type="button" className="workout-duration-btn pause" onClick={pause}>
+              Pause
+            </button>
+            <button type="button" className="workout-duration-btn stop" onClick={stop}>
+              Stop
+            </button>
+          </div>
+        )}
+        {phase === 'paused' && (
+          <div className="workout-duration-timer-row">
+            <button type="button" className="workout-duration-btn primary" onClick={resume}>
+              Resume
+            </button>
+            <button type="button" className="workout-duration-btn stop" onClick={stop}>
+              Stop
+            </button>
+          </div>
         )}
       </div>
     </>

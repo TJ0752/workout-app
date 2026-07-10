@@ -40,9 +40,12 @@ class WorkoutTimerService : Service() {
         private const val ACTION_UPDATE_REST = "com.tharuka.routines.workout.action.UPDATE_REST"
         private const val ACTION_CLEAR_REST = "com.tharuka.routines.workout.action.CLEAR_REST"
         private const val ACTION_UPDATE_PROGRESS = "com.tharuka.routines.workout.action.UPDATE_PROGRESS"
+        private const val ACTION_PAUSE = "com.tharuka.routines.workout.action.PAUSE"
+        private const val ACTION_RESUME = "com.tharuka.routines.workout.action.RESUME"
         private const val ACTION_STOP = "com.tharuka.routines.workout.action.STOP"
         private const val EXTRA_TASK_TITLE = "taskTitle"
         private const val EXTRA_REST_SECONDS = "restSeconds"
+        private const val EXTRA_ELAPSED_SECONDS = "elapsedSeconds"
         private const val EXTRA_EXERCISE_NAME = "exerciseName"
         private const val EXTRA_PLANNED_SETS = "plannedSetsPerExercise"
         private const val EXTRA_COMPLETED_SETS = "completedSetsPerExercise"
@@ -118,11 +121,35 @@ class WorkoutTimerService : Service() {
             val intent = Intent(context, WorkoutTimerService::class.java).apply { action = ACTION_STOP }
             context.startService(intent)
         }
+
+        /**
+         * Only ever called from a DurationTimer's Pause action (a duration-based exercise set,
+         * or the standalone quantity-as-timer flow) - a workout with weight/reps-based sets has
+         * no start/stop/pause concept at all, so this can't fire mid-workout outside a duration
+         * segment. Swaps the notification's chronometer off in favor of a static "Paused at"
+         * text, the same tradeoff TimerForegroundService (the standalone-timer counterpart)
+         * makes, since a chronometer can't be paused/resumed in place - it always counts from a
+         * fixed setWhen() anchor.
+         */
+        fun pause(context: Context, elapsedSeconds: Int) {
+            val intent = Intent(context, WorkoutTimerService::class.java).apply {
+                action = ACTION_PAUSE
+                putExtra(EXTRA_ELAPSED_SECONDS, elapsedSeconds)
+            }
+            context.startService(intent)
+        }
+
+        fun resume(context: Context) {
+            val intent = Intent(context, WorkoutTimerService::class.java).apply { action = ACTION_RESUME }
+            context.startService(intent)
+        }
     }
 
     private var taskTitle: String = "Workout"
     private var sessionStartMs: Long = System.currentTimeMillis()
     private var isResting: Boolean = false
+    private var isPaused: Boolean = false
+    private var pausedElapsedSeconds: Int = 0
     private var currentExerciseName: String = ""
     private var plannedSetsPerExercise: List<Int> = emptyList()
     private var completedSetsPerExercise: List<Int> = emptyList()
@@ -140,12 +167,25 @@ class WorkoutTimerService : Service() {
             ACTION_START -> {
                 taskTitle = intent.getStringExtra(EXTRA_TASK_TITLE) ?: taskTitle
                 sessionStartMs = System.currentTimeMillis()
+                isPaused = false
                 ServiceCompat.startForeground(
                     this,
                     NOTIFICATION_ID,
                     buildNotification(resting = false, restEndMs = 0L),
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH,
                 )
+            }
+            ACTION_PAUSE -> {
+                isPaused = true
+                pausedElapsedSeconds = intent.getIntExtra(EXTRA_ELAPSED_SECONDS, 0)
+                postNotification(buildNotification(resting = false, restEndMs = 0L))
+            }
+            ACTION_RESUME -> {
+                isPaused = false
+                // Shifts the chronometer's anchor back by the already-elapsed time so it resumes
+                // counting from where it was paused instead of restarting from 0.
+                sessionStartMs = System.currentTimeMillis() - (pausedElapsedSeconds * 1000L)
+                postNotification(buildNotification(resting = false, restEndMs = 0L))
             }
             ACTION_UPDATE_REST -> {
                 isResting = true
@@ -186,10 +226,10 @@ class WorkoutTimerService : Service() {
     }
 
     private fun buildNotification(resting: Boolean, restEndMs: Long): Notification {
-        // The rich progress bar only applies while actively logging sets - during rest the plain
-        // chronometer-countdown notification below already covers that concern well, and rest
-        // naturally pauses "current exercise progress" conceptually anyway.
-        if (ENABLE_PROGRESS_STYLE_NOTIFICATION && Build.VERSION.SDK_INT >= 36 && !resting) {
+        // The rich progress bar only applies while actively logging sets - during rest, or while
+        // a duration segment is paused, the plain notification below already covers that concern
+        // well, and both naturally pause "current exercise progress" conceptually anyway.
+        if (ENABLE_PROGRESS_STYLE_NOTIFICATION && Build.VERSION.SDK_INT >= 36 && !resting && !isPaused) {
             // buildProgressStyleNotification() compiles cleanly (confirmed in CI) but has never
             // actually run on a real Android 16 device - Android's notification system is known
             // to enforce runtime validation on newer styles beyond what the compiler can check,
@@ -210,16 +250,28 @@ class WorkoutTimerService : Service() {
             .setContentTitle(taskTitle)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setUsesChronometer(true)
 
-        if (resting) {
-            builder.setContentText("Resting")
-            builder.setWhen(restEndMs)
-            builder.setChronometerCountDown(true)
-        } else {
-            builder.setContentText("Workout in progress")
-            builder.setWhen(sessionStartMs)
-            builder.setChronometerCountDown(false)
+        when {
+            // A chronometer can't be paused/resumed in place - it always ticks from a fixed
+            // setWhen() anchor - so a pause swaps to a static, non-ticking text instead.
+            isPaused -> {
+                val mins = pausedElapsedSeconds / 60
+                val secs = pausedElapsedSeconds % 60
+                builder.setUsesChronometer(false)
+                builder.setContentText("Paused at ${mins}:${secs.toString().padStart(2, '0')}")
+            }
+            resting -> {
+                builder.setUsesChronometer(true)
+                builder.setContentText("Resting")
+                builder.setWhen(restEndMs)
+                builder.setChronometerCountDown(true)
+            }
+            else -> {
+                builder.setUsesChronometer(true)
+                builder.setContentText("Workout in progress")
+                builder.setWhen(sessionStartMs)
+                builder.setChronometerCountDown(false)
+            }
         }
         return builder.build()
     }

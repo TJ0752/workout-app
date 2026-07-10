@@ -36,6 +36,8 @@ fun QuantityTimerScreen(
     initialSeconds: Int?,
     onLog: (Int) -> Unit,
     onClose: () -> Unit,
+    onPause: ((Int) -> Unit)? = null,
+    onResume: (() -> Unit)? = null,
 ) {
     Scaffold(
         containerColor = AppPalette.Background,
@@ -54,7 +56,13 @@ fun QuantityTimerScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            DurationTimer(targetSeconds = targetSeconds, initialSeconds = initialSeconds, onLog = onLog)
+            DurationTimer(
+                targetSeconds = targetSeconds,
+                initialSeconds = initialSeconds,
+                onLog = onLog,
+                onPause = onPause,
+                onResume = onResume,
+            )
         }
     }
 }

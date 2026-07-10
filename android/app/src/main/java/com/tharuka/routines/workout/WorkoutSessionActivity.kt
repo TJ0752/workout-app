@@ -86,6 +86,8 @@ class WorkoutSessionActivity : ComponentActivity() {
                                 finishWithResult()
                             },
                             onClose = { finishWithResult() },
+                            onPause = { elapsedSecs -> WorkoutTimerService.pause(this, elapsedSecs) },
+                            onResume = { WorkoutTimerService.resume(this) },
                         )
                     }
                 }

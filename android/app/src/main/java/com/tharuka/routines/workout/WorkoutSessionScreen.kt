@@ -118,6 +118,9 @@ object AppPalette {
     // here for the duration timer's overtime display since exceeding a target reads as a small
     // win, not a warning (see DurationTimer below).
     val GoldInk = Color(0xFF6B4C14)
+    // Matches src/index.css's --warn exactly - "partial/in-progress," reused here for
+    // DurationTimer's Pause button so it doesn't compete with Bad/Stop's red for attention.
+    val Warn = Color(0xFFD9A23B)
 }
 
 val WorkoutColorScheme = lightColorScheme(
@@ -665,12 +668,20 @@ fun DurationTimer(
     targetSeconds: Int,
     initialSeconds: Int?,
     onLog: (Int) -> Unit,
+    onPause: ((Int) -> Unit)? = null,
+    onResume: (() -> Unit)? = null,
 ) {
-    var phase by remember { mutableStateOf("idle") } // "idle" | "running" | "stopped"
+    var phase by remember { mutableStateOf("idle") } // "idle" | "running" | "paused" | "stopped"
     var elapsed by remember { mutableStateOf(0) }
     var editing by remember { mutableStateOf(false) }
     var customValue by remember { mutableStateOf("") }
     var runId by remember { mutableStateOf(0) }
+    // Once a run has been paused/resumed, the ring falls back to its plain step-by-step fraction
+    // fill for the rest of that run instead of the continuous animateSeconds sweep - see the web
+    // DurationTimer.jsx counterpart's identical `everPaused` for why (the sweep always animates
+    // from 0 over the full targetSeconds starting at runId, with no way to resume it mid-flight
+    // from a partial fraction over just the remaining time).
+    var hasPaused by remember { mutableStateOf(false) }
 
     LaunchedEffect(phase, elapsed) {
         if (phase == "running") {
@@ -693,8 +704,20 @@ fun DurationTimer(
     fun start() {
         elapsed = 0
         editing = false
+        hasPaused = false
         phase = "running"
         runId += 1
+    }
+
+    fun pause() {
+        phase = "paused"
+        onPause?.invoke(elapsed)
+    }
+
+    fun resume() {
+        hasPaused = true
+        phase = "running"
+        onResume?.invoke()
     }
 
     fun stop() {
@@ -791,7 +814,7 @@ fun DurationTimer(
             modifier = Modifier.fillMaxWidth().height(230.dp),
             fraction = fraction,
             interactive = false,
-            animateSeconds = if (phase == "running" && hasTarget) targetSeconds else null,
+            animateSeconds = if (phase == "running" && hasTarget && !hasPaused) targetSeconds else null,
             animateKey = runId,
         ) {
             Text(
@@ -809,6 +832,7 @@ fun DurationTimer(
             Text(
                 when {
                     phase == "idle" -> "Ready"
+                    phase == "paused" -> "Paused"
                     inOvertime -> "Overtime"
                     hasTarget -> "Remaining"
                     else -> "Elapsed"
@@ -826,17 +850,61 @@ fun DurationTimer(
                 modifier = Modifier.padding(top = 6.dp),
             )
         }
-        Button(
-            onClick = if (phase == "idle") ::start else ::stop,
-            shape = RoundedCornerShape(999.dp),
-            modifier = Modifier.height(52.dp).padding(top = 10.dp),
-            colors = if (phase == "running") {
-                ButtonDefaults.buttonColors(containerColor = AppPalette.Bad.copy(alpha = 0.15f), contentColor = AppPalette.Bad)
-            } else {
-                ButtonDefaults.buttonColors()
-            },
-        ) {
-            Text(if (phase == "idle") "Start" else "Stop", fontWeight = FontWeight.Bold)
+        when (phase) {
+            "idle" -> {
+                Button(
+                    onClick = ::start,
+                    shape = RoundedCornerShape(999.dp),
+                    modifier = Modifier.height(52.dp).padding(top = 10.dp),
+                ) {
+                    Text("Start", fontWeight = FontWeight.Bold)
+                }
+            }
+            "running" -> {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(
+                        onClick = ::pause,
+                        shape = RoundedCornerShape(999.dp),
+                        modifier = Modifier.weight(1f).height(52.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = AppPalette.Warn.copy(alpha = 0.15f), contentColor = AppPalette.Warn),
+                    ) {
+                        Text("Pause", fontWeight = FontWeight.Bold)
+                    }
+                    Button(
+                        onClick = ::stop,
+                        shape = RoundedCornerShape(999.dp),
+                        modifier = Modifier.weight(1f).height(52.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = AppPalette.Bad.copy(alpha = 0.15f), contentColor = AppPalette.Bad),
+                    ) {
+                        Text("Stop", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+            "paused" -> {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(
+                        onClick = ::resume,
+                        shape = RoundedCornerShape(999.dp),
+                        modifier = Modifier.weight(1f).height(52.dp),
+                    ) {
+                        Text("Resume", fontWeight = FontWeight.Bold)
+                    }
+                    Button(
+                        onClick = ::stop,
+                        shape = RoundedCornerShape(999.dp),
+                        modifier = Modifier.weight(1f).height(52.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = AppPalette.Bad.copy(alpha = 0.15f), contentColor = AppPalette.Bad),
+                    ) {
+                        Text("Stop", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
         }
     }
 }
