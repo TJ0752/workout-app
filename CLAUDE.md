@@ -655,7 +655,9 @@ needs to be checked against this whole list by hand:
 - `notify/` (this package): `DUE_REMINDER_ID_BASE = 600,000,000` (one id per task via
   `DUE_REMINDER_ID_BASE + hashToInt(taskId)`), `SUMMARY_NOTIFICATION_ID = 800,000,001`,
   `EXTRA_REMINDER_ID_BASE = 450,000,000` (one id per `(taskId, slot)` via
-  `EXTRA_REMINDER_ID_BASE + hashToInt("$taskId:$slot")`), `GROUP_SUMMARY_ID_BASE =
+  `EXTRA_REMINDER_ID_BASE + hashToInt("$taskId:$slot")`), `RESCHEDULE_REMINDER_ID_BASE =
+  480,000,000` (one id per `(taskId, newDate)` via
+  `RESCHEDULE_REMINDER_ID_BASE + hashToInt("$taskId:$newDate")`), `GROUP_SUMMARY_ID_BASE =
   700,000,000` (one id per routine via `GROUP_SUMMARY_ID_BASE + hashToInt(routineId)`),
   `MORNING_DIGEST_ID = 900,000,002`, `EVENING_DIGEST_ID = 900,000,003`, `STREAK_RISK_ID =
   900,000,004` (fixed, not hashed — only ever these 3 digest kinds), and
@@ -1980,15 +1982,58 @@ completion-adjacent).
   `clearTaskReschedule` then a full `refreshAll()` - not just a completions patch like
   `handleToggleComplete`/`handleAddQuantity` above, since a reschedule changes which days are due
   at all, not what's logged on an already-due day. Both re-sync the task's notifications
-  afterward - currently a harmless no-op (the reminder still fires on the task's original
-  recurring day/time, since the JS scheduler doesn't consult reschedule data yet), forward-compat
-  for once a native one-off-date reminder alarm exists to actually move the notification too.
-- **Not yet built: the reminder doesn't move with the task.** Moving a task's *reminder* to the
-  new date needs a genuinely new native alarm type - every existing scheduler
-  (`DueReminderScheduler`/`ExtraReminderScheduler`/`DailyDigestScheduler`) only knows how to arm a
-  recurring alarm across a set of weekdays, never a true one-shot fire on a single specific
-  calendar date. The completion/analytics half of this feature is fully live today; the
-  reminder-follows-the-move half is deliberately deferred as a separate, larger follow-up.
+  afterward, which now actually moves the reminder too - see below.
+- **The reminder now moves with the task, via a genuinely new native alarm type
+  (`notify/RescheduleReminder*.kt`).** Every pre-existing scheduler
+  (`DueReminderScheduler`/`ExtraReminderScheduler`/`DailyDigestScheduler`) only ever knows how to
+  arm a recurring alarm across a set of weekdays - none of them can fire once, on one specific
+  calendar date, which is exactly what a moved occurrence needs. `RescheduleReminderScheduler`
+  parses `entry.newDate` (`'YYYY-MM-DD'`) directly into a `Calendar` moment instead of reusing
+  `computeNextOccurrenceDaysFromNow`'s day-of-week arithmetic, since there's no recurrence to
+  compute - `RescheduleReminderAlarmReceiver` fires exactly once and clears its own store entry
+  immediately after posting rather than self-rescheduling. `RescheduleReminderStore` is keyed by
+  `(taskId, newDate)`, the same multi-entry-per-task shape `ExtraReminderStore` already
+  established (a task can have more than one active reschedule at once, across different weeks).
+  Reuses the due reminder's channel and its exact Mark-done/`+N`/Snooze action-dispatch plumbing
+  (`dispatchDueReminderAction`) as-is.
+  - **`scheduleTaskNotifications` (`src/notifications.js`) rebuilds every reschedule reminder
+    from scratch on every sync** (`nativeCancelRescheduleReminders` unconditionally, then one
+    `nativeScheduleRescheduleReminder` call per current `task_reschedules` row) rather than
+    diffing against what was previously armed, the way the due/extra reminders carefully avoid
+    doing. This is safe specifically *because* it's a one-shot alarm: unlike the due reminder,
+    it has no persisted `awaitingCompletion`/reappear-on-dismiss state a destructive cancel+rearm
+    could lose - re-arming to the identical trigger moment is invisible to the user either way.
+  - **The original day's recurring due/extra reminders must not fire visibly for a rescheduled-away
+    occurrence, or the task would get a reminder for a day it's no longer due on.**
+    `DueReminderEntry` gained a `skipDates: List<String>` field - the task's own outgoing
+    `task_reschedules.originalDate`s, computed in JS and passed straight through
+    `scheduleDueReminder`. `DueReminderAlarmReceiver` checks `todayDateKey()` against
+    `entry.skipDates` before posting (but *always* re-arms next week's occurrence regardless -
+    the recurring schedule itself is untouched, only this one week's visible post is
+    suppressed), and `DueReminderScheduler.schedule()`'s immediate overdue-catch-up path gets the
+    identical check, so a freshly-rescheduled task doesn't get an instant catch-up post for the
+    day it was just moved off of. `ExtraReminderAlarmReceiver` (which re-alerts the *due*
+    reminder's own notification id, not a separate one, when it fires) checks the same
+    `skipDates` on the due entry it reads before re-alerting, and - unlike its existing
+    no-due-entry fallback - does *not* fall back to posting its own dedicated notification when
+    skipped, since a nudge toward a task that isn't due today would be actively wrong, not just
+    redundant.
+  - **Content-equality no-op discipline extends for free.** `skipDates` is just another field on
+    the `DueReminderEntry` data class, so it participates in the exact same
+    content-unchanged-means-do-nothing comparison `DueReminderScheduler.schedule()` already used
+    for every other field - a reschedule changes it, which correctly triggers a re-save (and a
+    harmless re-arm to the same trigger time), while an unrelated resync with no reschedule
+    changes leaves everything untouched. `getTaskReschedulesForAnalytics()` gained an explicit
+    `ORDER BY original_date ASC` specifically so the `skipDates` list JS derives from it is
+    order-stable between reads, keeping that equality check meaningful (list equality is
+    order-sensitive) rather than occasionally flagging a no-op resync as "changed" over pure
+    result-ordering noise.
+  - **`permanentlyDeleteRoutine` also deletes `task_reschedules` rows for each of a routine's
+    tasks** - the one place in this codebase that does genuine hard deletes (see the versioning
+    philosophy above), so this is the one spot orphaned reschedule rows are actually worth
+    cleaning up; a soft-deleted task's stale reschedule rows are left alone, matching how its
+    other history is preserved, since they're already excluded from every live query by the
+    `deleted = 0` filter.
 - Verified via a Playwright round-trip: the Reschedule button appears on an eligible due task
   with the date picker correctly bounded to the current Monday-start week; confirming a
   reschedule immediately removes the task from today's due list (rescheduled away, not missed);
@@ -2000,7 +2045,16 @@ completion-adjacent).
   date forward, and `TodayView`'s date nav can't browse into the future either, so no date exists
   that's simultaneously old enough to already have an effective version and new enough to be
   UI-navigable within one fresh test session; a task that's actually existed for a while (the
-  real-world case) doesn't have this limitation.
+  real-world case) doesn't have this limitation. The native reminder-moving half
+  (`skipDates`/one-shot scheduling) is covered by `src/__tests__/notifications.test.js`'s
+  `scheduleTaskNotifications` payload assertions (a task with no reschedules gets an empty
+  `skipDates` and zero one-shot reminders scheduled; a task with an active reschedule gets its
+  `originalDate` in `skipDates` and a matching `scheduleRescheduleReminder` call mirroring the
+  due reminder's own content) rather than an on-device alarm-firing test - this environment has
+  no Android SDK/emulator to actually let a `RescheduleReminderAlarmReceiver` alarm fire and
+  confirm the real notification appears; that's the one piece only the
+  `android-emulator-verify.yml` real-device harness (or a manual on-device try) can prove beyond
+  compile-correctness and code review.
 
 ### AI-generated routine import (`src/aiImport.js`, `SettingsView.jsx`)
 

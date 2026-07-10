@@ -19,6 +19,17 @@ internal const val EXTRA_TASK_ID = "taskId"
 
 internal fun dueReminderNotificationId(taskId: String): Int = DUE_REMINDER_ID_BASE + hashToInt(taskId)
 
+/** Today's date as 'YYYY-MM-DD', matching the dateKey format task_reschedules/skipDates use -
+ * shared by DueReminderScheduler's catch-up check and DueReminderAlarmReceiver/
+ * ExtraReminderAlarmReceiver's fire-time skip check. */
+internal fun todayDateKey(): String {
+    val calendar = Calendar.getInstance()
+    val year = calendar.get(Calendar.YEAR)
+    val month = calendar.get(Calendar.MONTH) + 1
+    val day = calendar.get(Calendar.DAY_OF_MONTH)
+    return "%04d-%02d-%02d".format(year, month, day)
+}
+
 /**
  * Owns the due-by reminder's entire alarm lifecycle - schedule(), cancel(), and the next-trigger
  * arithmetic - replacing @capacitor/local-notifications for this one notification type, since it
@@ -49,7 +60,12 @@ object DueReminderScheduler {
         val todayWeekday = calendar.get(Calendar.DAY_OF_WEEK) - 1
         val nowHour = calendar.get(Calendar.HOUR_OF_DAY)
         val nowMinute = calendar.get(Calendar.MINUTE)
-        val overdueToday = !isDoneToday && isOverdueToday(entry.days, entry.hour, entry.minute, todayWeekday, nowHour, nowMinute)
+        // A skip date means this week's occurrence was moved elsewhere (task_reschedules) - the
+        // task genuinely isn't due today, so there's nothing to catch up on even if the
+        // day-of-week/time math alone would otherwise call it overdue.
+        val skippedToday = entry.skipDates.contains(todayDateKey())
+        val overdueToday = !isDoneToday && !skippedToday &&
+            isOverdueToday(entry.days, entry.hour, entry.minute, todayWeekday, nowHour, nowMinute)
         val alreadyCaughtUp = contentUnchanged && existing?.awaitingCompletion == true
 
         if (contentUnchanged && !(overdueToday && !alreadyCaughtUp)) {

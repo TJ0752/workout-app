@@ -120,7 +120,7 @@ function App() {
   // recomputing against the restored data, not just a plain re-render.
   const refreshAllAndSync = async () => {
     const state = await refreshAll();
-    await syncAllNotifications(state.routines, state.completions);
+    await syncAllNotifications(state.routines, state.completions, state.reschedulesMap);
     await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
     return state;
   };
@@ -183,7 +183,7 @@ function App() {
       const state = await refreshAll();
       setLoading(false);
       await initNotifications();
-      await syncAllNotifications(state.routines, state.completions);
+      await syncAllNotifications(state.routines, state.completions, state.reschedulesMap);
       await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
       // Fire-and-forget: a fresh automatic local snapshot every time the app is opened (see
       // backup.js's runAutoBackup for why "on every open" is exactly the right cadence for
@@ -215,7 +215,7 @@ function App() {
       // taskNotificationContent) if it's already pinned/showing - a partial quick-add from the
       // notification itself is the clearest case where the user needs to see this update
       // immediately, not on the next natural re-fire.
-      if (task) await scheduleTaskNotifications(task, routine, state.completions);
+      if (task) await scheduleTaskNotifications(task, routine, state.completions, state.reschedulesMap[task.id] || []);
       if (task) await refreshTaskReminderVisibility(task, state.completions);
       if (routine) await updateRoutineGroupSummary(routine, state.completions);
     };
@@ -255,7 +255,7 @@ function App() {
     const backgroundSyncListenerPromise = initBackgroundSyncListener(async () => {
       await autoArchiveExpiredRoutines();
       const state = await refreshAll();
-      await syncAllNotifications(state.routines, state.completions);
+      await syncAllNotifications(state.routines, state.completions, state.reschedulesMap);
       await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
     });
 
@@ -278,7 +278,7 @@ function App() {
       await upsertTask({ ...task, routineId: routine.id });
     }
     const state = await refreshAll();
-    await syncAllNotifications(state.routines, state.completions);
+    await syncAllNotifications(state.routines, state.completions, state.reschedulesMap);
     await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
   };
 
@@ -318,7 +318,7 @@ function App() {
     const savedRoutine = state.routines.find((r) => r.id === routine.id);
     if (savedRoutine) {
       for (const task of savedRoutine.tasks) {
-        await scheduleTaskNotifications(task, savedRoutine, state.completions);
+        await scheduleTaskNotifications(task, savedRoutine, state.completions, state.reschedulesMap[task.id] || []);
       }
       await updateRoutineGroupSummary(savedRoutine, state.completions);
     }
@@ -344,7 +344,7 @@ function App() {
     const savedRoutine = state.routines.find((r) => r.id === routine.id);
     for (const task of routine.tasks) {
       if (savedRoutine && savedRoutine.active) {
-        await scheduleTaskNotifications(task, savedRoutine, state.completions);
+        await scheduleTaskNotifications(task, savedRoutine, state.completions, state.reschedulesMap[task.id] || []);
       } else {
         await cancelTaskNotifications(task);
       }
@@ -359,7 +359,7 @@ function App() {
     const savedRoutine = state.routines.find((r) => r.id === task.routineId);
     const savedTask = savedRoutine?.tasks.find((t) => t.id === task.id);
     if (savedTask?.active) {
-      await scheduleTaskNotifications(savedTask, savedRoutine, state.completions);
+      await scheduleTaskNotifications(savedTask, savedRoutine, state.completions, state.reschedulesMap[savedTask.id] || []);
     } else {
       await cancelTaskNotifications(task);
       if (savedRoutine) await updateRoutineGroupSummary(savedRoutine, state.completions);
@@ -386,7 +386,7 @@ function App() {
       const routine = findRoutineForTask(routines, task.id);
       // Refreshes the reminder's live progress body in place (see taskNotificationContent) -
       // a quick-add should never wait for the reminder's next natural fire to reflect it.
-      await scheduleTaskNotifications(task, routine, next);
+      await scheduleTaskNotifications(task, routine, next, reschedulesMap[task.id] || []);
       await refreshTaskReminderVisibility(task, next);
       if (routine) await updateRoutineGroupSummary(routine, next);
     }
@@ -398,7 +398,7 @@ function App() {
     if (dateKey === todayKey()) {
       await syncDynamicNotifications(routines, taskVersionsMap, next);
       const routine = findRoutineForTask(routines, task.id);
-      await scheduleTaskNotifications(task, routine, next);
+      await scheduleTaskNotifications(task, routine, next, reschedulesMap[task.id] || []);
       await refreshTaskReminderVisibility(task, next);
       if (routine) await updateRoutineGroupSummary(routine, next);
     }
@@ -417,7 +417,9 @@ function App() {
     const state = await refreshAll();
     const routine = findRoutineForTask(state.routines, task.id);
     const savedTask = routine?.tasks.find((t) => t.id === task.id);
-    if (savedTask) await scheduleTaskNotifications(savedTask, routine, state.completions);
+    if (savedTask) {
+      await scheduleTaskNotifications(savedTask, routine, state.completions, state.reschedulesMap[task.id] || []);
+    }
     if (routine) await updateRoutineGroupSummary(routine, state.completions);
   };
 
@@ -426,7 +428,9 @@ function App() {
     const state = await refreshAll();
     const routine = findRoutineForTask(state.routines, task.id);
     const savedTask = routine?.tasks.find((t) => t.id === task.id);
-    if (savedTask) await scheduleTaskNotifications(savedTask, routine, state.completions);
+    if (savedTask) {
+      await scheduleTaskNotifications(savedTask, routine, state.completions, state.reschedulesMap[task.id] || []);
+    }
     if (routine) await updateRoutineGroupSummary(routine, state.completions);
   };
 
@@ -487,7 +491,9 @@ function App() {
       const state = await refreshAll();
       const savedRoutine = state.routines.find((r) => r.id === task.routineId);
       const savedTask = savedRoutine?.tasks.find((t) => t.id === task.id);
-      if (savedTask) await scheduleTaskNotifications(savedTask, savedRoutine, state.completions);
+      if (savedTask) {
+        await scheduleTaskNotifications(savedTask, savedRoutine, state.completions, state.reschedulesMap[task.id] || []);
+      }
     }
   };
   handleLogQuantityTimerRef.current = handleLogQuantityTimer;

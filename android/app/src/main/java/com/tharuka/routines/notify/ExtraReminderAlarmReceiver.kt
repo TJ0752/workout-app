@@ -23,6 +23,11 @@ import androidx.core.app.NotificationManagerCompat
  * scheduleTaskNotifications always schedules a due reminder alongside any extra reminders, but
  * keeping this path means an extra reminder is never silently dropped if that invariant is ever
  * violated.
+ *
+ * If today is one of the due reminder's skipDates (this week's occurrence was moved elsewhere
+ * via task_reschedules), suppressed entirely rather than falling back to the dedicated
+ * notification - a nudge toward a task that isn't due today would be actively wrong, not just
+ * unnecessary.
  */
 class ExtraReminderAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -32,11 +37,12 @@ class ExtraReminderAlarmReceiver : BroadcastReceiver() {
         val entry = ExtraReminderStore.read(context, taskId, slot) ?: return
 
         val dueEntry = DueReminderStore.read(context, taskId)
-        if (dueEntry != null) {
+        val skippedToday = dueEntry?.skipDates?.contains(todayDateKey()) == true
+        if (dueEntry != null && !skippedToday) {
             DueReminderStore.setAwaitingCompletion(context, taskId, true)
             val notification = buildDueReminderNotification(context, dueEntry.copy(awaitingCompletion = true))
             NotificationManagerCompat.from(context).notify(dueReminderNotificationId(taskId), notification)
-        } else {
+        } else if (dueEntry == null) {
             val notification = buildExtraReminderNotification(context, entry)
             NotificationManagerCompat.from(context).notify(extraReminderNotificationId(taskId, slot), notification)
         }

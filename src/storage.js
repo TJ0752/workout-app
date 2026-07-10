@@ -474,6 +474,7 @@ export async function permanentlyDeleteRoutine(routineId) {
     await db.run('DELETE FROM completions WHERE task_id = ?', [task.id]);
     await db.run('DELETE FROM workout_logs WHERE task_id = ?', [task.id]);
     await db.run('DELETE FROM task_versions WHERE task_id = ?', [task.id]);
+    await db.run('DELETE FROM task_reschedules WHERE task_id = ?', [task.id]);
   }
   await db.run('DELETE FROM tasks WHERE routine_id = ?', [routineId]);
   await db.run('DELETE FROM routine_versions WHERE routine_id = ?', [routineId]);
@@ -728,7 +729,7 @@ export async function clearTaskReschedule(taskId, originalDate) {
  * pattern already used everywhere else "was this due on day X" needs data beyond the live task row. */
 export async function getTaskReschedulesForAnalytics() {
   const db = await ready();
-  const result = await db.query('SELECT task_id, original_date, new_date FROM task_reschedules');
+  const result = await db.query('SELECT task_id, original_date, new_date FROM task_reschedules ORDER BY original_date ASC');
   const map = {};
   for (const row of result.values || []) {
     if (!map[row.task_id]) map[row.task_id] = [];

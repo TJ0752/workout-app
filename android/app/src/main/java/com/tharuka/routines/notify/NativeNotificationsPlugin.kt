@@ -112,6 +112,8 @@ class NativeNotificationsPlugin : Plugin() {
         val days = (0 until daysArray.length()).map { daysArray.getInt(it) }
         val amountsArray = call.getArray("quickAddAmounts")
         val quickAddAmounts = amountsArray?.let { arr -> (0 until arr.length()).map { arr.getInt(it) } } ?: emptyList()
+        val skipDatesArray = call.getArray("skipDates")
+        val skipDates = skipDatesArray?.let { arr -> (0 until arr.length()).map { arr.getString(it) } } ?: emptyList()
 
         val entry = DueReminderEntry(
             taskId = taskId,
@@ -124,6 +126,7 @@ class NativeNotificationsPlugin : Plugin() {
             group = call.getString("group"),
             completionType = call.getString("completionType") ?: "boolean",
             quickAddAmounts = quickAddAmounts,
+            skipDates = skipDates,
         )
         val isDoneToday = call.getBoolean("isDoneToday", false) ?: false
         DueReminderScheduler.schedule(context, entry, isDoneToday)
@@ -249,6 +252,64 @@ class NativeNotificationsPlugin : Plugin() {
         for (slot in 0 until MAX_EXTRA_REMINDERS) {
             notificationManager.cancel(extraReminderNotificationId(taskId, slot))
         }
+        call.resolve()
+    }
+
+    /**
+     * Schedules a genuine one-shot reminder for a single rescheduled occurrence (see
+     * RescheduleReminderScheduler.kt) - fires exactly once on the specific calendar date
+     * task_reschedules moved this occurrence to, unlike every other scheduler in this file, which
+     * only ever knows a recurring set of weekdays.
+     */
+    @PluginMethod
+    fun scheduleRescheduleReminder(call: PluginCall) {
+        val taskId = call.getString("taskId")
+        val newDate = call.getString("newDate")
+        val title = call.getString("title")
+        val body = call.getString("body")
+        val hour = call.getInt("hour")
+        val minute = call.getInt("minute")
+        if (taskId == null || newDate == null || title == null || body == null || hour == null || minute == null) {
+            call.reject("taskId, newDate, title, body, hour, and minute are required")
+            return
+        }
+        val amountsArray = call.getArray("quickAddAmounts")
+        val quickAddAmounts = amountsArray?.let { arr -> (0 until arr.length()).map { arr.getInt(it) } } ?: emptyList()
+
+        val entry = RescheduleReminderEntry(
+            taskId = taskId,
+            newDate = newDate,
+            routineId = call.getString("routineId"),
+            title = title,
+            body = body,
+            hour = hour,
+            minute = minute,
+            completionType = call.getString("completionType") ?: "boolean",
+            quickAddAmounts = quickAddAmounts,
+        )
+        RescheduleReminderScheduler.schedule(context, entry)
+        call.resolve()
+    }
+
+    /**
+     * Full teardown of every pending one-shot reschedule reminder for a task - called
+     * unconditionally on every notification sync before re-scheduling whatever's currently
+     * active (see scheduleTaskNotifications in src/notifications.js), safe because a one-shot
+     * alarm has no persisted awaitingCompletion/reappear-on-dismiss state a destructive
+     * cancel+rearm could lose, unlike the due reminder.
+     */
+    @PluginMethod
+    fun cancelRescheduleReminders(call: PluginCall) {
+        val taskId = call.getString("taskId")
+        if (taskId == null) {
+            call.reject("taskId is required")
+            return
+        }
+        val notificationManager = NotificationManagerCompat.from(context)
+        for (entry in RescheduleReminderStore.readAllForTask(context, taskId)) {
+            notificationManager.cancel(rescheduleReminderNotificationId(taskId, entry.newDate))
+        }
+        RescheduleReminderScheduler.cancelAllForTask(context, taskId)
         call.resolve()
     }
 

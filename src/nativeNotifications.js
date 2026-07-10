@@ -89,6 +89,27 @@ export async function nativeDismissExtraRemindersToday(taskId) {
 }
 
 /**
+ * Schedules a genuine one-shot reminder for a single rescheduled occurrence (see
+ * RescheduleReminderScheduler.kt) - unlike the due/extra reminders above, this fires exactly
+ * once, on the specific calendar date task_reschedules moved this occurrence to, never again.
+ * `newDate` is a plain 'YYYY-MM-DD' string; content mirrors the due reminder's own
+ * (title/body/completionType/quickAddAmounts), computed by the caller as usual.
+ */
+export async function nativeScheduleRescheduleReminder(entry) {
+  if (!NativeNotifications) return;
+  await NativeNotifications.scheduleRescheduleReminder(entry);
+}
+
+/** Full teardown of every pending one-shot reschedule reminder for a task - called on every
+ * resync and rebuilt fresh from the task's current reschedules, safe because a one-shot alarm
+ * (unlike the recurring due reminder) has no persisted "awaitingCompletion"/reappear-on-dismiss
+ * state that a destructive cancel+rearm could lose. */
+export async function nativeCancelRescheduleReminders(taskId) {
+  if (!NativeNotifications) return;
+  await NativeNotifications.cancelRescheduleReminders({ taskId });
+}
+
+/**
  * Immediately builds and posts the multi-task routine group summary (see
  * GroupSummaryNotificationBuilder.kt) as an expandable InboxStyle notification listing every
  * currently-pending task by title - plain and swipeable by design, no reappear-on-dismiss,

@@ -16,6 +16,11 @@ data class DueReminderEntry(
     val completionType: String,
     val quickAddAmounts: List<Int>,
     val awaitingCompletion: Boolean = false,
+    // Dates ('YYYY-MM-DD') this recurring alarm must NOT visibly post/re-alert for, even though
+    // they match `days` - that week's occurrence was moved elsewhere via task_reschedules (see
+    // DueReminderAlarmReceiver.kt/RescheduleReminderScheduler.kt). Empty for the common case of a
+    // task with no active reschedules.
+    val skipDates: List<String> = emptyList(),
 )
 
 private const val PREFS_NAME = "native_notifications_due_reminders"
@@ -45,6 +50,7 @@ object DueReminderStore {
         json.put("completionType", entry.completionType)
         json.put("quickAddAmounts", JSONArray(entry.quickAddAmounts))
         json.put("awaitingCompletion", entry.awaitingCompletion)
+        json.put("skipDates", JSONArray(entry.skipDates))
         prefs(context).edit().putString(entry.taskId, json.toString()).apply()
     }
 
@@ -73,6 +79,8 @@ object DueReminderStore {
             val daysList = (0 until days.length()).map { days.getInt(it) }
             val amounts = json.optJSONArray("quickAddAmounts")
             val amountsList = amounts?.let { arr -> (0 until arr.length()).map { arr.getInt(it) } } ?: emptyList()
+            val skipDatesArr = json.optJSONArray("skipDates")
+            val skipDatesList = skipDatesArr?.let { arr -> (0 until arr.length()).map { arr.getString(it) } } ?: emptyList()
             DueReminderEntry(
                 taskId = json.getString("taskId"),
                 routineId = json.optStringOrNull("routineId"),
@@ -85,6 +93,7 @@ object DueReminderStore {
                 completionType = json.getString("completionType"),
                 quickAddAmounts = amountsList,
                 awaitingCompletion = json.optBoolean("awaitingCompletion", false),
+                skipDates = skipDatesList,
             )
         } catch (e: org.json.JSONException) {
             null

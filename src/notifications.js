@@ -12,6 +12,8 @@ import {
   nativeCancelExtraReminderSlot,
   nativeCancelExtraReminders,
   nativeDismissExtraRemindersToday,
+  nativeScheduleRescheduleReminder,
+  nativeCancelRescheduleReminders,
   nativeUpdateGroupSummary,
   nativeCancelGroupSummary,
   nativeScheduleDailyDigest,
@@ -53,6 +55,7 @@ export async function cancelTaskNotifications(task) {
   if (!Capacitor.isNativePlatform()) return;
   await nativeCancelDueReminder(task.id);
   await nativeCancelExtraReminders(task.id);
+  await nativeCancelRescheduleReminders(task.id);
 }
 
 /**
@@ -121,18 +124,29 @@ export async function cancelRoutineGroupSummary(routineId) {
   await nativeCancelGroupSummary(routineId);
 }
 
-export async function scheduleTaskNotifications(task, routine, completions = {}) {
+/**
+ * `reschedules` (default []) is this one task's own task_reschedules rows ({originalDate,
+ * newDate} pairs - see storage.js/utils/reschedule.js). Each row means two things natively: the
+ * recurring due/extra reminders must not fire visibly on `originalDate` (skipDates, passed to
+ * nativeScheduleDueReminder - see DueReminderAlarmReceiver.kt), and a genuine one-shot alarm
+ * needs to exist for `newDate` (nativeScheduleRescheduleReminder - see
+ * RescheduleReminderScheduler.kt), since every recurring scheduler only ever knows a set of
+ * weekdays, never a specific calendar date outside them.
+ */
+export async function scheduleTaskNotifications(task, routine, completions = {}, reschedules = []) {
   if (!Capacitor.isNativePlatform()) return;
   const notStartedYet = routine?.startDate && routine.startDate > todayKey();
   if (!task.active || task.days.length === 0 || routine?.active === false || routine?.archived || notStartedYet) {
     await nativeCancelDueReminder(task.id);
     await nativeCancelExtraReminders(task.id);
+    await nativeCancelRescheduleReminders(task.id);
     if (routine) await updateRoutineGroupSummary(routine, completions);
     return;
   }
 
   const { title, body, group } = taskNotificationContent(task, routine, completions);
   const [hour, minute] = task.time.split(':').map(Number);
+  const quickAddAmounts = task.completionType === 'quantity' ? quickAddAmountsFor(task) : [];
 
   // The due-by reminder and its extra nudge times are both scheduled natively - one
   // self-rescheduling alarm per (task) for the due-by moment (see nativeScheduleDueReminder)
@@ -153,7 +167,7 @@ export async function scheduleTaskNotifications(task, routine, completions = {})
       minute: m,
       group,
       completionType: task.completionType,
-      quickAddAmounts: task.completionType === 'quantity' ? quickAddAmountsFor(task) : [],
+      quickAddAmounts,
     });
   }
   // Cancel any slots beyond however many extra times are configured now (e.g. the user removed one).
@@ -171,20 +185,43 @@ export async function scheduleTaskNotifications(task, routine, completions = {})
     minute,
     group,
     completionType: task.completionType,
-    quickAddAmounts: task.completionType === 'quantity' ? quickAddAmountsFor(task) : [],
+    quickAddAmounts,
     // Lets DueReminderScheduler catch up immediately on an already-overdue, not-yet-done task
     // instead of waiting for its next natural occurrence (which may be a week away) - see
     // DueReminderScheduler.schedule's isDoneToday param for why this can't be computed natively.
     isDoneToday: isTaskDoneToday(task, completions),
+    // Dates this recurring alarm must NOT visibly post/re-alert for, even though they match
+    // task.days - this week's occurrence was moved elsewhere (see DueReminderAlarmReceiver.kt).
+    skipDates: reschedules.map((r) => r.originalDate),
   });
+
+  // Rebuilt fresh from the task's current reschedules on every sync, not diffed against what
+  // was previously armed - unlike the due reminder, a one-shot alarm has no persisted
+  // awaitingCompletion/reappear-on-dismiss state a destructive cancel+rearm could lose, so
+  // "clear everything, then re-arm what's current" is simplest and always correct here.
+  await nativeCancelRescheduleReminders(task.id);
+  for (const r of reschedules) {
+    await nativeScheduleRescheduleReminder({
+      taskId: task.id,
+      newDate: r.newDate,
+      routineId: routine?.id,
+      title,
+      body,
+      hour,
+      minute,
+      completionType: task.completionType,
+      quickAddAmounts,
+    });
+  }
+
   if (routine) await updateRoutineGroupSummary(routine, completions);
 }
 
-export async function syncAllNotifications(routines, completions = {}) {
+export async function syncAllNotifications(routines, completions = {}, reschedulesMap = {}) {
   if (!Capacitor.isNativePlatform()) return;
   for (const routine of routines) {
     for (const task of routine.tasks) {
-      await scheduleTaskNotifications(task, routine, completions);
+      await scheduleTaskNotifications(task, routine, completions, reschedulesMap[task.id] || []);
     }
   }
 }

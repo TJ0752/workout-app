@@ -10,6 +10,8 @@ const calls = {
   extraReminderSlotCancelled: [],
   extraRemindersCancelled: [],
   extraRemindersDismissed: [],
+  rescheduleReminderScheduled: [],
+  rescheduleRemindersCancelled: [],
   groupSummaryUpdated: [],
   groupSummaryCancelled: [],
   dailyDigestScheduled: [],
@@ -51,6 +53,12 @@ vi.mock('@capacitor/core', () => ({
     }),
     dismissExtraRemindersToday: vi.fn(async ({ taskId }) => {
       calls.extraRemindersDismissed.push(taskId);
+    }),
+    scheduleRescheduleReminder: vi.fn(async (entry) => {
+      calls.rescheduleReminderScheduled.push(entry);
+    }),
+    cancelRescheduleReminders: vi.fn(async ({ taskId }) => {
+      calls.rescheduleRemindersCancelled.push(taskId);
     }),
     updateGroupSummary: vi.fn(async (opts) => {
       calls.groupSummaryUpdated.push(opts);
@@ -102,6 +110,8 @@ function resetCalls() {
   calls.extraReminderSlotCancelled.length = 0;
   calls.extraRemindersCancelled.length = 0;
   calls.extraRemindersDismissed.length = 0;
+  calls.rescheduleReminderScheduled.length = 0;
+  calls.rescheduleRemindersCancelled.length = 0;
   calls.groupSummaryUpdated.length = 0;
   calls.groupSummaryCancelled.length = 0;
   calls.dailyDigestScheduled.length = 0;
@@ -357,6 +367,71 @@ describe('native extra reminders', () => {
     await dismissTaskReminders(task({ id: 'to-dismiss-extra' }));
 
     expect(calls.extraRemindersDismissed).toEqual(['to-dismiss-extra']);
+  });
+});
+
+describe('native reschedule reminders', () => {
+  it('passes no skipDates and schedules no one-shot reminders when the task has no reschedules', async () => {
+    const plainTask = task({ id: 'no-reschedule' });
+    const routine = { id: 'routine-no-reschedule', title: 'R', tasks: [plainTask], active: true, notes: '' };
+
+    await scheduleTaskNotifications(plainTask, routine, {}, []);
+
+    expect(calls.dueReminderScheduled[0].skipDates).toEqual([]);
+    expect(calls.rescheduleReminderScheduled).toHaveLength(0);
+    // Still cancelled unconditionally first, so a since-cleared reschedule's stale alarm
+    // doesn't linger armed.
+    expect(calls.rescheduleRemindersCancelled).toEqual(['no-reschedule']);
+  });
+
+  it("passes the task's own outgoing reschedules as skipDates on the recurring due reminder", async () => {
+    const rescheduledTask = task({ id: 'moved-task' });
+    const routine = { id: 'routine-moved', title: 'R', tasks: [rescheduledTask], active: true, notes: '' };
+    const reschedules = [{ originalDate: TODAY_KEY, newDate: '2026-07-09' }];
+
+    await scheduleTaskNotifications(rescheduledTask, routine, {}, reschedules);
+
+    expect(calls.dueReminderScheduled[0].skipDates).toEqual([TODAY_KEY]);
+  });
+
+  it('schedules a one-shot reminder per active reschedule, mirroring the due reminder\'s content', async () => {
+    const qtyTask = task({
+      id: 'moved-qty-task',
+      completionType: 'quantity',
+      target: 8,
+      quickAdd: [1, 2],
+    });
+    const routine = { id: 'routine-moved-qty', title: 'Hydrate', tasks: [qtyTask], active: true, notes: '' };
+    const reschedules = [{ originalDate: TODAY_KEY, newDate: '2026-07-09' }];
+
+    await scheduleTaskNotifications(qtyTask, routine, {}, reschedules);
+
+    expect(calls.rescheduleReminderScheduled).toHaveLength(1);
+    expect(calls.rescheduleReminderScheduled[0]).toMatchObject({
+      taskId: 'moved-qty-task',
+      newDate: '2026-07-09',
+      routineId: 'routine-moved-qty',
+      hour: 8,
+      minute: 0,
+      completionType: 'quantity',
+      quickAddAmounts: [1, 2],
+    });
+  });
+
+  it('cancels every reschedule reminder for an inactive task, a task with no active days, or a paused routine', async () => {
+    const inactiveTask = task({ id: 'inactive-reschedule', active: false });
+    const routine = { id: 'r-inactive-reschedule', title: 'R', tasks: [inactiveTask], active: true, notes: '' };
+
+    await scheduleTaskNotifications(inactiveTask, routine, {}, [{ originalDate: TODAY_KEY, newDate: '2026-07-09' }]);
+
+    expect(calls.rescheduleReminderScheduled).toHaveLength(0);
+    expect(calls.rescheduleRemindersCancelled).toEqual(['inactive-reschedule']);
+  });
+
+  it('cancels every reschedule reminder as part of cancelTaskNotifications', async () => {
+    await cancelTaskNotifications(task({ id: 'to-cancel-reschedule' }));
+
+    expect(calls.rescheduleRemindersCancelled).toEqual(['to-cancel-reschedule']);
   });
 });
 

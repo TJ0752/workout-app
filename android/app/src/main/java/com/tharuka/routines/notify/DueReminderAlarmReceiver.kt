@@ -13,14 +13,21 @@ import androidx.core.app.NotificationManagerCompat
  * @capacitor/local-notifications' own TimedNotificationPublisher's confirmed self-rescheduling,
  * since this replaces AlarmManager.setRepeating()'s single long-lived alarm with a one-shot
  * chain instead.
+ *
+ * If today is one of entry.skipDates (this week's occurrence was moved elsewhere via
+ * task_reschedules), the alarm still fires and still re-arms next week's occurrence as normal,
+ * but nothing is posted/re-alerted - the task genuinely isn't due today.
+ * RescheduleReminderScheduler owns the actual reminder for wherever this occurrence moved to.
  */
 class DueReminderAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val taskId = intent.getStringExtra(EXTRA_TASK_ID) ?: return
         val entry = DueReminderStore.read(context, taskId) ?: return
-        DueReminderStore.setAwaitingCompletion(context, taskId, true)
-        val notification = buildDueReminderNotification(context, entry)
-        NotificationManagerCompat.from(context).notify(dueReminderNotificationId(taskId), notification)
+        if (!entry.skipDates.contains(todayDateKey())) {
+            DueReminderStore.setAwaitingCompletion(context, taskId, true)
+            val notification = buildDueReminderNotification(context, entry)
+            NotificationManagerCompat.from(context).notify(dueReminderNotificationId(taskId), notification)
+        }
         DueReminderScheduler.arm(context, entry)
     }
 }
