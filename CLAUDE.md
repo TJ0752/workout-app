@@ -1859,6 +1859,65 @@ something that can be almost entirely automatic.
   a real device is needed to observe an actual reason code in the wild, which is exactly what this
   fix now makes possible on the next occurrence instead of a dead end.
 
+### Routine start/end date, auto-archive (`RoutineForm.jsx`, `App.jsx`, `utils/date.js`)
+
+A routine can now be scoped to run only for a specific window instead of indefinitely from
+creation: two optional `startDate`/`endDate` fields (nullable `'YYYY-MM-DD'` dates,
+`DB_VERSION = 9`) live on `routines`/`routine_versions`.
+
+- **These are current-state gates, checked directly, not per-day-resolved through
+  `routine_versions` cutover** — the exact same design as `archived`/`archivedAt` above, for the
+  exact same reason: they answer "is this routine even in scope on day X at all," not "what did
+  this routine look like on day X," and a per-version resolution would mean an edited end date
+  only affecting "today forward," which conflicts with wanting the *current* end date to always
+  be what auto-archive checks against. They still flow through the ordinary
+  `routineFieldsOf`/`upsertRoutine` diff-and-version path when edited via `RoutineForm`, purely
+  for audit-log parity (so "View history" shows when they were set/changed) — `routine_versions`
+  carries the same two columns, mirroring `archivedAt`'s own presence on both tables.
+- **`endDate` needs no analytics-layer cutover of its own at all.** Once today reaches it,
+  `App.jsx`'s `autoArchiveExpiredRoutines()` just calls the existing `archiveRoutine()` — every
+  bit of "history before archival stays intact" behavior `archivedAt`'s own cutover in
+  `getRoutineFraction` already provides comes for free, no new code path needed. Checked before
+  every `refreshAll()` call on app-open and on every background-sync tick (there's no
+  backend/cron in this app, so this is inherently "best effort while the process is alive," the
+  same tradeoff every other computed-content feature here already makes) — cancels the routine's
+  task notifications and group summary first, matching `handleArchiveRoutine`'s own sequence,
+  just without the `confirm()` dialog since this fires unattended.
+- **`startDate` mirrors `archivedAt`'s cutover on the other end** — a day before it computes as
+  "nothing due" (not a miss) in both `getRoutineFraction` and `getDayBreakdown`'s independent
+  duplicate of the same check (kept in sync by hand, exactly like the `archivedAt` check already
+  had to be). `TodayView.jsx`'s own due-list filter needed a separate, explicit fix: its
+  `isTaskDueOn` helper calls `getTaskFraction` directly (not `getRoutineFraction`), so it never
+  saw the routine-level `startDate` gate at all — without this, a not-yet-started routine's tasks
+  still showed as due on Today. `scheduleTaskNotifications`/`updateRoutineGroupSummary` in
+  `notifications.js` gained the identical `startDate > todayKey()` check alongside their existing
+  `active`/`archived` gates, so a routine's reminders don't fire before it's actually started.
+- **A real concurrency bug, found via a Playwright reload round-trip, not by inspection.**
+  `autoArchiveExpiredRoutines()`'s own `archiveRoutine()` write sequence, run concurrently with
+  the pre-existing fire-and-forget `runAutoBackup()` call in the same mount effect, hit this
+  app's known "web SQLite backend can't handle concurrent `db.query`/`db.run`" failure mode
+  (`"cannot start a transaction within a transaction"`, the same class of bug already documented
+  for `resolveExerciseIds`/`permanentlyDeleteRoutine`) — fixed by moving `runAutoBackup()`'s
+  *start* (still not awaited, still fire-and-forget for its own completion) to after the
+  auto-archive/refresh sequence's writes finish. A second, related bug from the same root cause:
+  React's `<StrictMode>` (`main.jsx`) double-invokes the mount effect in dev, so
+  `autoArchiveExpiredRoutines()` itself could race against its own second invocation — fixed with
+  an in-flight-promise singleton (`autoArchiveInFlightRef`, the exact same pattern
+  `storage.js`'s own `ready()`/`readyPromise` already uses), so a concurrent call just awaits the
+  first invocation's already-in-flight promise instead of starting a colliding second write
+  sequence. This matters beyond dev/StrictMode too: the app-open effect and the background-sync
+  tick both call this function and can legitimately overlap in production.
+- **`RoutineForm.jsx`** adds two plain `<input type="date">` fields under a "Run for a specific
+  duration (optional)" label, with a client-side validation error if an end date is set before
+  the start date (`hasInvalidDateRange`, folded into the existing `invalidTask` submit-blocking
+  gate alongside the unnamed-task/no-days/invalid-workout checks).
+- **`RoutinesView.jsx`** shows a not-yet-started routine visibly (not hidden — a deliberate choice
+  over hiding it entirely, consistent with how a paused routine still shows in the list) at
+  reduced opacity (`.routine-card.upcoming`) with a gold "Starts {date}" chip
+  (`.upcoming-chip`, reusing `--warn`/`--warn-soft`) in place of the usual "N% this month" rate
+  chip, which is suppressed entirely rather than showing a misleading "0%" for a routine that
+  hasn't started accumulating any history yet.
+
 ### AI-generated routine import (`src/aiImport.js`, `SettingsView.jsx`)
 
 V1 of "generate routines with AI": a plain paste-JSON importer in Settings, not a chat interface

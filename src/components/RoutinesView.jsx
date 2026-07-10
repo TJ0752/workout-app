@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import RoutineForm from './RoutineForm';
-import { DAY_LABELS, calcRoutineCompletionRate } from '../utils/date';
+import { DAY_LABELS, calcRoutineCompletionRate, todayKey } from '../utils/date';
 import { getRoutineIcon } from '../utils/icons';
+
+function formatUpcomingDate(dateKey) {
+  return new Date(`${dateKey}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
 
 export default function RoutinesView({
   routines,
@@ -126,11 +130,14 @@ export default function RoutinesView({
         {activeRoutines.map((routine) => {
           const RoutineIcon = getRoutineIcon(routine);
           const isSimple = routine.tasks.length === 1;
-          const completionRate = routine.active
-            ? calcRoutineCompletionRate(routine, taskVersionsMap, completions)
-            : null;
+          const isUpcoming = Boolean(routine.startDate && routine.startDate > todayKey());
+          const completionRate =
+            routine.active && !isUpcoming ? calcRoutineCompletionRate(routine, taskVersionsMap, completions) : null;
           return (
-            <li key={routine.id} className={`routine-card ${routine.active ? '' : 'inactive'}`}>
+            <li
+              key={routine.id}
+              className={`routine-card ${routine.active ? '' : 'inactive'} ${isUpcoming ? 'upcoming' : ''}`}
+            >
               <span className="icon-badge">
                 <RoutineIcon size={18} />
               </span>
@@ -144,6 +151,9 @@ export default function RoutinesView({
                     ? routine.tasks[0]?.days.map((d) => DAY_LABELS[d]).join(', ')
                     : `${routine.tasks.length} tasks`}
                 </div>
+                {isUpcoming && (
+                  <span className="routine-rate-chip upcoming-chip">Starts {formatUpcomingDate(routine.startDate)}</span>
+                )}
                 {completionRate !== null && <span className="routine-rate-chip">{completionRate}% this month</span>}
                 {routine.notes && <div className="routine-notes">{routine.notes}</div>}
 

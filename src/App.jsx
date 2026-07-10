@@ -85,6 +85,7 @@ function App() {
   const [appVersion, setAppVersion] = useState(null);
   const handleLogWorkoutSetRef = useRef(null);
   const handleLogQuantityTimerRef = useRef(null);
+  const autoArchiveInFlightRef = useRef(null);
 
   const refreshAll = async () => {
     const [storedRoutines, storedCompletions, versionsMap, workoutLogs] = await Promise.all([
@@ -117,6 +118,48 @@ function App() {
     return state;
   };
 
+  // Auto-archives any routine whose configured endDate has passed - reuses archiveRoutine's
+  // exact same mechanism (and its already-correct "history before archival stays intact"
+  // cutover, see getRoutineFraction) a manual archive uses, just without the confirm() dialog
+  // since this fires unattended. Cancels notifications first, matching handleArchiveRoutine
+  // below, so a freshly-expired routine's reminders stop in this same pass rather than lingering
+  // until some later resync happens to notice routine.archived flipped. There's no backend/cron
+  // here, so this can only ever run when the app process is actually alive to check - called
+  // before every refreshAll() below and from the background-sync tick, the same "best effort
+  // while the process is alive" tradeoff every other computed-content feature in this app makes.
+  //
+  // Guarded by an in-flight-promise singleton (the same pattern storage.js's own ready()/
+  // readyPromise already uses) rather than plain sequential awaits, because this can genuinely
+  // be invoked twice concurrently: React StrictMode double-invokes the mount effect in dev,
+  // and in production the app-open effect and the background-sync tick can legitimately race
+  // each other. Two concurrent invocations each issuing their own archiveRoutine() write
+  // sequence hit this app's known "web SQLite backend can't handle concurrent db.query/db.run"
+  // failure mode (the exact "cannot start a transaction within a transaction" error already
+  // documented for resolveExerciseIds/permanentlyDeleteRoutine) - caught via a Playwright
+  // round-trip reload, not by inspection. A second caller now just awaits the first's
+  // already-in-flight promise instead of starting a colliding second write sequence.
+  const autoArchiveExpiredRoutines = () => {
+    if (!autoArchiveInFlightRef.current) {
+      autoArchiveInFlightRef.current = (async () => {
+        try {
+          const currentRoutines = await getRoutines();
+          const today = todayKey();
+          for (const routine of currentRoutines) {
+            if (routine.archived || !routine.endDate || routine.endDate > today) continue;
+            for (const task of routine.tasks) {
+              await cancelTaskNotifications(task);
+            }
+            await cancelRoutineGroupSummary(routine.id);
+            await archiveRoutineFromStore(routine.id);
+          }
+        } finally {
+          autoArchiveInFlightRef.current = null;
+        }
+      })();
+    }
+    return autoArchiveInFlightRef.current;
+  };
+
   // Native-only, like SettingsView's own identical fetch - there's no installed build to report
   // on web. Surfaced right in the header (not just inside Settings) so which release is running
   // is visible at a glance, without an extra tap.
@@ -129,17 +172,22 @@ function App() {
 
   useEffect(() => {
     (async () => {
+      await autoArchiveExpiredRoutines();
       const state = await refreshAll();
       setLoading(false);
       await initNotifications();
       await syncAllNotifications(state.routines, state.completions);
       await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);
+      // Fire-and-forget: a fresh automatic local snapshot every time the app is opened (see
+      // backup.js's runAutoBackup for why "on every open" is exactly the right cadence for
+      // "seamless, before every release" protection) - nothing on screen waits on this call's
+      // own completion, only its *start* is sequenced after the writes above. A real bug found
+      // via a Playwright round-trip ("cannot start a transaction within a transaction") when
+      // this used to fire concurrently with them: the web SQLite backend's single connection
+      // isn't safe for concurrent db.query/db.run calls, the same constraint already documented
+      // for resolveExerciseIds/permanentlyDeleteRoutine.
+      runAutoBackup().catch((err) => console.warn('Automatic local backup failed', err));
     })();
-
-    // Fire-and-forget: a fresh automatic local snapshot every time the app is opened (see
-    // backup.js's runAutoBackup for why "on every open" is exactly the right cadence for
-    // "seamless, before every release" protection), but nothing on screen should wait on it.
-    runAutoBackup().catch((err) => console.warn('Automatic local backup failed', err));
 
     const handleMarkDone = async (taskId) => {
       await setCompletion(taskId, todayKey(), true);
@@ -198,6 +246,7 @@ function App() {
     // - keeps digest/summary/streak-risk content fresh without requiring the user to reopen the
     // app. Same call sequence as the app-open effect above.
     const backgroundSyncListenerPromise = initBackgroundSyncListener(async () => {
+      await autoArchiveExpiredRoutines();
       const state = await refreshAll();
       await syncAllNotifications(state.routines, state.completions);
       await syncDynamicNotifications(state.routines, state.taskVersionsMap, state.completions);

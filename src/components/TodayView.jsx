@@ -286,7 +286,10 @@ export default function TodayView({
     : selectedDate.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 
   const dueRoutines = routines
-    .filter((routine) => routine.active && !routine.archived)
+    // isTaskDueOn below doesn't consult routine-level start_date at all (that gate lives in
+    // getRoutineFraction, which this manual per-task due-check bypasses) - without this, a
+    // routine configured to start in the future would incorrectly show its tasks as due today.
+    .filter((routine) => routine.active && !routine.archived && !(routine.startDate && routine.startDate > dateKey))
     .map((routine) => ({
       routine,
       dueTasks: routine.tasks.filter((t) => isTaskDueOn(t, taskVersionsMap, selectedDate)),

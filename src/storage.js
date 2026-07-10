@@ -22,6 +22,7 @@ function rowToTask(row) {
     quickAdd: row.quick_add ? JSON.parse(row.quick_add) : null,
     quantityMode: row.quantity_mode || 'number',
     autoUpdateTarget: Boolean(row.auto_update_target),
+    allowCrossWeekReschedule: Boolean(row.allow_cross_week_reschedule),
     exercises: row.exercises ? JSON.parse(row.exercises) : [],
     active: Boolean(row.active),
     createdAt: row.created_at,
@@ -37,6 +38,8 @@ function rowToRoutine(row, tasks) {
     active: Boolean(row.active),
     archived: Boolean(row.archived_at),
     archivedAt: row.archived_at || null,
+    startDate: row.start_date || null,
+    endDate: row.end_date || null,
     defaultDays: JSON.parse(row.default_days),
     createdAt: row.created_at,
     tasks: tasks || [],
@@ -59,8 +62,8 @@ async function closeCurrentVersion(db, table, idCol, id, now) {
 async function insertRoutineVersion(db, routineId, fields, effectiveFrom, changeType, changedFields) {
   await db.run(
     `INSERT INTO routine_versions
-       (id, routine_id, effective_from, effective_to, title, icon, notes, active, archived_at, default_days, change_type, changed_fields)
-     VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, routine_id, effective_from, effective_to, title, icon, notes, active, archived_at, start_date, end_date, default_days, change_type, changed_fields)
+     VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       generateId(),
       routineId,
@@ -70,6 +73,8 @@ async function insertRoutineVersion(db, routineId, fields, effectiveFrom, change
       fields.notes,
       fields.active,
       fields.archived_at ?? null,
+      fields.start_date ?? null,
+      fields.end_date ?? null,
       fields.default_days,
       changeType,
       JSON.stringify(changedFields),
@@ -80,8 +85,8 @@ async function insertRoutineVersion(db, routineId, fields, effectiveFrom, change
 async function insertTaskVersion(db, taskId, routineId, fields, effectiveFrom, changeType, changedFields) {
   await db.run(
     `INSERT INTO task_versions
-       (id, task_id, routine_id, effective_from, effective_to, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, quantity_mode, auto_update_target, exercises, active, change_type, changed_fields)
-     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, task_id, routine_id, effective_from, effective_to, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, quantity_mode, auto_update_target, allow_cross_week_reschedule, exercises, active, change_type, changed_fields)
+     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       generateId(),
       taskId,
@@ -98,6 +103,7 @@ async function insertTaskVersion(db, taskId, routineId, fields, effectiveFrom, c
       fields.quick_add,
       fields.quantity_mode,
       fields.auto_update_target,
+      fields.allow_cross_week_reschedule,
       fields.exercises,
       fields.active,
       changeType,
@@ -112,6 +118,8 @@ function routineFieldsOf(routine) {
     icon: routine.icon || null,
     notes: routine.notes || '',
     active: routine.active ? 1 : 0,
+    start_date: routine.startDate || null,
+    end_date: routine.endDate || null,
     default_days: JSON.stringify(routine.defaultDays || []),
   };
 }
@@ -131,6 +139,7 @@ function taskFieldsOf(task) {
     quick_add: isQuantity && task.quickAdd?.length ? JSON.stringify(task.quickAdd) : null,
     quantity_mode: isQuantity ? task.quantityMode || 'number' : 'number',
     auto_update_target: isQuantity && task.autoUpdateTarget ? 1 : 0,
+    allow_cross_week_reschedule: task.allowCrossWeekReschedule ? 1 : 0,
     exercises: JSON.stringify(isWorkout ? task.exercises || [] : []),
     active: task.active ? 1 : 0,
   };
@@ -152,12 +161,24 @@ async function migrateFromPreferencesOnce(db) {
         icon: r.icon || null,
         notes: r.notes || '',
         active: r.active ? 1 : 0,
+        start_date: null,
+        end_date: null,
         default_days: JSON.stringify(r.days || []),
       };
       await db.run(
-        `INSERT OR REPLACE INTO routines (id, title, icon, notes, active, deleted, default_days, created_at)
-         VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
-        [r.id, routineFields.title, routineFields.icon, routineFields.notes, routineFields.active, routineFields.default_days, r.createdAt]
+        `INSERT OR REPLACE INTO routines (id, title, icon, notes, active, deleted, start_date, end_date, default_days, created_at)
+         VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+        [
+          r.id,
+          routineFields.title,
+          routineFields.icon,
+          routineFields.notes,
+          routineFields.active,
+          routineFields.start_date,
+          routineFields.end_date,
+          routineFields.default_days,
+          r.createdAt,
+        ]
       );
       await insertRoutineVersion(db, r.id, routineFields, r.createdAt, 'migrated', []);
 
@@ -174,13 +195,32 @@ async function migrateFromPreferencesOnce(db) {
         quick_add: null,
         quantity_mode: 'number',
         auto_update_target: 0,
+        allow_cross_week_reschedule: 0,
         exercises: '[]',
         active: r.active ? 1 : 0,
       };
       await db.run(
-        `INSERT OR REPLACE INTO tasks (id, routine_id, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, quantity_mode, auto_update_target, exercises, active, deleted, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-        [taskId, r.id, taskFields.title, taskFields.time, taskFields.window_start, taskFields.reminder_times, taskFields.days, taskFields.completion_type, taskFields.target, taskFields.unit, taskFields.quick_add, taskFields.quantity_mode, taskFields.auto_update_target, taskFields.exercises, taskFields.active, r.createdAt]
+        `INSERT OR REPLACE INTO tasks (id, routine_id, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, quantity_mode, auto_update_target, allow_cross_week_reschedule, exercises, active, deleted, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+        [
+          taskId,
+          r.id,
+          taskFields.title,
+          taskFields.time,
+          taskFields.window_start,
+          taskFields.reminder_times,
+          taskFields.days,
+          taskFields.completion_type,
+          taskFields.target,
+          taskFields.unit,
+          taskFields.quick_add,
+          taskFields.quantity_mode,
+          taskFields.auto_update_target,
+          taskFields.allow_cross_week_reschedule,
+          taskFields.exercises,
+          taskFields.active,
+          r.createdAt,
+        ]
       );
       await insertTaskVersion(db, taskId, r.id, taskFields, r.createdAt, 'migrated', []);
 
@@ -336,22 +376,37 @@ export async function upsertRoutine(routine) {
 
   if (!existing) {
     await db.run(
-      `INSERT INTO routines (id, title, icon, notes, active, deleted, default_days, created_at)
-       VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
-      [routine.id, fields.title, fields.icon, fields.notes, fields.active, fields.default_days, routine.createdAt || now]
+      `INSERT INTO routines (id, title, icon, notes, active, deleted, start_date, end_date, default_days, created_at)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+      [
+        routine.id,
+        fields.title,
+        fields.icon,
+        fields.notes,
+        fields.active,
+        fields.start_date,
+        fields.end_date,
+        fields.default_days,
+        routine.createdAt || now,
+      ]
     );
     await insertRoutineVersion(db, routine.id, fields, now, 'created', []);
   } else {
     const changed = diffRowFields(existing, fields);
     if (changed.length > 0) {
-      await db.run(`UPDATE routines SET title=?, icon=?, notes=?, active=?, default_days=? WHERE id=?`, [
-        fields.title,
-        fields.icon,
-        fields.notes,
-        fields.active,
-        fields.default_days,
-        routine.id,
-      ]);
+      await db.run(
+        `UPDATE routines SET title=?, icon=?, notes=?, active=?, start_date=?, end_date=?, default_days=? WHERE id=?`,
+        [
+          fields.title,
+          fields.icon,
+          fields.notes,
+          fields.active,
+          fields.start_date,
+          fields.end_date,
+          fields.default_days,
+          routine.id,
+        ]
+      );
       const changeType =
         changed.length === 1 && changed[0] === 'active' ? (fields.active ? 'resumed' : 'paused') : 'updated';
       await closeCurrentVersion(db, 'routine_versions', 'routine_id', routine.id, now);
@@ -442,8 +497,8 @@ export async function upsertTask(task) {
 
   if (!existing) {
     await db.run(
-      `INSERT INTO tasks (id, routine_id, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, quantity_mode, auto_update_target, exercises, active, deleted, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+      `INSERT INTO tasks (id, routine_id, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, quantity_mode, auto_update_target, allow_cross_week_reschedule, exercises, active, deleted, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
       [
         task.id,
         task.routineId,
@@ -458,6 +513,7 @@ export async function upsertTask(task) {
         fields.quick_add,
         fields.quantity_mode,
         fields.auto_update_target,
+        fields.allow_cross_week_reschedule,
         fields.exercises,
         fields.active,
         task.createdAt || now,
@@ -468,7 +524,7 @@ export async function upsertTask(task) {
     const changed = diffRowFields(existing, fields);
     if (changed.length > 0) {
       await db.run(
-        `UPDATE tasks SET title=?, time=?, window_start=?, reminder_times=?, days=?, completion_type=?, target=?, unit=?, quick_add=?, quantity_mode=?, auto_update_target=?, exercises=?, active=? WHERE id=?`,
+        `UPDATE tasks SET title=?, time=?, window_start=?, reminder_times=?, days=?, completion_type=?, target=?, unit=?, quick_add=?, quantity_mode=?, auto_update_target=?, allow_cross_week_reschedule=?, exercises=?, active=? WHERE id=?`,
         [
           fields.title,
           fields.time,
@@ -481,6 +537,7 @@ export async function upsertTask(task) {
           fields.quick_add,
           fields.quantity_mode,
           fields.auto_update_target,
+          fields.allow_cross_week_reschedule,
           fields.exercises,
           fields.active,
           task.id,
@@ -638,6 +695,46 @@ export async function logWorkoutSet(taskId, dateKey, exercise, setIndex, values)
 
   await persist();
   return getAllWorkoutLogs();
+}
+
+/**
+ * A one-time, per-occurrence override of a task's due day - unversioned on purpose, since it's a
+ * single-instance move, not a change to the recurring schedule task.days describes. Upserted per
+ * (task_id, original_date) via the table's own unique index, so rescheduling the same original
+ * date a second time replaces the previous move instead of stacking a second one. originalDate
+ * stops counting as due (treated as nothing-scheduled, not a miss); newDate becomes due in its
+ * place, even if it falls outside task.days for that week.
+ */
+export async function setTaskReschedule(taskId, originalDate, newDate) {
+  const db = await ready();
+  await db.run(
+    `INSERT OR REPLACE INTO task_reschedules (id, task_id, original_date, new_date, created_at) VALUES (?, ?, ?, ?, ?)`,
+    [generateId(), taskId, originalDate, newDate, new Date().toISOString()]
+  );
+  await persist();
+  return getTaskReschedulesForAnalytics();
+}
+
+/** Undoes a reschedule, reverting originalDate back to its normal due status. */
+export async function clearTaskReschedule(taskId, originalDate) {
+  const db = await ready();
+  await db.run('DELETE FROM task_reschedules WHERE task_id = ? AND original_date = ?', [taskId, originalDate]);
+  await persist();
+  return getTaskReschedulesForAnalytics();
+}
+
+/** Every reschedule, task id -> [{originalDate, newDate}] - loaded once per app-level refresh and
+ * threaded through the analytics layer alongside taskVersionsMap, the same "load once, pass down"
+ * pattern already used everywhere else "was this due on day X" needs data beyond the live task row. */
+export async function getTaskReschedulesForAnalytics() {
+  const db = await ready();
+  const result = await db.query('SELECT task_id, original_date, new_date FROM task_reschedules');
+  const map = {};
+  for (const row of result.values || []) {
+    if (!map[row.task_id]) map[row.task_id] = [];
+    map[row.task_id].push({ originalDate: row.original_date, newDate: row.new_date });
+  }
+  return map;
 }
 
 export async function getAllWorkoutLogs() {

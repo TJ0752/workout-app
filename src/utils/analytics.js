@@ -51,33 +51,33 @@ function average(fractions) {
   return fractions.reduce((sum, f) => sum + f, 0) / fractions.length;
 }
 
-function routineFractionsOverDates(routine, taskVersionsMap, completions, dates) {
+function routineFractionsOverDates(routine, taskVersionsMap, completions, dates, reschedulesMap = {}) {
   return dates
-    .map((d) => getRoutineFraction(routine, taskVersionsMap, completions, d))
+    .map((d) => getRoutineFraction(routine, taskVersionsMap, completions, d, reschedulesMap))
     .filter((f) => f !== null);
 }
 
-function bucketPct(routines, taskVersionsMap, completions, dates) {
+function bucketPct(routines, taskVersionsMap, completions, dates, reschedulesMap = {}) {
   const all = [];
   for (const routine of routines) {
-    all.push(...routineFractionsOverDates(routine, taskVersionsMap, completions, dates));
+    all.push(...routineFractionsOverDates(routine, taskVersionsMap, completions, dates, reschedulesMap));
   }
   const avg = average(all);
   return avg === null ? null : Math.round(avg * 100);
 }
 
-function buildTrend(routines, taskVersionsMap, completions, dates, range) {
+function buildTrend(routines, taskVersionsMap, completions, dates, range, reschedulesMap = {}) {
   if (range === 'week') {
     return dates.map((date) => ({
       label: date.toLocaleDateString(undefined, { weekday: 'short' }).slice(0, 2),
-      pct: bucketPct(routines, taskVersionsMap, completions, [date]),
+      pct: bucketPct(routines, taskVersionsMap, completions, [date], reschedulesMap),
     }));
   }
 
   if (range === 'month') {
     return chunkArray(dates, 7).map((chunk, index) => ({
       label: `Wk${index + 1}`,
-      pct: bucketPct(routines, taskVersionsMap, completions, chunk),
+      pct: bucketPct(routines, taskVersionsMap, completions, chunk, reschedulesMap),
     }));
   }
 
@@ -89,15 +89,15 @@ function buildTrend(routines, taskVersionsMap, completions, dates, range) {
   }
   return Array.from(byMonth.values()).map((monthDates) => ({
     label: monthDates[0].toLocaleDateString(undefined, { month: 'short' }),
-    pct: bucketPct(routines, taskVersionsMap, completions, monthDates),
+    pct: bucketPct(routines, taskVersionsMap, completions, monthDates, reschedulesMap),
   }));
 }
 
-function buildDayOfWeekBreakdown(routines, taskVersionsMap, completions, dates) {
+function buildDayOfWeekBreakdown(routines, taskVersionsMap, completions, dates, reschedulesMap = {}) {
   const buckets = Array.from({ length: 7 }, () => []);
   for (const date of dates) {
     for (const routine of routines) {
-      const fraction = getRoutineFraction(routine, taskVersionsMap, completions, date);
+      const fraction = getRoutineFraction(routine, taskVersionsMap, completions, date, reschedulesMap);
       if (fraction !== null) buckets[date.getDay()].push(fraction);
     }
   }
@@ -108,12 +108,13 @@ function buildDayOfWeekBreakdown(routines, taskVersionsMap, completions, dates) 
   });
 }
 
-function taskStatsOverDates(task, taskVersionsMap, completions, dates) {
+function taskStatsOverDates(task, taskVersionsMap, completions, dates, reschedulesMap = {}) {
   const versions = taskVersionsMap[task.id];
   if (!versions) return { task, pct: null, due: 0, completed: 0 };
 
   const taskCompletions = completions[task.id] || {};
-  const fractions = dates.map((d) => getTaskFraction(versions, taskCompletions, d));
+  const reschedules = reschedulesMap[task.id] || [];
+  const fractions = dates.map((d) => getTaskFraction(versions, taskCompletions, d, reschedules));
   const dueFractions = fractions.filter((f) => f !== null);
   const due = dueFractions.length;
   const avg = average(dueFractions);
@@ -122,8 +123,8 @@ function taskStatsOverDates(task, taskVersionsMap, completions, dates) {
   return { task, pct: avg === null ? null : Math.round(avg * 100), due, completed };
 }
 
-function routineStatsOverDates(routine, taskVersionsMap, completions, dates) {
-  const routineFractions = routineFractionsOverDates(routine, taskVersionsMap, completions, dates);
+function routineStatsOverDates(routine, taskVersionsMap, completions, dates, reschedulesMap = {}) {
+  const routineFractions = routineFractionsOverDates(routine, taskVersionsMap, completions, dates, reschedulesMap);
   const due = routineFractions.length;
   const avg = average(routineFractions);
   const completed = routineFractions.filter((f) => f === 1).length;
@@ -133,8 +134,8 @@ function routineStatsOverDates(routine, taskVersionsMap, completions, dates) {
     due,
     completed,
     pct: avg === null ? null : Math.round(avg * 100),
-    streak: calcRoutineStreak(routine, taskVersionsMap, completions),
-    tasks: routine.tasks.map((task) => taskStatsOverDates(task, taskVersionsMap, completions, dates)),
+    streak: calcRoutineStreak(routine, taskVersionsMap, completions, reschedulesMap),
+    tasks: routine.tasks.map((task) => taskStatsOverDates(task, taskVersionsMap, completions, dates, reschedulesMap)),
   };
 }
 
@@ -148,13 +149,20 @@ function routineStatsOverDates(routine, taskVersionsMap, completions, dates) {
  * chart/heatmap can render those as a distinct "empty" state instead of silently skipping them.
  * `daysMet`/`totalDueDays`/`pct` only ever count the due days, same as before.
  */
-export function getOverallConsistency(routines, taskVersionsMap, completions, thresholdFraction = 0.5, windowDays = 21) {
+export function getOverallConsistency(
+  routines,
+  taskVersionsMap,
+  completions,
+  thresholdFraction = 0.5,
+  windowDays = 21,
+  reschedulesMap = {}
+) {
   const dates = lastNDates(windowDays);
   const series = [];
   let daysMet = 0;
   let totalDueDays = 0;
   for (const date of dates) {
-    const pct = bucketPct(routines, taskVersionsMap, completions, [date]);
+    const pct = bucketPct(routines, taskVersionsMap, completions, [date], reschedulesMap);
     if (pct === null) {
       series.push({ date: dateToKey(date), pct: null, met: false });
       continue;
@@ -175,9 +183,9 @@ export function getOverallConsistency(routines, taskVersionsMap, completions, th
 /** Best streak across every routine within `windowDays` back from today, not just each
  * routine's live streak - the dashboard pairs this with getDashboardStats's existing bestStreak
  * (current) the same way a fitness PR badge sits next to a live progress number. */
-export function getLongestOverallStreak(routines, taskVersionsMap, completions, windowDays = 365) {
+export function getLongestOverallStreak(routines, taskVersionsMap, completions, windowDays = 365, reschedulesMap = {}) {
   return routines.reduce(
-    (max, r) => Math.max(max, calcLongestRoutineStreak(r, taskVersionsMap, completions, windowDays)),
+    (max, r) => Math.max(max, calcLongestRoutineStreak(r, taskVersionsMap, completions, windowDays, reschedulesMap)),
     0
   );
 }
@@ -190,17 +198,18 @@ export function getLongestOverallStreak(routines, taskVersionsMap, completions, 
  * them (see the "flat when simple" convention in CLAUDE.md). Routines/tasks not due that day
  * are omitted entirely rather than listed as some kind of "N/A" row.
  */
-export function getDayBreakdown(routines, taskVersionsMap, completions, date) {
+export function getDayBreakdown(routines, taskVersionsMap, completions, date, reschedulesMap = {}) {
   const routineBreakdowns = [];
   for (const routine of routines) {
     if (!routine.active) continue;
     if (routine.archivedAt && startOfDay(date) >= startOfDay(new Date(routine.archivedAt))) continue;
+    if (routine.startDate && startOfDay(date) < startOfDay(new Date(routine.startDate))) continue;
     const taskItems = [];
     for (const task of routine.tasks) {
       const versions = taskVersionsMap[task.id];
       if (!versions) continue;
       const taskCompletions = completions[task.id] || {};
-      const fraction = getTaskFraction(versions, taskCompletions, date);
+      const fraction = getTaskFraction(versions, taskCompletions, date, reschedulesMap[task.id] || []);
       if (fraction === null) continue;
       taskItems.push({ taskId: task.id, title: task.title, fraction, completed: fraction === 1 });
     }
@@ -211,12 +220,14 @@ export function getDayBreakdown(routines, taskVersionsMap, completions, date) {
   return routineBreakdowns;
 }
 
-export function getDashboardStats(routines, taskVersionsMap, completions, range) {
+export function getDashboardStats(routines, taskVersionsMap, completions, range, reschedulesMap = {}) {
   const today = new Date();
   const start = rangeStartDate(range, routines, today);
   const dates = datesBetween(start, today);
 
-  const perRoutine = routines.map((routine) => routineStatsOverDates(routine, taskVersionsMap, completions, dates));
+  const perRoutine = routines.map((routine) =>
+    routineStatsOverDates(routine, taskVersionsMap, completions, dates, reschedulesMap)
+  );
 
   let totalCompletedTaskDays = 0;
   for (const routine of routines) {
@@ -224,21 +235,22 @@ export function getDashboardStats(routines, taskVersionsMap, completions, range)
       const versions = taskVersionsMap[task.id];
       if (!versions) continue;
       const taskCompletions = completions[task.id] || {};
+      const reschedules = reschedulesMap[task.id] || [];
       totalCompletedTaskDays += dates.filter(
-        (d) => getTaskFraction(versions, taskCompletions, d) === 1
+        (d) => getTaskFraction(versions, taskCompletions, d, reschedules) === 1
       ).length;
     }
   }
 
-  const overallPct = bucketPct(routines, taskVersionsMap, completions, dates);
+  const overallPct = bucketPct(routines, taskVersionsMap, completions, dates, reschedulesMap);
   const bestStreak = perRoutine.reduce((max, r) => Math.max(max, r.streak), 0);
   // Consistency and longest-streak share the exact same window as everything else on the
   // selected range (dates.length days back from today) rather than a fixed lookback, so the
   // whole dashboard - not just completionRate/trend - actually reacts to the Week/Month/All
   // Time toggle.
   const windowDays = dates.length;
-  const longestStreak = getLongestOverallStreak(routines, taskVersionsMap, completions, windowDays);
-  const consistency = getOverallConsistency(routines, taskVersionsMap, completions, 0.5, windowDays);
+  const longestStreak = getLongestOverallStreak(routines, taskVersionsMap, completions, windowDays, reschedulesMap);
+  const consistency = getOverallConsistency(routines, taskVersionsMap, completions, 0.5, windowDays, reschedulesMap);
 
   const ranked = perRoutine.filter((r) => r.due > 0).sort((a, b) => b.pct - a.pct);
 
@@ -251,7 +263,8 @@ export function getDashboardStats(routines, taskVersionsMap, completions, range)
     perRoutine: ranked,
     topRoutine: ranked[0] || null,
     needsAttention: ranked.length > 1 ? ranked[ranked.length - 1] : null,
-    trend: buildTrend(routines, taskVersionsMap, completions, dates, range),
-    dayOfWeek: range === 'week' ? null : buildDayOfWeekBreakdown(routines, taskVersionsMap, completions, dates),
+    trend: buildTrend(routines, taskVersionsMap, completions, dates, range, reschedulesMap),
+    dayOfWeek:
+      range === 'week' ? null : buildDayOfWeekBreakdown(routines, taskVersionsMap, completions, dates, reschedulesMap),
   };
 }

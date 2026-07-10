@@ -49,15 +49,26 @@ export function findEffectiveVersion(versions, date) {
 }
 
 /**
- * A task's completion fraction (0-1) for a given date, evaluated against
- * whichever version was effective that day. Returns null if the task wasn't
- * due at all that day (didn't exist yet, paused, or not scheduled).
+ * A task's completion fraction (0-1) for a given date, evaluated against whichever version was
+ * effective that day. Returns null if the task wasn't due at all that day (didn't exist yet,
+ * paused, or not scheduled). `reschedules` (default []) is this one task's own
+ * task_reschedules rows ({originalDate, newDate} pairs, see storage.js) - a one-time,
+ * per-occurrence move that doesn't touch the recurring `days` schedule at all: `date` matching
+ * some reschedule's `originalDate` is treated as nothing-scheduled (not a miss, exactly like a
+ * day that was never due), while `date` matching a `newDate` is due even if it falls outside
+ * `version.days` for that week.
  */
-export function getTaskFraction(versions, completions, date) {
-  const version = findEffectiveVersion(versions, date);
-  if (!version || !version.active || !version.days.includes(date.getDay())) return null;
+export function getTaskFraction(versions, completions, date, reschedules = []) {
+  const dateKey = dateToKey(date);
+  if (reschedules.some((r) => r.originalDate === dateKey)) return null;
 
-  const value = completions?.[dateToKey(date)];
+  const version = findEffectiveVersion(versions, date);
+  if (!version || !version.active) return null;
+  const dueByDay = version.days.includes(date.getDay());
+  const dueByReschedule = reschedules.some((r) => r.newDate === dateKey);
+  if (!dueByDay && !dueByReschedule) return null;
+
+  const value = completions?.[dateKey];
   if (version.completionType === 'quantity') {
     const target = version.target || 0;
     if (!target) return value ? 1 : 0;
@@ -73,9 +84,10 @@ export function getTaskFraction(versions, completions, date) {
  * A routine's completion fraction for a date = average of its tasks'
  * fractions that day, ignoring tasks not due that day. Returns null if none
  * of the routine's tasks were due (so callers can skip the day rather than
- * treating it as a 0%).
+ * treating it as a 0%). `reschedulesMap` (default {}) is task id -> its own reschedules,
+ * the same "load once, pass down" shape as taskVersionsMap - see getTaskFraction above.
  */
-export function getRoutineFraction(routine, taskVersionsMap, completions, date) {
+export function getRoutineFraction(routine, taskVersionsMap, completions, date, reschedulesMap = {}) {
   // Routine-level pause is a simple current-state gate (unlike task-level
   // pause, which is versioned for historical accuracy) - pausing/resuming a
   // routine takes effect for all dates immediately, including past ones.
@@ -84,28 +96,33 @@ export function getRoutineFraction(routine, taskVersionsMap, completions, date) 
   // the routine were never archived (its full history stays intact), while archivedAt itself
   // and every day after are treated as "nothing due" - see db.js's migration comment.
   if (routine.archivedAt && startOfDay(date) >= startOfDay(new Date(routine.archivedAt))) return null;
+  // startDate plays the same role as archivedAt, mirrored on the other end: a day before it
+  // hasn't started yet, so it's "nothing due" rather than a miss. No end-of-window check is
+  // needed here for endDate - once it passes, App.jsx's auto-archive check sets archivedAt,
+  // whose own cutover above already covers it.
+  if (routine.startDate && startOfDay(date) < startOfDay(new Date(routine.startDate))) return null;
 
   const fractions = [];
   for (const task of routine.tasks) {
     const versions = taskVersionsMap[task.id];
     if (!versions) continue;
-    const fraction = getTaskFraction(versions, completions[task.id] || {}, date);
+    const fraction = getTaskFraction(versions, completions[task.id] || {}, date, reschedulesMap[task.id] || []);
     if (fraction !== null) fractions.push(fraction);
   }
   if (fractions.length === 0) return null;
   return fractions.reduce((sum, f) => sum + f, 0) / fractions.length;
 }
 
-export function isRoutineDueToday(routine, taskVersionsMap, completions) {
-  return getRoutineFraction(routine, taskVersionsMap, completions, new Date()) !== null;
+export function isRoutineDueToday(routine, taskVersionsMap, completions, reschedulesMap = {}) {
+  return getRoutineFraction(routine, taskVersionsMap, completions, new Date(), reschedulesMap) !== null;
 }
 
-export function calcRoutineStreak(routine, taskVersionsMap, completions) {
+export function calcRoutineStreak(routine, taskVersionsMap, completions, reschedulesMap = {}) {
   let streak = 0;
   const cursor = new Date();
   const today = todayKey();
   for (let i = 0; i < 365; i++) {
-    const fraction = getRoutineFraction(routine, taskVersionsMap, completions, cursor);
+    const fraction = getRoutineFraction(routine, taskVersionsMap, completions, cursor, reschedulesMap);
     if (fraction === null) {
       cursor.setDate(cursor.getDate() - 1);
       continue;
@@ -128,12 +145,18 @@ export function calcRoutineStreak(routine, taskVersionsMap, completions) {
  * count), this walks the whole lookback window and keeps the longest run seen, including runs
  * that have since ended.
  */
-export function calcLongestRoutineStreak(routine, taskVersionsMap, completions, lookbackDays = 365) {
+export function calcLongestRoutineStreak(
+  routine,
+  taskVersionsMap,
+  completions,
+  lookbackDays = 365,
+  reschedulesMap = {}
+) {
   const dates = lastNDates(lookbackDays);
   let longest = 0;
   let current = 0;
   for (const date of dates) {
-    const fraction = getRoutineFraction(routine, taskVersionsMap, completions, date);
+    const fraction = getRoutineFraction(routine, taskVersionsMap, completions, date, reschedulesMap);
     if (fraction === null) continue; // not due that day - doesn't break or extend a run
     if (fraction === 1) {
       current += 1;
@@ -145,10 +168,10 @@ export function calcLongestRoutineStreak(routine, taskVersionsMap, completions, 
   return longest;
 }
 
-export function calcRoutineCompletionRate(routine, taskVersionsMap, completions, windowDays = 30) {
+export function calcRoutineCompletionRate(routine, taskVersionsMap, completions, windowDays = 30, reschedulesMap = {}) {
   const dates = lastNDates(windowDays);
   const fractions = dates
-    .map((d) => getRoutineFraction(routine, taskVersionsMap, completions, d))
+    .map((d) => getRoutineFraction(routine, taskVersionsMap, completions, d, reschedulesMap))
     .filter((f) => f !== null);
   if (fractions.length === 0) return 0;
   return Math.round((fractions.reduce((sum, f) => sum + f, 0) / fractions.length) * 100);

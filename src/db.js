@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 
 const DB_NAME = 'routines';
-const DB_VERSION = 8;
+const DB_VERSION = 10;
 
 const sqlite = new SQLiteConnection(CapacitorSQLite);
 let dbInstance = null;
@@ -227,6 +227,49 @@ const MIGRATIONS = [
       `ALTER TABLE task_versions ADD COLUMN auto_update_target INTEGER NOT NULL DEFAULT 0;`,
     ],
   },
+  {
+    // A routine can now be scoped to run for a specific window (start_date/end_date, both
+    // nullable 'YYYY-MM-DD' dates) instead of running indefinitely from creation. These behave
+    // like `archived_at` above, not like a versioned field: they're a "which days even count"
+    // gate read directly off the live `routines` row (see getRoutineFraction/getDayBreakdown),
+    // never resolved per-day through routine_versions cutover - editing them still goes through
+    // the normal routineFieldsOf/upsertRoutine diff-and-version path purely for audit-log parity
+    // (routine_versions carries the same two columns), the same reason archived_at exists on
+    // both tables. end_date doesn't need its own analytics-layer cutover at all: once today
+    // reaches it, App.jsx's auto-archive check just calls the existing archiveRoutine(), and
+    // archived_at's own already-correct cutover takes over from there.
+    toVersion: 9,
+    statements: [
+      `ALTER TABLE routines ADD COLUMN start_date TEXT;`,
+      `ALTER TABLE routines ADD COLUMN end_date TEXT;`,
+      `ALTER TABLE routine_versions ADD COLUMN start_date TEXT;`,
+      `ALTER TABLE routine_versions ADD COLUMN end_date TEXT;`,
+    ],
+  },
+  {
+    // Lets a task's schedule "flex" for one occurrence at a time without touching its recurring
+    // days - task_reschedules is a small, unversioned table (one row per moved occurrence, not a
+    // task edit) keyed by (task_id, original_date): original_date stops being due that week
+    // (treated as nothing-scheduled, not a miss) and new_date becomes due instead, even if it
+    // falls outside task.days. allow_cross_week_reschedule is a per-task opt-in (versioned like
+    // auto_update_target, default off) letting a reschedule's new_date land up to one day outside
+    // the current Monday-start week (see utils/workouts.js's existing mondayOf) instead of being
+    // confined to it.
+    toVersion: 10,
+    statements: [
+      `ALTER TABLE tasks ADD COLUMN allow_cross_week_reschedule INTEGER NOT NULL DEFAULT 0;`,
+      `ALTER TABLE task_versions ADD COLUMN allow_cross_week_reschedule INTEGER NOT NULL DEFAULT 0;`,
+      `CREATE TABLE IF NOT EXISTS task_reschedules (
+        id TEXT PRIMARY KEY NOT NULL,
+        task_id TEXT NOT NULL,
+        original_date TEXT NOT NULL,
+        new_date TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_task_reschedules_task_original
+        ON task_reschedules(task_id, original_date);`,
+    ],
+  },
 ];
 
 /**
@@ -251,6 +294,39 @@ async function ensureQuantityModeColumns(db) {
   await db.run(`ALTER TABLE task_versions ADD COLUMN auto_update_target INTEGER NOT NULL DEFAULT 0;`);
 }
 
+/** Same self-heal template as ensureQuantityModeColumns above, applied to the toVersion:9
+ * start_date/end_date columns - kept as its own cheap PRAGMA check rather than assuming
+ * capacitor-community/sqlite's version bookkeeping and its ALTER TABLE statements always stay
+ * in lockstep, since they've already been observed not to on a real device once. */
+async function ensureRoutineDateColumns(db) {
+  const info = await db.query(`PRAGMA table_info(routines);`);
+  const hasColumn = (info.values || []).some((col) => col.name === 'start_date');
+  if (hasColumn) return;
+  await db.run(`ALTER TABLE routines ADD COLUMN start_date TEXT;`);
+  await db.run(`ALTER TABLE routines ADD COLUMN end_date TEXT;`);
+  await db.run(`ALTER TABLE routine_versions ADD COLUMN start_date TEXT;`);
+  await db.run(`ALTER TABLE routine_versions ADD COLUMN end_date TEXT;`);
+}
+
+/** Same self-heal template again, for the toVersion:10 reschedule schema. */
+async function ensureTaskRescheduleSchema(db) {
+  const info = await db.query(`PRAGMA table_info(tasks);`);
+  const hasColumn = (info.values || []).some((col) => col.name === 'allow_cross_week_reschedule');
+  if (!hasColumn) {
+    await db.run(`ALTER TABLE tasks ADD COLUMN allow_cross_week_reschedule INTEGER NOT NULL DEFAULT 0;`);
+    await db.run(`ALTER TABLE task_versions ADD COLUMN allow_cross_week_reschedule INTEGER NOT NULL DEFAULT 0;`);
+  }
+  await db.run(`CREATE TABLE IF NOT EXISTS task_reschedules (
+    id TEXT PRIMARY KEY NOT NULL,
+    task_id TEXT NOT NULL,
+    original_date TEXT NOT NULL,
+    new_date TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );`);
+  await db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_reschedules_task_original
+    ON task_reschedules(task_id, original_date);`);
+}
+
 async function openDatabase() {
   const isWeb = Capacitor.getPlatform() === 'web';
   if (isWeb) {
@@ -266,6 +342,8 @@ async function openDatabase() {
 
   await db.open();
   await ensureQuantityModeColumns(db);
+  await ensureRoutineDateColumns(db);
+  await ensureTaskRescheduleSchema(db);
   return db;
 }
 

@@ -159,6 +159,33 @@ describe('getTaskFraction', () => {
       expect(getTaskFraction(versions, {}, FIXED_NOW)).toBe(0);
     });
   });
+
+  describe('reschedules', () => {
+    it('treats a day rescheduled away as not due, even though it is a normal scheduled day', () => {
+      const versions = [boolVersion({ days: [TUESDAY] })];
+      const reschedules = [{ originalDate: todayKey(), newDate: '2026-07-09' }];
+      expect(getTaskFraction(versions, { [todayKey()]: 1 }, FIXED_NOW, reschedules)).toBeNull();
+    });
+
+    it('treats a day rescheduled in as due, even though it is not a normal scheduled day', () => {
+      const offDay = (TUESDAY + 1) % 7;
+      const versions = [boolVersion({ days: [offDay] })];
+      const reschedules = [{ originalDate: '2026-07-06', newDate: todayKey() }];
+      expect(getTaskFraction(versions, {}, FIXED_NOW, reschedules)).toBe(0);
+      expect(getTaskFraction(versions, { [todayKey()]: 1 }, FIXED_NOW, reschedules)).toBe(1);
+    });
+
+    it('a paused task stays not-due even on a rescheduled-in day', () => {
+      const versions = [boolVersion({ active: false, days: [(TUESDAY + 1) % 7] })];
+      const reschedules = [{ originalDate: '2026-07-06', newDate: todayKey() }];
+      expect(getTaskFraction(versions, {}, FIXED_NOW, reschedules)).toBeNull();
+    });
+
+    it('defaults to normal day-of-week behavior when no reschedules are passed', () => {
+      const versions = [boolVersion()];
+      expect(getTaskFraction(versions, { [todayKey()]: 1 }, FIXED_NOW)).toBe(1);
+    });
+  });
 });
 
 function routineWith(tasks, overrides = {}) {
@@ -194,6 +221,28 @@ describe('getRoutineFraction', () => {
     const completions = { t1: { [todayKey()]: 1 }, t2: { [todayKey()]: 5 } };
     // (1 + 0.5) / 2
     expect(getRoutineFraction(routine, taskVersionsMap, completions, FIXED_NOW)).toBe(0.75);
+  });
+
+  it('returns null before startDate, mirroring the archivedAt cutover on the other end', () => {
+    const routine = routineWith([{ id: 't1' }], { startDate: '2026-07-10' }); // 3 days from now
+    const taskVersionsMap = { t1: [boolVersion()] };
+    expect(getRoutineFraction(routine, taskVersionsMap, { t1: { [todayKey()]: 1 } }, FIXED_NOW)).toBeNull();
+  });
+
+  it('computes normally on and after startDate', () => {
+    const routine = routineWith([{ id: 't1' }], { startDate: todayKey() });
+    const taskVersionsMap = { t1: [boolVersion()] };
+    expect(getRoutineFraction(routine, taskVersionsMap, { t1: { [todayKey()]: 1 } }, FIXED_NOW)).toBe(1);
+  });
+
+  it('threads a per-task reschedulesMap through to getTaskFraction', () => {
+    const offDay = (TUESDAY + 1) % 7;
+    const routine = routineWith([{ id: 't1' }]);
+    const taskVersionsMap = { t1: [boolVersion({ days: [offDay] })] };
+    const reschedulesMap = { t1: [{ originalDate: '2026-07-06', newDate: todayKey() }] };
+    expect(
+      getRoutineFraction(routine, taskVersionsMap, { t1: { [todayKey()]: 1 } }, FIXED_NOW, reschedulesMap)
+    ).toBe(1);
   });
 });
 

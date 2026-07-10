@@ -597,6 +597,8 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
           icon: initial.icon,
           notes: initial.notes,
           defaultDays: initial.defaultDays,
+          startDate: initial.startDate || null,
+          endDate: initial.endDate || null,
           createdAt: initial.createdAt,
           active: initial.active,
         }
@@ -606,6 +608,8 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
           icon: null,
           notes: '',
           defaultDays: [1, 2, 3, 4, 5],
+          startDate: null,
+          endDate: null,
           createdAt: new Date().toISOString(),
           active: true,
         }
@@ -666,7 +670,8 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
       (!t.exercises?.length || t.exercises.some((ex) => !ex.name.trim()))
   );
   const hasInvalidWorkout = invalidWorkoutTasks.length > 0;
-  const invalidTask = hasUnnamedTask || hasTaskWithNoDays || hasInvalidWorkout;
+  const hasInvalidDateRange = Boolean(routine.startDate && routine.endDate && routine.endDate < routine.startDate);
+  const invalidTask = hasUnnamedTask || hasTaskWithNoDays || hasInvalidWorkout || hasInvalidDateRange;
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -826,6 +831,34 @@ export default function RoutineForm({ initial, onSave, onCancel }) {
           onChange={(e) => setRoutine((r) => ({ ...r, notes: e.target.value }))}
         />
       </label>
+
+      <div className="date-range-fields">
+        <span className="field-label">Run for a specific duration (optional)</span>
+        <div className="date-range-row">
+          <label>
+            Start date
+            <input
+              type="date"
+              value={routine.startDate || ''}
+              onChange={(e) => setRoutine((r) => ({ ...r, startDate: e.target.value || null }))}
+            />
+          </label>
+          <label>
+            End date
+            <input
+              type="date"
+              value={routine.endDate || ''}
+              onChange={(e) => setRoutine((r) => ({ ...r, endDate: e.target.value || null }))}
+            />
+          </label>
+        </div>
+        <p className="field-hint">
+          Leave blank to run indefinitely. If a start date is set, this routine won&rsquo;t appear as
+          due until then. If an end date is set, it&rsquo;s automatically archived once that date
+          passes&nbsp;&mdash;&nbsp;its history stays intact, same as archiving it by hand.
+        </p>
+        {hasInvalidDateRange && <p className="form-error">End date can&rsquo;t be before the start date.</p>}
+      </div>
 
       {initial && (
         <div>
