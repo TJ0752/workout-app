@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import RoutineForm from './RoutineForm';
 import { DAY_LABELS, calcRoutineCompletionRate, todayKey } from '../utils/date';
 import { getRoutineIcon } from '../utils/icons';
@@ -22,11 +22,30 @@ export default function RoutinesView({
   const [editing, setEditing] = useState(null);
   const [showArchived, setShowArchived] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const formRef = useRef(null);
 
   const activeRoutines = routines.filter((r) => !r.archived);
   const archivedRoutines = routines.filter((r) => r.archived);
 
+  // The form renders above the routine list, so opening it while scrolled down to find a
+  // card would otherwise leave it off-screen with no indication anything happened.
+  useEffect(() => {
+    if (showForm) {
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [showForm, editing]);
+
+  // RoutineForm keeps its own in-progress edits internally and doesn't expose a "dirty" flag
+  // to this component, so switching targets while a different routine is already open risks
+  // silently discarding whatever's been typed - confirm before swapping out from under it.
+  const confirmDiscardIfEditing = (nextRoutineId) => {
+    if (!showForm) return true;
+    if ((editing?.id ?? null) === nextRoutineId) return true;
+    return window.confirm('You have unsaved changes in the routine editor. Discard them and switch?');
+  };
+
   const startEdit = (routine) => {
+    if (!confirmDiscardIfEditing(routine.id)) return;
     setSaveError('');
     setEditing(routine);
     setShowForm(true);
@@ -104,6 +123,7 @@ export default function RoutinesView({
             className="add-btn"
             onClick={() => {
               setSaveError('');
+              setEditing(null);
               setShowForm(true);
             }}
           >
@@ -116,10 +136,10 @@ export default function RoutinesView({
       </div>
 
       {showForm && (
-        <>
+        <div ref={formRef}>
           {saveError && <p className="form-error">{saveError}</p>}
-          <RoutineForm initial={editing} onSave={handleSave} onCancel={closeForm} />
-        </>
+          <RoutineForm key={editing?.id ?? 'new'} initial={editing} onSave={handleSave} onCancel={closeForm} />
+        </div>
       )}
 
       {activeRoutines.length === 0 && !showForm && (

@@ -2067,6 +2067,47 @@ completion-adjacent).
   `android-emulator-verify.yml` real-device harness (or a manual on-device try) can prove beyond
   compile-correctness and code review.
 
+### Routine editor usability (`RoutinesView.jsx`, `RoutineForm.jsx`)
+
+Three small fixes to the routine-editing flow, all found by direct user report of friction while
+actually using the app, not from a design review:
+
+- **Auto-scroll to the form on Edit.** `RoutineForm` renders above `routine-list` in
+  `RoutinesView.jsx`, so clicking "Edit" on a card the user had scrolled down to find used to open
+  the form entirely off-screen with no visible feedback that anything happened. A `formRef` +
+  `useEffect` (keyed on `[showForm, editing]`) calls `scrollIntoView({behavior: 'smooth', block:
+  'start'})` whenever the form opens or its target changes.
+- **Confirm before discarding an in-progress edit.** `RoutineForm` keeps its own `routine`/`tasks`
+  state internally (seeded once from the `initial` prop) and exposes no "dirty" flag to its
+  parent, so nothing previously stopped a user mid-edit of one routine from clicking "Edit" on a
+  *different* card and silently losing whatever they'd typed. `confirmDiscardIfEditing` in
+  `RoutinesView.jsx` gates `startEdit`: if the form is already open and the clicked routine isn't
+  the one currently being edited, a plain `window.confirm(...)` (the same pattern already used for
+  archive/permanent-delete elsewhere in this app) must be accepted before the switch proceeds.
+  **A real bug found while verifying this fix, not a pre-existing one**: adding the confirm gate
+  alone wasn't sufficient — `RoutineForm` was never given a `key` prop, so React kept the *same*
+  mounted instance across the switch and its `useState(() => ...initial)` lazy initializers never
+  re-ran, meaning the form kept showing the routine that was being edited *before* the switch even
+  after the user confirmed discarding it. Fixed with `key={editing?.id ?? 'new'}` on the
+  `<RoutineForm>` element in `RoutinesView.jsx`, forcing a genuine remount (and therefore a fresh
+  `useState` seed from the new `initial`) every time the edit target actually changes. Caught by a
+  Playwright round-trip asserting the title input's value after switching, not by inspection.
+- **Exercise cards collapse by default, with an Expand all/Collapse all toggle.** Before this,
+  `ExerciseListEditor` (inside a workout task's editor) rendered every exercise as a fully expanded
+  `form-card` unconditionally — the one part of `RoutineForm` that had no collapse mechanism at
+  all, unlike the multi-task list one level up, which already defaulted to collapsed
+  `task-edit-row` summaries (`editingTaskId` starting at `null`). Now mirrors that exact pattern:
+  `editingExerciseId` (single id or `null`) controls which one card is expanded, each collapsed row
+  shows a summary line (`exerciseSummary`: type · sets × reps-or-duration) with Edit/Delete
+  buttons, and a per-exercise "Done" button collapses it back. `addExercise()` still auto-opens the
+  newly created exercise (so it's immediately editable, matching `addTask`'s equivalent behavior),
+  which also means every *previously* open exercise collapses back down the moment a new one is
+  added — the same implicit "only one open at a time" behavior the task list already had. A
+  separate `expandAll` boolean (only shown once there's more than one exercise) overrides
+  `editingExerciseId` entirely while true, so every card renders expanded at once; toggling it back
+  off resets `editingExerciseId` to `null` rather than leaving whatever was last open still
+  expanded.
+
 ### AI-generated routine import (`src/aiImport.js`, `SettingsView.jsx`)
 
 V1 of "generate routines with AI": a plain paste-JSON importer in Settings, not a chat interface

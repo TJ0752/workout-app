@@ -289,15 +289,33 @@ function ExerciseNameInput({ value, exerciseNames, onChange, onSelectExisting })
   );
 }
 
+function exerciseSummary(ex) {
+  const setsPart = `${ex.targetSets ?? '?'} sets`;
+  const amountPart =
+    ex.unit === 'seconds'
+      ? ex.targetDurationSeconds
+        ? formatHms(ex.targetDurationSeconds)
+        : '?'
+      : `${ex.targetReps ?? '?'} reps`;
+  return `${isCalisthenics(ex) ? 'Calisthenics' : 'Weights'} · ${setsPart} × ${amountPart}`;
+}
+
 function ExerciseListEditor({ task, onChange, exerciseNames }) {
   const exercises = task.exercises || [];
+  // Collapsed by default (mirrors the multi-task list's own task-edit-row/form-card pattern
+  // below) - a workout task's exercise list is the one area of this form that used to render
+  // every card fully expanded with no way to collapse it at all.
+  const [editingExerciseId, setEditingExerciseId] = useState(null);
+  const [expandAll, setExpandAll] = useState(false);
 
   const updateExercise = (id, patch) => {
     onChange({ ...task, exercises: exercises.map((ex) => (ex.id === id ? { ...ex, ...patch } : ex)) });
   };
 
   const addExercise = () => {
-    onChange({ ...task, exercises: [...exercises, makeExercise()] });
+    const created = makeExercise();
+    onChange({ ...task, exercises: [...exercises, created] });
+    setEditingExerciseId(created.id);
   };
 
   const removeExercise = (id) => {
@@ -306,111 +324,151 @@ function ExerciseListEditor({ task, onChange, exerciseNames }) {
 
   return (
     <div>
-      <span className="field-label">Exercises</span>
+      <div className="inline-fields" style={{ alignItems: 'center' }}>
+        <span className="field-label">Exercises</span>
+        {exercises.length > 1 && (
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => {
+              setExpandAll((v) => !v);
+              setEditingExerciseId(null);
+            }}
+          >
+            {expandAll ? 'Collapse all' : 'Expand all'}
+          </button>
+        )}
+      </div>
       <div className="task-edit-list">
-        {exercises.map((ex) => (
-          <div className="form-card" key={ex.id}>
-            <div className="inline-fields">
-              <label>
-                Exercise name
-                <ExerciseNameInput
-                  value={ex.name}
-                  exerciseNames={exerciseNames}
-                  onChange={(name) => updateExercise(ex.id, { name, exerciseId: null })}
-                  onSelectExisting={(match) => updateExercise(ex.id, { name: match.name, exerciseId: match.id })}
-                />
-              </label>
-              <button type="button" className="task-edit-icon-btn" onClick={() => removeExercise(ex.id)}>
-                Delete
-              </button>
-            </div>
-            <div className="type-toggle">
-              <button
-                type="button"
-                className={!isCalisthenics(ex) ? 'active' : ''}
-                onClick={() => updateExercise(ex.id, { type: 'weights' })}
-              >
-                Weights
-              </button>
-              <button
-                type="button"
-                className={isCalisthenics(ex) ? 'active' : ''}
-                onClick={() => updateExercise(ex.id, { type: 'calisthenics' })}
-              >
-                Calisthenics
-              </button>
-            </div>
-            <div className="type-toggle">
-              <button
-                type="button"
-                className={ex.unit !== 'seconds' ? 'active' : ''}
-                onClick={() =>
-                  updateExercise(ex.id, { unit: 'reps', targetDurationSeconds: null, targetReps: ex.targetReps ?? 10 })
-                }
-              >
-                Reps
-              </button>
-              <button
-                type="button"
-                className={ex.unit === 'seconds' ? 'active' : ''}
-                onClick={() =>
-                  updateExercise(ex.id, {
-                    unit: 'seconds',
-                    targetReps: null,
-                    targetDurationSeconds: ex.targetDurationSeconds ?? 30,
-                  })
-                }
-              >
-                Duration
-              </button>
-            </div>
-            <div className="inline-fields">
-              <label>
-                Sets
-                <input
-                  type="number"
-                  min="1"
-                  value={ex.targetSets ?? ''}
-                  onChange={(e) =>
-                    updateExercise(ex.id, { targetSets: e.target.value ? Number(e.target.value) : null })
-                  }
-                />
-              </label>
-              {ex.unit === 'seconds' ? (
-                <DurationHMSInput
-                  label="Duration/set"
-                  totalSeconds={ex.targetDurationSeconds}
-                  onChange={(secs) => updateExercise(ex.id, { targetDurationSeconds: secs })}
-                />
-              ) : (
+        {exercises.map((ex) => {
+          const isOpen = expandAll || editingExerciseId === ex.id;
+          if (!isOpen) {
+            return (
+              <div className="task-edit-row" key={ex.id}>
+                <div className="task-edit-info">
+                  <div className="name">{ex.name || '(unnamed exercise)'}</div>
+                  <div className="meta">{exerciseSummary(ex)}</div>
+                </div>
+                <button type="button" className="task-edit-icon-btn" onClick={() => setEditingExerciseId(ex.id)}>
+                  Edit
+                </button>
+                <button type="button" className="task-edit-icon-btn" onClick={() => removeExercise(ex.id)}>
+                  Delete
+                </button>
+              </div>
+            );
+          }
+          return (
+            <div className="form-card" key={ex.id}>
+              <div className="inline-fields">
                 <label>
-                  Reps/set
+                  Exercise name
+                  <ExerciseNameInput
+                    value={ex.name}
+                    exerciseNames={exerciseNames}
+                    onChange={(name) => updateExercise(ex.id, { name, exerciseId: null })}
+                    onSelectExisting={(match) => updateExercise(ex.id, { name: match.name, exerciseId: match.id })}
+                  />
+                </label>
+                <button type="button" className="task-edit-icon-btn" onClick={() => removeExercise(ex.id)}>
+                  Delete
+                </button>
+              </div>
+              <div className="type-toggle">
+                <button
+                  type="button"
+                  className={!isCalisthenics(ex) ? 'active' : ''}
+                  onClick={() => updateExercise(ex.id, { type: 'weights' })}
+                >
+                  Weights
+                </button>
+                <button
+                  type="button"
+                  className={isCalisthenics(ex) ? 'active' : ''}
+                  onClick={() => updateExercise(ex.id, { type: 'calisthenics' })}
+                >
+                  Calisthenics
+                </button>
+              </div>
+              <div className="type-toggle">
+                <button
+                  type="button"
+                  className={ex.unit !== 'seconds' ? 'active' : ''}
+                  onClick={() =>
+                    updateExercise(ex.id, { unit: 'reps', targetDurationSeconds: null, targetReps: ex.targetReps ?? 10 })
+                  }
+                >
+                  Reps
+                </button>
+                <button
+                  type="button"
+                  className={ex.unit === 'seconds' ? 'active' : ''}
+                  onClick={() =>
+                    updateExercise(ex.id, {
+                      unit: 'seconds',
+                      targetReps: null,
+                      targetDurationSeconds: ex.targetDurationSeconds ?? 30,
+                    })
+                  }
+                >
+                  Duration
+                </button>
+              </div>
+              <div className="inline-fields">
+                <label>
+                  Sets
                   <input
                     type="number"
                     min="1"
-                    value={ex.targetReps ?? ''}
+                    value={ex.targetSets ?? ''}
                     onChange={(e) =>
-                      updateExercise(ex.id, { targetReps: e.target.value ? Number(e.target.value) : null })
+                      updateExercise(ex.id, { targetSets: e.target.value ? Number(e.target.value) : null })
                     }
                   />
                 </label>
+                {ex.unit === 'seconds' ? (
+                  <DurationHMSInput
+                    label="Duration/set"
+                    totalSeconds={ex.targetDurationSeconds}
+                    onChange={(secs) => updateExercise(ex.id, { targetDurationSeconds: secs })}
+                  />
+                ) : (
+                  <label>
+                    Reps/set
+                    <input
+                      type="number"
+                      min="1"
+                      value={ex.targetReps ?? ''}
+                      onChange={(e) =>
+                        updateExercise(ex.id, { targetReps: e.target.value ? Number(e.target.value) : null })
+                      }
+                    />
+                  </label>
+                )}
+              </div>
+              <div className="inline-fields">
+                <label>
+                  Rest between sets, sec (optional)
+                  <input
+                    type="number"
+                    min="0"
+                    value={ex.restSeconds ?? ''}
+                    onChange={(e) =>
+                      updateExercise(ex.id, { restSeconds: e.target.value ? Number(e.target.value) : null })
+                    }
+                  />
+                </label>
+              </div>
+              {!expandAll && (
+                <div className="inline-fields">
+                  <button type="button" style={{ flex: 1 }} onClick={() => setEditingExerciseId(null)}>
+                    Done
+                  </button>
+                </div>
               )}
             </div>
-            <div className="inline-fields">
-              <label>
-                Rest between sets, sec (optional)
-                <input
-                  type="number"
-                  min="0"
-                  value={ex.restSeconds ?? ''}
-                  onChange={(e) =>
-                    updateExercise(ex.id, { restSeconds: e.target.value ? Number(e.target.value) : null })
-                  }
-                />
-              </label>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <button type="button" className="add-task-btn" onClick={addExercise}>
         + Add exercise
