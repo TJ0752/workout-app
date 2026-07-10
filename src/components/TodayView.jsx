@@ -1,16 +1,21 @@
 import { useEffect, useState } from 'react';
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Flame } from 'lucide-react';
 import { getRoutineFraction, getTaskFraction, dateToKey, todayKey, startOfDay, calcRoutineStreak } from '../utils/date';
+import { getRescheduleRange, isValidRescheduleTarget } from '../utils/reschedule';
 
 // Below this, a streak badge reads as noise rather than a meaningful "you're on a roll" signal.
 const STREAK_BADGE_MIN = 3;
 import { getRoutineIcon } from '../utils/icons';
 import { quickAddAmountsFor, formatHms } from '../utils/tasks';
 
-function isTaskDueOn(task, taskVersionsMap, date) {
+function isTaskDueOn(task, taskVersionsMap, date, reschedules = []) {
   const versions = taskVersionsMap[task.id];
   if (!versions) return false;
-  return getTaskFraction(versions, {}, date) !== null;
+  return getTaskFraction(versions, {}, date, reschedules) !== null;
+}
+
+function formatShortDate(dateKey) {
+  return new Date(`${dateKey}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function atTime(now, timeStr) {
@@ -106,6 +111,78 @@ function StreakBadge({ streak }) {
   );
 }
 
+/**
+ * "Something came up" - move this one occurrence of a due task to a different day, without
+ * touching its recurring schedule (task.days). Two states: this occurrence exists here *because*
+ * of an earlier reschedule (movedIn - shows where it came from plus an Undo), or it's an eligible
+ * normal due day offering a "Reschedule" action that opens an inline date picker bounded by
+ * getRescheduleRange (same week, or +/-1 day if task.allowCrossWeekReschedule). Not offered for a
+ * task due every day of the week - there's no "elsewhere" within the week to move it to.
+ */
+function RescheduleControl({ task, dateKey, reschedulesMap, onReschedule, onClearReschedule }) {
+  const [editing, setEditing] = useState(false);
+  const [pickedDate, setPickedDate] = useState('');
+
+  const taskReschedules = reschedulesMap[task.id] || [];
+  const movedIn = taskReschedules.find((r) => r.newDate === dateKey);
+  const eligible = task.days.length > 0 && task.days.length < 7;
+
+  if (movedIn) {
+    return (
+      <div className="reschedule-row">
+        <span className="reschedule-tag">Moved from {formatShortDate(movedIn.originalDate)}</span>
+        <button
+          type="button"
+          className="reschedule-btn"
+          onClick={() => onClearReschedule(task, movedIn.originalDate)}
+        >
+          Undo
+        </button>
+      </div>
+    );
+  }
+
+  if (!eligible) return null;
+
+  if (!editing) {
+    return (
+      <div className="reschedule-row">
+        <button
+          type="button"
+          className="reschedule-btn"
+          onClick={() => {
+            setPickedDate('');
+            setEditing(true);
+          }}
+        >
+          Reschedule
+        </button>
+      </div>
+    );
+  }
+
+  const { min, max } = getRescheduleRange(dateKey, task.allowCrossWeekReschedule);
+  return (
+    <div className="reschedule-row reschedule-editing">
+      <input type="date" min={min} max={max} value={pickedDate} onChange={(e) => setPickedDate(e.target.value)} />
+      <button
+        type="button"
+        className="reschedule-btn primary"
+        disabled={!isValidRescheduleTarget(dateKey, pickedDate, task.allowCrossWeekReschedule)}
+        onClick={() => {
+          onReschedule(task, dateKey, pickedDate);
+          setEditing(false);
+        }}
+      >
+        Confirm
+      </button>
+      <button type="button" className="reschedule-btn" onClick={() => setEditing(false)}>
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 function QuantityControl({
   task,
   routine,
@@ -118,6 +195,9 @@ function QuantityControl({
   showCountdown,
   isToday,
   routineStreak,
+  reschedulesMap = {},
+  onRescheduleTask,
+  onClearReschedule,
 }) {
   const actual = completions[task.id]?.[dateKey] || 0;
   const target = task.target || 0;
@@ -181,11 +261,31 @@ function QuantityControl({
         {isPartial && <span className="badge-partial">Partial</span>}
         {isTimer && !isToday && <span className="badge-partial">Today only</span>}
       </div>
+      {onRescheduleTask && (
+        <RescheduleControl
+          task={task}
+          dateKey={dateKey}
+          reschedulesMap={reschedulesMap}
+          onReschedule={onRescheduleTask}
+          onClearReschedule={onClearReschedule}
+        />
+      )}
     </div>
   );
 }
 
-function WorkoutTaskCard({ task, routine, completions, dateKey, onStartWorkout, isToday, routineStreak }) {
+function WorkoutTaskCard({
+  task,
+  routine,
+  completions,
+  dateKey,
+  onStartWorkout,
+  isToday,
+  routineStreak,
+  reschedulesMap = {},
+  onRescheduleTask,
+  onClearReschedule,
+}) {
   const fraction = completions[task.id]?.[dateKey] || 0;
   const pct = Math.round(fraction * 100);
   const isComplete = fraction >= 1;
@@ -217,6 +317,15 @@ function WorkoutTaskCard({ task, routine, completions, dateKey, onStartWorkout, 
         </button>
         {!isToday && <span className="badge-partial">Today only</span>}
       </div>
+      {onRescheduleTask && (
+        <RescheduleControl
+          task={task}
+          dateKey={dateKey}
+          reschedulesMap={reschedulesMap}
+          onReschedule={onRescheduleTask}
+          onClearReschedule={onClearReschedule}
+        />
+      )}
     </div>
   );
 }
@@ -225,11 +334,14 @@ export default function TodayView({
   routines,
   completions,
   taskVersionsMap,
+  reschedulesMap = {},
   onToggleComplete,
   onAddQuantity,
   onSetQuantity,
   onStartWorkout,
   onStartQuantityTimer,
+  onRescheduleTask,
+  onClearReschedule,
   focusTaskId,
   focusRoutineId,
   onFocusHandled,
@@ -292,12 +404,12 @@ export default function TodayView({
     .filter((routine) => routine.active && !routine.archived && !(routine.startDate && routine.startDate > dateKey))
     .map((routine) => ({
       routine,
-      dueTasks: routine.tasks.filter((t) => isTaskDueOn(t, taskVersionsMap, selectedDate)),
+      dueTasks: routine.tasks.filter((t) => isTaskDueOn(t, taskVersionsMap, selectedDate, reschedulesMap[t.id] || [])),
     }))
     .filter((r) => r.dueTasks.length > 0);
 
   const doneCount = dueRoutines.filter(
-    ({ routine }) => getRoutineFraction(routine, taskVersionsMap, completions, selectedDate) === 1
+    ({ routine }) => getRoutineFraction(routine, taskVersionsMap, completions, selectedDate, reschedulesMap) === 1
   ).length;
   const heroPct = dueRoutines.length ? Math.round((doneCount / dueRoutines.length) * 100) : 0;
 
@@ -358,6 +470,9 @@ export default function TodayView({
                       showCountdown={isToday}
                       isToday={isToday}
                       routineStreak={routineStreak}
+                      reschedulesMap={reschedulesMap}
+                      onRescheduleTask={onRescheduleTask}
+                      onClearReschedule={onClearReschedule}
                     />
                   </div>
                 </li>
@@ -378,6 +493,9 @@ export default function TodayView({
                       onStartWorkout={onStartWorkout}
                       isToday={isToday}
                       routineStreak={routineStreak}
+                      reschedulesMap={reschedulesMap}
+                      onRescheduleTask={onRescheduleTask}
+                      onClearReschedule={onClearReschedule}
                     />
                   </div>
                 </li>
@@ -406,14 +524,25 @@ export default function TodayView({
                   />
                   <span className={`check-circle ${done ? 'done' : ''}`}>{done && <Check size={15} />}</span>
                 </label>
+                {onRescheduleTask && (
+                  <RescheduleControl
+                    task={task}
+                    dateKey={dateKey}
+                    reschedulesMap={reschedulesMap}
+                    onReschedule={onRescheduleTask}
+                    onClearReschedule={onClearReschedule}
+                  />
+                )}
               </li>
             );
           }
 
-          const fraction = getRoutineFraction(routine, taskVersionsMap, completions, selectedDate) || 0;
+          const fraction = getRoutineFraction(routine, taskVersionsMap, completions, selectedDate, reschedulesMap) || 0;
           const pct = Math.round(fraction * 100);
           const doneTaskCount = dueTasks.filter(
-            (t) => getTaskFraction(taskVersionsMap[t.id], completions[t.id] || {}, selectedDate) === 1
+            (t) =>
+              getTaskFraction(taskVersionsMap[t.id], completions[t.id] || {}, selectedDate, reschedulesMap[t.id] || []) ===
+              1
           ).length;
           const isCollapsed = collapsed.has(routine.id);
 
@@ -457,6 +586,9 @@ export default function TodayView({
                             now={now}
                             showCountdown={isToday}
                             isToday={isToday}
+                            reschedulesMap={reschedulesMap}
+                            onRescheduleTask={onRescheduleTask}
+                            onClearReschedule={onClearReschedule}
                           />
                         </li>
                       );
@@ -471,6 +603,9 @@ export default function TodayView({
                             dateKey={dateKey}
                             onStartWorkout={onStartWorkout}
                             isToday={isToday}
+                            reschedulesMap={reschedulesMap}
+                            onRescheduleTask={onRescheduleTask}
+                            onClearReschedule={onClearReschedule}
                           />
                         </li>
                       );
@@ -500,6 +635,15 @@ export default function TodayView({
                         >
                           {done && <Check size={12} />}
                         </button>
+                        {onRescheduleTask && (
+                          <RescheduleControl
+                            task={task}
+                            dateKey={dateKey}
+                            reschedulesMap={reschedulesMap}
+                            onReschedule={onRescheduleTask}
+                            onClearReschedule={onClearReschedule}
+                          />
+                        )}
                       </li>
                     );
                   })}

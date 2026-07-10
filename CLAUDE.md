@@ -1918,6 +1918,90 @@ creation: two optional `startDate`/`endDate` fields (nullable `'YYYY-MM-DD'` dat
   chip, which is suppressed entirely rather than showing a misleading "0%" for a routine that
   hasn't started accumulating any history yet.
 
+### Per-occurrence task reschedule (`utils/reschedule.js`, `TodayView.jsx`, `RoutineForm.jsx`)
+
+"Something came up" - move *one week's* occurrence of a due task to a different day without
+touching its recurring `days` schedule at all. A task normally due Mon/Wed/Fri whose Wednesday
+falls through can have just that Wednesday moved to, say, Thursday; every other Wed/Mon/Fri
+keeps firing exactly as configured. Deliberately modeled as a one-time move, not a schedule
+edit - the distinction versioning already draws between "what does this task look like going
+forward" (a `task_versions` edit) and "what happened on one specific day" (unversioned,
+completion-adjacent).
+
+- **`task_reschedules`** (`DB_VERSION = 10`) is a small, unversioned table - one row per moved
+  occurrence, upserted per `(task_id, original_date)` via its own unique index (rescheduling the
+  same original date again replaces the previous move, not stacks a second one). `original_date`
+  stops counting as due that week (treated as nothing-scheduled, exactly like a day that was
+  never on the schedule - not a miss); `new_date` becomes due in its place, even though it falls
+  outside `task.days`. This is why it's *not* a `task_versions` row: it doesn't change what the
+  task looks like on any other day, only this one week's single occurrence.
+- **`getTaskFraction` (`utils/date.js`) takes a new `reschedules` parameter** (default `[]`,
+  fully backward compatible): a date matching some reschedule's `originalDate` returns `null`
+  before the normal day-of-week check ever runs; a date matching some reschedule's `newDate` is
+  treated as due even when `version.days` says otherwise. `getRoutineFraction` takes the matching
+  `reschedulesMap` (task id -> its own reschedules, the identical "load once, pass down" shape
+  `taskVersionsMap` already uses) and threads it into every task's `getTaskFraction` call - every
+  analytics helper built on top (`calcRoutineStreak`, `calcLongestRoutineStreak`,
+  `calcRoutineCompletionRate`, `getDashboardStats`, `getOverallConsistency`, `getDayBreakdown`,
+  `getLongestOverallStreak`) got the identical trailing optional parameter, so a reschedule is
+  reflected consistently everywhere due-ness is computed - Today, Dashboard, and History all read
+  the same `reschedulesMap` App.jsx loads once via `storage.js`'s new
+  `getTaskReschedulesForAnalytics()`, mirroring `taskVersionsMap`'s own loading/threading pattern
+  exactly.
+- **`TodayView.jsx`'s own manual `isTaskDueOn` helper needed the same fix `startDate` did above**
+  - it calls `getTaskFraction` directly (not `getRoutineFraction`), so it silently ignored
+  reschedules entirely until given the same `reschedules` argument.
+- **`utils/reschedule.js`** is a small, pure, fully unit-tested module: `getRescheduleRange`
+  returns the inclusive `[min, max]` dateKey bounds a reschedule's `newDate` may land in - the
+  same Monday-start week as `originalDate` (reusing `utils/workouts.js`'s existing `mondayOf`,
+  now exported, rather than a second notion of "which week is this"), or one day past either edge
+  if the task's `allowCrossWeekReschedule` flag is on. Handed straight to a native
+  `<input type="date">`'s own `min`/`max` attributes rather than enumerating individual eligible
+  dates as a list.
+- **`allowCrossWeekReschedule`** (`DB_VERSION = 10`, versioned like `autoUpdateTarget`) is a
+  per-task opt-in, set via a checkbox in `RoutineForm.jsx` shown only when the task's `days` is
+  non-empty and not every day of the week (a task due every single day has no "elsewhere" within
+  the week to move an occurrence to, so the reschedule UI - the checkbox and `RescheduleControl`
+  itself - simply isn't offered for one).
+- **`RescheduleControl`** (`TodayView.jsx`) renders inline for a due task, in one of two states:
+  an eligible normal due day shows a plain "Reschedule" button that opens an inline
+  `getRescheduleRange`-bounded date picker with Confirm/Cancel; a day that's due *because* of an
+  incoming reschedule shows "Moved from {date}" plus an Undo button
+  (`onClearReschedule` → `clearTaskReschedule`) instead. Deliberately rendered as a sibling after
+  the row's own markup, never nested inside it - the simple-routine boolean row wraps its
+  checkbox in a `<label>`, and nesting another button inside that label would have silently
+  double-fired the checkbox's own toggle on every click (the same class of click-delegation
+  gotcha `ExercisePickerModal`'s `onMouseDown` trick above already had to work around, for a
+  different reason). Wired into all six task-row shapes this view renders (simple/grouped ×
+  quantity/workout/boolean) - `QuantityControl`/`WorkoutTaskCard` gained the same three new
+  optional props and render `RescheduleControl` once internally, rather than duplicating the
+  wiring at each of their four call sites.
+- **App.jsx's `handleRescheduleTask`/`handleClearReschedule`** call `setTaskReschedule`/
+  `clearTaskReschedule` then a full `refreshAll()` - not just a completions patch like
+  `handleToggleComplete`/`handleAddQuantity` above, since a reschedule changes which days are due
+  at all, not what's logged on an already-due day. Both re-sync the task's notifications
+  afterward - currently a harmless no-op (the reminder still fires on the task's original
+  recurring day/time, since the JS scheduler doesn't consult reschedule data yet), forward-compat
+  for once a native one-off-date reminder alarm exists to actually move the notification too.
+- **Not yet built: the reminder doesn't move with the task.** Moving a task's *reminder* to the
+  new date needs a genuinely new native alarm type - every existing scheduler
+  (`DueReminderScheduler`/`ExtraReminderScheduler`/`DailyDigestScheduler`) only knows how to arm a
+  recurring alarm across a set of weekdays, never a true one-shot fire on a single specific
+  calendar date. The completion/analytics half of this feature is fully live today; the
+  reminder-follows-the-move half is deliberately deferred as a separate, larger follow-up.
+- Verified via a Playwright round-trip: the Reschedule button appears on an eligible due task
+  with the date picker correctly bounded to the current Monday-start week; confirming a
+  reschedule immediately removes the task from today's due list (rescheduled away, not missed);
+  the underlying `task_reschedules` row persists with the correct task/date pair (confirmed via a
+  direct SQLite query, the same technique this project's native `scripts/verify-*.mjs` scripts
+  already use). The "moved-in" display and Undo path are covered by unit tests
+  (`date.test.js`/`reschedule.test.js`) rather than an end-to-end UI walk-through - a freshly
+  created test task is only ever "effective" (via `findEffectiveVersion`) from its own creation
+  date forward, and `TodayView`'s date nav can't browse into the future either, so no date exists
+  that's simultaneously old enough to already have an effective version and new enough to be
+  UI-navigable within one fresh test session; a task that's actually existed for a while (the
+  real-world case) doesn't have this limitation.
+
 ### AI-generated routine import (`src/aiImport.js`, `SettingsView.jsx`)
 
 V1 of "generate routines with AI": a plain paste-JSON importer in Settings, not a chat interface

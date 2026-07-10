@@ -38,6 +38,9 @@ import {
   getTaskVersionsForAnalytics,
   logWorkoutSet,
   getAllWorkoutLogs,
+  getTaskReschedulesForAnalytics,
+  setTaskReschedule,
+  clearTaskReschedule,
 } from './storage';
 import {
   initNotifications,
@@ -77,6 +80,7 @@ function App() {
   const [routines, setRoutines] = useState([]);
   const [completions, setCompletions] = useState({});
   const [taskVersionsMap, setTaskVersionsMap] = useState({});
+  const [reschedulesMap, setReschedulesMap] = useState({});
   const [workoutLogsByTask, setWorkoutLogsByTask] = useState({});
   const [loading, setLoading] = useState(true);
   const [activeSession, setActiveSession] = useState(null);
@@ -88,21 +92,24 @@ function App() {
   const autoArchiveInFlightRef = useRef(null);
 
   const refreshAll = async () => {
-    const [storedRoutines, storedCompletions, versionsMap, workoutLogs] = await Promise.all([
+    const [storedRoutines, storedCompletions, versionsMap, workoutLogs, reschedules] = await Promise.all([
       getRoutines(),
       getCompletions(),
       getTaskVersionsForAnalytics(),
       getAllWorkoutLogs(),
+      getTaskReschedulesForAnalytics(),
     ]);
     setRoutines(storedRoutines);
     setCompletions(storedCompletions);
     setTaskVersionsMap(versionsMap);
     setWorkoutLogsByTask(workoutLogs);
+    setReschedulesMap(reschedules);
     return {
       routines: storedRoutines,
       completions: storedCompletions,
       taskVersionsMap: versionsMap,
       workoutLogsByTask: workoutLogs,
+      reschedulesMap: reschedules,
     };
   };
 
@@ -397,6 +404,32 @@ function App() {
     }
   };
 
+  // "Something came up" - moves one occurrence of a due task to a different day without
+  // touching its recurring schedule (task_reschedules, see storage.js/CLAUDE.md). Unlike the
+  // completion handlers above, this needs a full refreshAll() rather than a completions-only
+  // patch: a reschedule changes which days are *due* at all (Today's list, Dashboard, History
+  // all read due-ness off taskVersionsMap/reschedulesMap together), not just what's logged on
+  // one already-due day. Re-syncs the task's notifications afterward for when the native
+  // one-off-date reminder scheduler lands - not built yet, so today this is a harmless no-op
+  // (the reminder itself still fires on the task's original recurring day/time).
+  const handleRescheduleTask = async (task, originalDate, newDate) => {
+    await setTaskReschedule(task.id, originalDate, newDate);
+    const state = await refreshAll();
+    const routine = findRoutineForTask(state.routines, task.id);
+    const savedTask = routine?.tasks.find((t) => t.id === task.id);
+    if (savedTask) await scheduleTaskNotifications(savedTask, routine, state.completions);
+    if (routine) await updateRoutineGroupSummary(routine, state.completions);
+  };
+
+  const handleClearReschedule = async (task, originalDate) => {
+    await clearTaskReschedule(task.id, originalDate);
+    const state = await refreshAll();
+    const routine = findRoutineForTask(state.routines, task.id);
+    const savedTask = routine?.tasks.find((t) => t.id === task.id);
+    if (savedTask) await scheduleTaskNotifications(savedTask, routine, state.completions);
+    if (routine) await updateRoutineGroupSummary(routine, state.completions);
+  };
+
   const handleStartWorkout = (task, routine, dateKey) => {
     if (isNativeWorkoutSessionAvailable()) {
       const logsForDate = workoutLogsByTask[task.id]?.[dateKey] || {};
@@ -535,11 +568,14 @@ function App() {
             routines={routines}
             completions={completions}
             taskVersionsMap={taskVersionsMap}
+            reschedulesMap={reschedulesMap}
             onToggleComplete={handleToggleComplete}
             onAddQuantity={handleAddQuantity}
             onSetQuantity={handleSetQuantity}
             onStartWorkout={handleStartWorkout}
             onStartQuantityTimer={handleStartQuantityTimer}
+            onRescheduleTask={handleRescheduleTask}
+            onClearReschedule={handleClearReschedule}
             focusTaskId={focusTarget?.taskId}
             focusRoutineId={focusTarget?.routineId}
             onFocusHandled={() => setFocusTarget(null)}
@@ -563,11 +599,17 @@ function App() {
             routines={routines}
             completions={completions}
             taskVersionsMap={taskVersionsMap}
+            reschedulesMap={reschedulesMap}
             workoutLogsByTask={workoutLogsByTask}
           />
         )}
         {tab === 'history' && (
-          <HistoryView routines={routines} completions={completions} taskVersionsMap={taskVersionsMap} />
+          <HistoryView
+            routines={routines}
+            completions={completions}
+            taskVersionsMap={taskVersionsMap}
+            reschedulesMap={reschedulesMap}
+          />
         )}
       </main>
 

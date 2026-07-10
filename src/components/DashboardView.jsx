@@ -198,19 +198,21 @@ function heatmapClass(pct) {
   return 'seq-5';
 }
 
-export default function DashboardView({ routines, completions, taskVersionsMap, workoutLogsByTask }) {
+export default function DashboardView({ routines, completions, taskVersionsMap, reschedulesMap = {}, workoutLogsByTask }) {
   const [screen, setScreen] = useState('overall');
   const [range, setRange] = useState('month');
   const [expanded, setExpanded] = useState(() => new Set());
   const [drillDownDate, setDrillDownDate] = useState(null);
   const stats = useMemo(
-    () => getDashboardStats(routines, taskVersionsMap, completions, range),
-    [routines, taskVersionsMap, completions, range]
+    () => getDashboardStats(routines, taskVersionsMap, completions, range, reschedulesMap),
+    [routines, taskVersionsMap, completions, range, reschedulesMap]
   );
   const dayBreakdown = useMemo(
     () =>
-      drillDownDate ? getDayBreakdown(routines, taskVersionsMap, completions, new Date(`${drillDownDate}T00:00:00`)) : null,
-    [drillDownDate, routines, taskVersionsMap, completions]
+      drillDownDate
+        ? getDayBreakdown(routines, taskVersionsMap, completions, new Date(`${drillDownDate}T00:00:00`), reschedulesMap)
+        : null,
+    [drillDownDate, routines, taskVersionsMap, completions, reschedulesMap]
   );
 
   if (routines.length === 0) {

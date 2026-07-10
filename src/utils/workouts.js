@@ -199,7 +199,10 @@ export function getExerciseSessionSeries(logsForTaskByDate, exerciseId) {
   return series;
 }
 
-function mondayOf(dateKeyStr) {
+/** The Monday (as a dateKey) of the calendar week containing dateKeyStr - this app's one
+ * established week-boundary convention, reused as-is by utils/reschedule.js rather than each
+ * needing its own notion of "which week is this day in." */
+export function mondayOf(dateKeyStr) {
   const d = new Date(`${dateKeyStr}T00:00:00`);
   const day = d.getDay();
   const diff = (day === 0 ? -6 : 1) - day;

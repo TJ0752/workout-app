@@ -7,12 +7,13 @@ import ActivityLogView from './ActivityLogView';
 const HISTORY_DAYS = 14;
 
 function TaskHistoryCard(props) {
-  const { title, task, versions, completions, routine, taskVersionsMap } = props;
+  const { title, task, versions, completions, routine, taskVersionsMap, reschedulesMap = {} } = props;
   const days = lastNDates(HISTORY_DAYS);
   const taskCompletions = completions[task.id] || {};
+  const taskReschedules = reschedulesMap[task.id] || [];
   const soloRoutine = { ...routine, tasks: [task] };
-  const streak = calcRoutineStreak(soloRoutine, taskVersionsMap, completions);
-  const rate = calcRoutineCompletionRate(soloRoutine, taskVersionsMap, completions, 30);
+  const streak = calcRoutineStreak(soloRoutine, taskVersionsMap, completions, reschedulesMap);
+  const rate = calcRoutineCompletionRate(soloRoutine, taskVersionsMap, completions, 30, reschedulesMap);
 
   return (
     <div className="history-card">
@@ -30,7 +31,7 @@ function TaskHistoryCard(props) {
       <div className="history-grid">
         {days.map((date) => {
           const key = dateToKey(date);
-          const fraction = getTaskFraction(versions, taskCompletions, date);
+          const fraction = getTaskFraction(versions, taskCompletions, date, taskReschedules);
           let cls = 'history-cell';
           if (fraction === null) cls += ' not-due';
           else if (key === todayKey()) cls += ' pending';
@@ -48,7 +49,7 @@ function TaskHistoryCard(props) {
   );
 }
 
-export default function HistoryView({ routines, completions, taskVersionsMap }) {
+export default function HistoryView({ routines, completions, taskVersionsMap, reschedulesMap = {} }) {
   const [view, setView] = useState('completions');
 
   return (
@@ -83,6 +84,7 @@ export default function HistoryView({ routines, completions, taskVersionsMap }) 
                 completions={completions}
                 routine={routine}
                 taskVersionsMap={taskVersionsMap}
+                reschedulesMap={reschedulesMap}
               />
             );
           }
