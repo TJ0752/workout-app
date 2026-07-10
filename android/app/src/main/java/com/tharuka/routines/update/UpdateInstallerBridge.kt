@@ -8,4 +8,5 @@ package com.tharuka.routines.update
  */
 object UpdateInstallerBridge {
     var onReady: ((Int) -> Unit)? = null
+    var onFailed: ((String) -> Unit)? = null
 }

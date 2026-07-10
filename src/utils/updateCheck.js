@@ -105,3 +105,16 @@ export function initUpdateReadyListener(onReady) {
   if (!UpdateInstaller) return null;
   return UpdateInstaller.addListener('updateReady', (event) => onReady(event.versionCode));
 }
+
+/**
+ * Fires when a download DownloadManager itself reported as failed (or the completed file
+ * couldn't be found) - previously this case was swallowed entirely on the native side with no
+ * signal anywhere, so a failed download looked identical to one that was simply still in
+ * progress: the "Downloading update…" toast would show, then just quietly disappear with no
+ * install prompt and no error. `reason` is a short human-readable string (DownloadManager's own
+ * ERROR_* reason code, or a raw HTTP status) - see UpdateDownloadReceiver.kt. No-ops on web.
+ */
+export function initUpdateFailedListener(onFailed) {
+  if (!UpdateInstaller) return null;
+  return UpdateInstaller.addListener('updateFailed', (event) => onFailed(event.reason));
+}

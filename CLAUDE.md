@@ -1834,6 +1834,30 @@ something that can be almost entirely automatic.
   "downloading" toast that then auto-hides to idle, dropping the banner for no real reason. Fixed
   by checking `response?.status === 'ready'` first and short-circuiting straight back to the
   `'ready'` state instead of falling through to the downloading-toast path.
+- **A real bug, found via a user report: a failed download was completely indistinguishable from
+  one still in progress.** `UpdateDownloadReceiver.onReceive()` previously checked only whether
+  `COLUMN_STATUS == STATUS_SUCCESSFUL`; any other outcome (a bad redirect, no space left, a flaky
+  connection, `DownloadManager` giving up for any reason) just called `UpdateDownloadStore.clear()`
+  and returned — no notification, no JS event, nothing. From the user's side this looked identical
+  to "still downloading": the `"Downloading update…"` toast shows, its own 4-second display timer
+  expires back to idle (see the toast-vs-actual-completion distinction in `UpdateChecker.jsx`'s
+  `startDownload`), and then nothing ever happens — no error, no retry prompt, no way to tell
+  a transient hiccup from a permanent failure. Fixed with a real failure path on both sides:
+  `UpdateDownloadReceiver` now reads `COLUMN_REASON` on any non-success status (`describeDownloadFailureReason`
+  maps `DownloadManager`'s own `ERROR_*` constants, or reports a raw HTTP status code per its own
+  documented convention for `COLUMN_REASON` on an HTTP failure) and forwards it through
+  `UpdateInstallerBridge.onFailed` → a new `updateFailed` plugin event, mirroring the exact shape
+  `onReady`/`updateReady` already used. `initUpdateFailedListener` (`updateCheck.js`) wires this to
+  a new `'download-failed'` `UpdateChecker.jsx` state showing the actual reason plus a **Retry**
+  button (`runCheck(false)`) — since a failed download's store entry is already cleared, a retry
+  re-enqueues cleanly rather than getting no-op'd as "already downloading." The `getUriForDownloadedFile()
+  == null` case (a success status but no retrievable URI — theoretically possible, previously an
+  early `return` with the exact same silent-nothing symptom) now goes through the identical failure
+  path instead of a bare early exit. This can't be exercised on the emulator harness (which builds
+  a debug APK from this repo itself, so its own update-check always reports "up to date") — verified
+  by code inspection and matching against `DownloadManager`'s documented `COLUMN_REASON` contract;
+  a real device is needed to observe an actual reason code in the wild, which is exactly what this
+  fix now makes possible on the next occurrence instead of a dead end.
 
 ### AI-generated routine import (`src/aiImport.js`, `SettingsView.jsx`)
 

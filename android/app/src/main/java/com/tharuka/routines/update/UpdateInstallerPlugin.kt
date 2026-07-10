@@ -41,6 +41,11 @@ class UpdateInstallerPlugin : Plugin() {
             data.put("versionCode", versionCode)
             notifyListeners("updateReady", data, true)
         }
+        UpdateInstallerBridge.onFailed = { reason ->
+            val data = JSObject()
+            data.put("reason", reason)
+            notifyListeners("updateFailed", data, true)
+        }
     }
 
     /**

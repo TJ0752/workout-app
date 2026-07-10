@@ -311,6 +311,17 @@
   color: var(--bad);
 }
 
+.update-retry-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .app-main {
   flex: 1;
   padding: 0 1.1rem 6rem;

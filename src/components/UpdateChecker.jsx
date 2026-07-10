@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { App } from '@capacitor/app';
 import { DownloadCloud, X } from 'lucide-react';
-import { checkForUpdate, downloadUpdate, installReadyUpdate, initUpdateReadyListener } from '../utils/updateCheck';
+import {
+  checkForUpdate,
+  downloadUpdate,
+  installReadyUpdate,
+  initUpdateReadyListener,
+  initUpdateFailedListener,
+} from '../utils/updateCheck';
 
 /**
  * Auto-downloads a newly-available release APK the moment one's detected (no "Download" tap
@@ -13,7 +19,9 @@ import { checkForUpdate, downloadUpdate, installReadyUpdate, initUpdateReadyList
  * android/.../update/ for the native download+notification mechanics.
  */
 export default function UpdateChecker() {
-  const [status, setStatus] = useState('idle'); // idle | checking | downloading | ready | up-to-date | error
+  // idle | checking | downloading | ready | up-to-date | error | download-failed
+  const [status, setStatus] = useState('idle');
+  const [downloadFailReason, setDownloadFailReason] = useState('');
 
   const startDownload = async (result) => {
     try {
@@ -63,6 +71,15 @@ export default function UpdateChecker() {
   useEffect(() => {
     runCheck(true);
     const listenerPromise = initUpdateReadyListener(() => setStatus('ready'));
+    // Previously a failed download (a bad redirect, no space, a flaky connection, anything
+    // DownloadManager itself reports as a failure) was swallowed entirely on the native side -
+    // the "Downloading update…" toast would show, then just silently vanish with no install
+    // prompt and no error, indistinguishable from "still downloading, check back later." This
+    // surfaces the actual reason so it's an obvious, diagnosable failure instead.
+    const failedListenerPromise = initUpdateFailedListener((reason) => {
+      setDownloadFailReason(reason || '');
+      setStatus('download-failed');
+    });
     // Re-checks on every foreground transition, not just the initial mount - a silent check on
     // cold-open alone missed the common case of an app left running in the background for a
     // while (the whole point of the persistent background-sync process, see CLAUDE.md) getting
@@ -73,6 +90,7 @@ export default function UpdateChecker() {
     });
     return () => {
       listenerPromise?.then((handle) => handle.remove());
+      failedListenerPromise?.then((handle) => handle.remove());
       appStateListenerPromise?.then((handle) => handle.remove());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -115,6 +133,14 @@ export default function UpdateChecker() {
       )}
       {status === 'up-to-date' && <div className="update-toast">You&rsquo;re up to date</div>}
       {status === 'error' && <div className="update-toast error">Couldn&rsquo;t check for updates</div>}
+      {status === 'download-failed' && (
+        <div className="update-toast error">
+          Update download failed{downloadFailReason ? ` (${downloadFailReason})` : ''}.{' '}
+          <button type="button" className="update-retry-link" onClick={() => runCheck(false)}>
+            Retry
+          </button>
+        </div>
+      )}
     </>
   );
 }
