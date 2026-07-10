@@ -116,8 +116,9 @@ function StreakBadge({ streak }) {
  * touching its recurring schedule (task.days). Two states: this occurrence exists here *because*
  * of an earlier reschedule (movedIn - shows where it came from plus an Undo), or it's an eligible
  * normal due day offering a "Reschedule" action that opens an inline date picker bounded by
- * getRescheduleRange (same week, or +/-1 day if task.allowCrossWeekReschedule). Not offered for a
- * task due every day of the week - there's no "elsewhere" within the week to move it to.
+ * getRescheduleRange (future-only, the original day out to 8 days after it). Not offered for a
+ * task due every day of the week - every reachable day is already due on its own, so there's no
+ * "elsewhere" to move it to.
  */
 function RescheduleControl({ task, dateKey, reschedulesMap, onReschedule, onClearReschedule }) {
   const [editing, setEditing] = useState(false);
@@ -161,14 +162,14 @@ function RescheduleControl({ task, dateKey, reschedulesMap, onReschedule, onClea
     );
   }
 
-  const { min, max } = getRescheduleRange(dateKey, task.allowCrossWeekReschedule);
+  const { min, max } = getRescheduleRange(dateKey);
   return (
     <div className="reschedule-row reschedule-editing">
       <input type="date" min={min} max={max} value={pickedDate} onChange={(e) => setPickedDate(e.target.value)} />
       <button
         type="button"
         className="reschedule-btn primary"
-        disabled={!isValidRescheduleTarget(dateKey, pickedDate, task.allowCrossWeekReschedule)}
+        disabled={!isValidRescheduleTarget(dateKey, pickedDate)}
         onClick={() => {
           onReschedule(task, dateKey, pickedDate);
           setEditing(false);

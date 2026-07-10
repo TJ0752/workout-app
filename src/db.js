@@ -249,12 +249,18 @@ const MIGRATIONS = [
   {
     // Lets a task's schedule "flex" for one occurrence at a time without touching its recurring
     // days - task_reschedules is a small, unversioned table (one row per moved occurrence, not a
-    // task edit) keyed by (task_id, original_date): original_date stops being due that week
-    // (treated as nothing-scheduled, not a miss) and new_date becomes due instead, even if it
-    // falls outside task.days. allow_cross_week_reschedule is a per-task opt-in (versioned like
-    // auto_update_target, default off) letting a reschedule's new_date land up to one day outside
-    // the current Monday-start week (see utils/workouts.js's existing mondayOf) instead of being
-    // confined to it.
+    // task edit) keyed by (task_id, original_date): original_date stops being due (treated as
+    // nothing-scheduled, not a miss) and new_date becomes due instead, even if it falls outside
+    // task.days. new_date is restricted to a fixed [original_date, original_date + 8 days] range
+    // (see utils/reschedule.js's getRescheduleRange) - future-only, anchored to the original day
+    // itself rather than a calendar week, since this app has no other notion of "a week" that
+    // isn't already a rolling N-days-back window (see rangeStartDate/lastNDates).
+    //
+    // allow_cross_week_reschedule was a per-task opt-in for a since-abandoned Monday-Sunday-week
+    // +/-1-day design (a real product decision to simplify to one fixed rule for everyone, not a
+    // bug) - the column is left in place (harmless, always defaults to 0, never read or written
+    // by any code anymore) rather than dropped via a rebuild-and-swap migration, since this
+    // feature hasn't shipped to production yet and the column costs nothing sitting unused.
     toVersion: 10,
     statements: [
       `ALTER TABLE tasks ADD COLUMN allow_cross_week_reschedule INTEGER NOT NULL DEFAULT 0;`,

@@ -25,7 +25,6 @@ function makeTask(days) {
     quickAdd: null,
     quantityMode: 'number',
     autoUpdateTarget: false,
-    allowCrossWeekReschedule: false,
     exercises: [],
     active: true,
     createdAt: new Date().toISOString(),
@@ -470,23 +469,6 @@ function TaskFields({ task, onChange, showTitle, exerciseNames }) {
         <span className="field-label">Repeat on</span>
         <DayPicker days={task.days} onChange={(days) => onChange({ ...task, days })} />
       </div>
-      {task.days.length > 0 && task.days.length < 7 && (
-        <div>
-          <label className="checkbox-field">
-            <input
-              type="checkbox"
-              checked={Boolean(task.allowCrossWeekReschedule)}
-              onChange={(e) => onChange({ ...task, allowCrossWeekReschedule: e.target.checked })}
-            />
-            Allow rescheduling up to 1 day outside the week
-          </label>
-          <p className="field-hint">
-            When you reschedule a due day for this task (something came up), the new day normally
-            has to stay within the same week. Turning this on lets it land one day into the week
-            before or after instead.
-          </p>
-        </div>
-      )}
       <div>
         <span className="field-label">Completion type</span>
         <div className="type-toggle">

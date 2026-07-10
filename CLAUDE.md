@@ -1954,17 +1954,26 @@ completion-adjacent).
   - it calls `getTaskFraction` directly (not `getRoutineFraction`), so it silently ignored
   reschedules entirely until given the same `reschedules` argument.
 - **`utils/reschedule.js`** is a small, pure, fully unit-tested module: `getRescheduleRange`
-  returns the inclusive `[min, max]` dateKey bounds a reschedule's `newDate` may land in - the
-  same Monday-start week as `originalDate` (reusing `utils/workouts.js`'s existing `mondayOf`,
-  now exported, rather than a second notion of "which week is this"), or one day past either edge
-  if the task's `allowCrossWeekReschedule` flag is on. Handed straight to a native
+  returns the inclusive `[min, max]` dateKey bounds a reschedule's `newDate` may land in -
+  **future-only, from `originalDate` itself out to 8 days after it**, always, for every task.
+  Deliberately anchored to the original day rather than a Monday-Sunday calendar week: this app
+  has no other notion of "a week" that isn't already a rolling N-days-back window (the
+  Dashboard's "Week" range, every streak/consistency lookback - see `rangeStartDate`/`lastNDates`
+  in `analytics.js`/`date.js`, both `today - 6` forward, never calendar-aligned), so a
+  calendar-week-based reschedule bound would have been the one inconsistent "week" concept in the
+  codebase. Anchoring to the original day itself (not "today") also means the available range is
+  the same size regardless of which weekday the task happens to be due on - a Monday-due task and
+  a Sunday-due task both get an identical 9-day window, where a calendar-week-anchored range
+  would have given the Monday task nearly double the room. Handed straight to a native
   `<input type="date">`'s own `min`/`max` attributes rather than enumerating individual eligible
   dates as a list.
-- **`allowCrossWeekReschedule`** (`DB_VERSION = 10`, versioned like `autoUpdateTarget`) is a
-  per-task opt-in, set via a checkbox in `RoutineForm.jsx` shown only when the task's `days` is
-  non-empty and not every day of the week (a task due every single day has no "elsewhere" within
-  the week to move an occurrence to, so the reschedule UI - the checkbox and `RescheduleControl`
-  itself - simply isn't offered for one).
+  - **Superseded an earlier per-task `allowCrossWeekReschedule` toggle design** (Monday-Sunday
+    week ± 1 day, opt-in per task) - replaced by this single fixed rule for every task, a
+    deliberate product simplification rather than a bug fix. The `allow_cross_week_reschedule`
+    column (`DB_VERSION = 10`) is left in the schema - harmless, always defaults to 0, no code
+    reads or writes it anymore - rather than dropped via a rebuild-and-swap migration, since this
+    feature hasn't shipped to production yet and the column costs nothing sitting unused; a real
+    column drop is the correct move if this is ever revisited.
 - **`RescheduleControl`** (`TodayView.jsx`) renders inline for a due task, in one of two states:
   an eligible normal due day shows a plain "Reschedule" button that opens an inline
   `getRescheduleRange`-bounded date picker with Confirm/Cancel; a day that's due *because* of an
@@ -2035,8 +2044,10 @@ completion-adjacent).
     other history is preserved, since they're already excluded from every live query by the
     `deleted = 0` filter.
 - Verified via a Playwright round-trip: the Reschedule button appears on an eligible due task
-  with the date picker correctly bounded to the current Monday-start week; confirming a
-  reschedule immediately removes the task from today's due list (rescheduled away, not missed);
+  with the date picker's `min`/`max` correctly bounded to `[originalDate, originalDate + 8]`
+  (confirming with the original date itself stays disabled - a no-op move - while the 8-days-out
+  bound confirms successfully); confirming a reschedule immediately removes the task from today's
+  due list (rescheduled away, not missed);
   the underlying `task_reschedules` row persists with the correct task/date pair (confirmed via a
   direct SQLite query, the same technique this project's native `scripts/verify-*.mjs` scripts
   already use). The "moved-in" display and Undo path are covered by unit tests
