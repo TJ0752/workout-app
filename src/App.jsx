@@ -8,7 +8,8 @@ import RoutinesView from './components/RoutinesView';
 import DashboardView from './components/DashboardView';
 import HistoryView from './components/HistoryView';
 import Logo from './components/Logo';
-import UpdateChecker from './components/UpdateChecker';
+import UpdateChecker, { UpdateStatusBar } from './components/UpdateChecker';
+import { useUpdateChecker } from './hooks/useUpdateChecker';
 import SettingsView from './components/SettingsView';
 import WorkoutSessionView from './components/WorkoutSessionView';
 import QuantityTimerView from './components/QuantityTimerView';
@@ -87,6 +88,7 @@ function App() {
   const [focusTarget, setFocusTarget] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [appVersion, setAppVersion] = useState(null);
+  const updateChecker = useUpdateChecker();
   const handleLogWorkoutSetRef = useRef(null);
   const handleLogQuantityTimerRef = useRef(null);
   const autoArchiveInFlightRef = useRef(null);
@@ -551,21 +553,38 @@ function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <span className="icon-badge app-logo-badge">
-          <Logo size={17} />
-        </span>
-        <h1>Daily Routines</h1>
-        {appVersion && <span className="app-version-badge">v{appVersion}</span>}
-        <UpdateChecker />
-        <button
-          type="button"
-          className="settings-btn"
-          onClick={() => setShowSettings(true)}
-          aria-label="Settings"
-          title="Settings"
-        >
-          <SettingsIcon size={15} />
-        </button>
+        <div className="app-header-row">
+          <span className="icon-badge app-logo-badge">
+            <Logo size={17} />
+          </span>
+          <h1>Daily Routines</h1>
+          {appVersion && <span className="app-version-badge">v{appVersion}</span>}
+          <UpdateChecker
+            isNative={updateChecker.isNative}
+            status={updateChecker.status}
+            onCheck={() => updateChecker.runCheck(false)}
+          />
+          <button
+            type="button"
+            className="settings-btn"
+            onClick={() => setShowSettings(true)}
+            aria-label="Settings"
+            title="Settings"
+          >
+            <SettingsIcon size={15} />
+          </button>
+        </div>
+        {/* Renders as its own full-width block below the icon row above, not a flex sibling of
+            those icons - this is what keeps every header icon (including the settings gear)
+            always visible regardless of update status. See useUpdateChecker.js's doc comment. */}
+        <UpdateStatusBar
+          isNative={updateChecker.isNative}
+          status={updateChecker.status}
+          downloadFailReason={updateChecker.downloadFailReason}
+          onInstall={updateChecker.installReadyUpdate}
+          onDismiss={updateChecker.dismiss}
+          onRetry={() => updateChecker.runCheck(false)}
+        />
       </header>
 
       <main className="app-main">

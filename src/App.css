@@ -15,14 +15,26 @@
 }
 
 .app-header {
+  padding: 1.4rem 1.2rem 1rem;
+}
+
+/* The icon row (logo/title/version badge/update-check button/settings gear) - deliberately its
+   own nowrap flex container, separate from any update status content (see UpdateStatusBar in
+   App.jsx), so those icons - especially the settings gear - always stay in view regardless of
+   whether a "ready to install" banner or toast is showing below. This split fixed a real bug:
+   before it, the banner/toast were flex siblings of these icons relying on `flex-basis: 100%`
+   to force themselves onto their own line, which only works when the parent allows wrapping -
+   but this row's own `flex-wrap: nowrap` (needed so the title ellipsis-truncates instead of
+   wrapping the gear onto a second row) silently defeated that, squeezing the banner into the
+   icon row instead and pushing the gear off-screen. */
+.app-header-row {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
   gap: 0.5rem;
-  padding: 1.4rem 1.2rem 1rem;
 }
 
-.app-header h1 {
+.app-header-row h1 {
   flex-shrink: 1;
   min-width: 0;
   font-size: 1.2em;
@@ -269,7 +281,6 @@
 }
 
 .update-banner {
-  flex-basis: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -301,7 +312,6 @@
 }
 
 .update-toast {
-  flex-basis: 100%;
   margin-top: 0.4rem;
   font-size: 0.75em;
   color: var(--text-soft);
@@ -1303,6 +1313,47 @@
   margin-top: 0.1rem;
 }
 
+.superset-group-label {
+  font-size: 0.72em;
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin: 0.6rem 0 0.3rem;
+}
+
+.superset-link-btn {
+  display: block;
+  width: 100%;
+  margin: 0.3rem 0;
+  padding: 0.3rem;
+  font-size: 0.72em;
+  color: var(--text-soft);
+  background: transparent;
+  border: 1px dashed var(--card-border);
+  border-radius: var(--radius-sm);
+}
+
+.superset-link-btn.linked {
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.task-edit-row.superset-grouped,
+.form-card.superset-grouped {
+  border-left: 3px solid var(--accent);
+}
+
+.superset-rest-note {
+  flex: 1;
+  margin: 0;
+  font-size: 0.78em;
+  color: var(--text-soft);
+  align-self: center;
+}
+
 .task-edit-icon-btn {
   color: var(--text-soft);
   background: transparent;
@@ -2120,6 +2171,14 @@
 
 .workout-exercise-chip.complete {
   color: var(--good);
+}
+
+.workout-exercise-chip.superset-grouped {
+  border-left: 3px solid var(--accent);
+}
+
+.workout-set-panel > .superset-group-label {
+  margin: 0;
 }
 
 .workout-exercise-chip-count {

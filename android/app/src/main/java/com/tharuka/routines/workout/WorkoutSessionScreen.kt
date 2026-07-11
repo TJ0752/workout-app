@@ -70,14 +70,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tharuka.routines.shared.workout.Exercise
 import com.tharuka.routines.shared.workout.LoggedSet
+import com.tharuka.routines.shared.workout.SessionPosition
 import com.tharuka.routines.shared.workout.WorkoutLogSource
-import com.tharuka.routines.shared.workout.findNextPosition
+import com.tharuka.routines.shared.workout.findNextSupersetPosition
 import com.tharuka.routines.shared.workout.getExercisePR
 import com.tharuka.routines.shared.workout.getExerciseVolume
 import com.tharuka.routines.shared.workout.getLastUsedWeight
 import com.tharuka.routines.shared.workout.isNewPR
 import com.tharuka.routines.shared.workout.kgToLb
 import com.tharuka.routines.shared.workout.lbToKg
+import com.tharuka.routines.shared.workout.nextSupersetPosition
+import com.tharuka.routines.shared.workout.prevSupersetPosition
+import com.tharuka.routines.shared.workout.shouldRestAfter
+import com.tharuka.routines.shared.workout.supersetGroupLabels
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -151,7 +156,7 @@ fun WorkoutSessionScreen(
     onClose: () -> Unit,
 ) {
     var logsByExercise by remember { mutableStateOf(initialLogs) }
-    val start = remember { findNextPosition(exercises, initialLogs) }
+    val start = remember { findNextSupersetPosition(exercises, initialLogs) }
     var exerciseIndex by remember { mutableStateOf(start?.exerciseIndex ?: 0) }
     var setIndex by remember { mutableStateOf(start?.setIndex ?: 0) }
     var finished by remember { mutableStateOf(start == null) }
@@ -256,22 +261,21 @@ fun WorkoutSessionScreen(
         notifyProgressUpdate()
     }
 
+    // Round-robins within a linked superset group (every member's set N before any member's
+    // set N+1) instead of finishing one exercise before starting the next - a solo, ungrouped
+    // exercise is just a group of one, so this is the exact same traversal every exercise used
+    // before supersets existed. Mirrors WorkoutSessionView.jsx's identical goNext/goPrev.
     fun goNext() {
-        if (setIndex + 1 < totalSets) {
-            setIndex += 1
-        } else if (exerciseIndex + 1 < exercises.size) {
-            exerciseIndex += 1
-            setIndex = 0
+        nextSupersetPosition(exercises, SessionPosition(exerciseIndex, setIndex))?.let { next ->
+            exerciseIndex = next.exerciseIndex
+            setIndex = next.setIndex
         }
     }
 
     fun goPrev() {
-        if (setIndex > 0) {
-            setIndex -= 1
-        } else if (exerciseIndex > 0) {
-            val prevExercise = exercises[exerciseIndex - 1]
-            exerciseIndex -= 1
-            setIndex = maxOf(0, (prevExercise.targetSets ?: 1) - 1)
+        prevSupersetPosition(exercises, SessionPosition(exerciseIndex, setIndex))?.let { prev ->
+            exerciseIndex = prev.exerciseIndex
+            setIndex = prev.setIndex
         }
     }
 
@@ -294,18 +298,21 @@ fun WorkoutSessionScreen(
         }
         notifyProgressUpdate(lastSetSummary = summaryText, isPR = wasNewPR)
 
-        val hasNextSet = setIndex + 1 < totalSets
-        val hasNextExercise = exerciseIndex + 1 < exercises.size
+        val next = nextSupersetPosition(exercises, SessionPosition(exerciseIndex, setIndex))
         val restSeconds = exercise.restSeconds ?: 0
-        if ((hasNextSet || hasNextExercise) && restSeconds > 0) {
+        // No rest mid-superset - completing one group member's set chains straight into the
+        // next member's own set at the same round, regardless of this exercise's own
+        // restSeconds. Rest only applies once the *last* member of a group finishes a round
+        // (or for a plain, ungrouped exercise, exactly as before this feature existed).
+        if (next != null && restSeconds > 0 && shouldRestAfter(exercises, exerciseIndex)) {
             restRemaining = restSeconds
             restTotalSeconds = restSeconds
             restAnimKey += 1
             resting = true
             onRestStart(restSeconds)
         }
-        if (hasNextSet || hasNextExercise) {
-            val movingToNewExercise = !hasNextSet && hasNextExercise
+        if (next != null) {
+            val movingToNewExercise = next.exerciseIndex != exerciseIndex
             goNext()
             if (movingToNewExercise) notifyProgressUpdate()
         } else {
@@ -343,6 +350,7 @@ fun WorkoutSessionScreen(
     val totalPlannedSets = exercises.sumOf { ex -> maxOf(1, ex.targetSets ?: 1) }
     val currentExercisePR = getExercisePR(setsForExercise)
     val sessionVolume = exercises.sumOf { ex -> getExerciseVolume(logsByExercise[ex.id] ?: emptyList()) }
+    val groupLabels = remember(exercises) { supersetGroupLabels(exercises) }
 
     if (finished) {
         WorkoutCompleteScreen(totalCompletedSets = totalCompletedSets, totalPlannedSets = totalPlannedSets, onClose = onClose)
@@ -370,10 +378,13 @@ fun WorkoutSessionScreen(
                     val sets = logsByExercise[ex.id] ?: emptyList()
                     val doneCount = sets.count { it.completed }
                     val exTotal = maxOf(1, ex.targetSets ?: 1)
+                    // Superset membership shown as a "· A" suffix on the chip's own label -
+                    // simpler and version-safe versus customizing FilterChip's border API.
+                    val label = groupLabels[ex.id]?.let { "${ex.name} $doneCount/$exTotal · $it" } ?: "${ex.name} $doneCount/$exTotal"
                     FilterChip(
                         selected = index == exerciseIndex,
                         onClick = { jumpTo(index) },
-                        label = { Text("${ex.name} $doneCount/$exTotal") },
+                        label = { Text(label) },
                     )
                 }
             }
@@ -428,6 +439,15 @@ fun WorkoutSessionScreen(
                     modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
+                    groupLabels[exercise.id]?.let { label ->
+                        Text(
+                            "SUPERSET $label",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp,
+                            color = AppPalette.Accent,
+                        )
+                    }
                     Text(
                         exercise.name,
                         style = MaterialTheme.typography.headlineMedium,
@@ -564,7 +584,7 @@ fun WorkoutSessionScreen(
                     ) {
                         BigNavButton(
                             symbol = "‹",
-                            enabled = !(exerciseIndex == 0 && setIndex == 0),
+                            enabled = prevSupersetPosition(exercises, SessionPosition(exerciseIndex, setIndex)) != null,
                             onClick = { goPrev(); notifyProgressUpdate() },
                         )
                         Text(
@@ -574,7 +594,7 @@ fun WorkoutSessionScreen(
                         )
                         BigNavButton(
                             symbol = "›",
-                            enabled = !(exerciseIndex == exercises.size - 1 && setIndex == totalSets - 1),
+                            enabled = nextSupersetPosition(exercises, SessionPosition(exerciseIndex, setIndex)) != null,
                             onClick = { goNext(); notifyProgressUpdate() },
                         )
                     }

@@ -50,7 +50,8 @@ Output ONLY a single raw JSON object (no markdown fences, no commentary before o
               "unit": "reps | seconds, default reps",
               "targetReps": 10,
               "targetDurationSeconds": 30,
-              "restSeconds": 60
+              "restSeconds": 60,
+              "supersetGroup": "optional string label, e.g. \\"A\\" - see Rules below"
             }
           ]
         }
@@ -66,6 +67,11 @@ Rules:
 - "target" is required for a quantity task: a plain count in "number" mode, whole seconds in
   "timer" mode.
 - A workout task needs at least one entry in "exercises", each with a "name".
+- "supersetGroup" links 2+ exercises into a superset (performed back-to-back with no rest
+  between them, one shared rest only after the last one) - give matching exercises the exact
+  same label (any string) to link them. Linked exercises MUST be adjacent/consecutive in the
+  "exercises" array - a label used on non-adjacent exercises is ignored. Omit entirely for a
+  normal, standalone exercise.
 - Every field not marked "required" can be omitted entirely - sensible defaults are used.
 - A routine with exactly one task doesn't need that task's own "title" (it's shown flat, using
   the routine's own title).
@@ -114,8 +120,68 @@ function convertExercise(raw, label, index, notes) {
         : 30
       : null;
   const restSeconds = Number.isFinite(raw.restSeconds) && raw.restSeconds >= 0 ? Math.round(raw.restSeconds) : null;
+  // A temporary label, not the real supersetGroupId - resolveSupersetGroups (below) turns
+  // matching *adjacent* labels into a real shared id once every exercise in the task has been
+  // converted, then strips this field. Kept as a plain string here since an AI has no way to
+  // produce this app's own generateId() scheme.
+  const supersetGroup = typeof raw.supersetGroup === 'string' && raw.supersetGroup.trim() ? raw.supersetGroup.trim() : null;
 
-  return { id: generateId(), name, type, targetSets, targetReps, targetDurationSeconds, unit, restSeconds };
+  return {
+    id: generateId(),
+    name,
+    type,
+    targetSets,
+    targetReps,
+    targetDurationSeconds,
+    unit,
+    restSeconds,
+    supersetGroupId: null,
+    supersetGroup,
+  };
+}
+
+/**
+ * Turns each exercise's temporary `supersetGroup` label into a real `supersetGroupId`,
+ * matching the same contiguity rule RoutineForm's Link/Unlink editor enforces (see
+ * utils/supersets.js): only a *contiguous* run of exercises sharing a label actually becomes
+ * one superset. A label reused by a later, non-adjacent exercise (or a second separate
+ * contiguous run) can't be merged into the first group, so it's left ungrouped with a note
+ * instead of silently producing a different grouping than the AI likely intended.
+ */
+function resolveSupersetGroups(exercises, label, notes) {
+  const seenLabels = new Set();
+  const result = exercises.map((ex) => ({ ...ex }));
+  let i = 0;
+  while (i < result.length) {
+    const group = result[i].supersetGroup;
+    let j = i;
+    while (j + 1 < result.length && group != null && result[j + 1].supersetGroup === group) j++;
+    if (group != null) {
+      if (seenLabels.has(group)) {
+        notes.push(
+          `${label}: supersetGroup "${group}" is used by exercises that aren't all adjacent - only the first contiguous run was linked as a superset; the rest were left standalone.`
+        );
+      } else {
+        seenLabels.add(group);
+        if (j > i) {
+          const groupId = generateId();
+          for (let k = i; k <= j; k++) result[k].supersetGroupId = groupId;
+        }
+      }
+    }
+    i = j + 1;
+  }
+  return result.map((ex) => ({
+    id: ex.id,
+    name: ex.name,
+    type: ex.type,
+    targetSets: ex.targetSets,
+    targetReps: ex.targetReps,
+    targetDurationSeconds: ex.targetDurationSeconds,
+    unit: ex.unit,
+    restSeconds: ex.restSeconds,
+    supersetGroupId: ex.supersetGroupId,
+  }));
 }
 
 function convertTask(raw, routineLabel, index, isSimple, routineTitle, routineDefaultDays, notes) {
@@ -183,6 +249,7 @@ function convertTask(raw, routineLabel, index, isSimple, routineTitle, routineDe
       notes.push(`${label}: skipped - a workout task needs at least one valid exercise.`);
       return null;
     }
+    exercises = resolveSupersetGroups(exercises, label, notes);
   }
 
   return {

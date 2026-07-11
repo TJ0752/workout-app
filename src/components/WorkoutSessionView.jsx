@@ -1,6 +1,13 @@
 import { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, Check } from 'lucide-react';
 import { getExercisePR, getExerciseVolume, getLastUsedWeight, kgToLb, lbToKg } from '../utils/workouts';
+import {
+  findNextSupersetPosition,
+  nextSupersetPosition,
+  prevSupersetPosition,
+  shouldRestAfter,
+  supersetGroupLabels,
+} from '../utils/supersets';
 import { MomentumRing, DurationTimer } from './DurationTimer';
 
 /** "60" for a whole number, "62.5" otherwise. */
@@ -9,20 +16,6 @@ function formatNumber(value) {
 }
 
 const WEIGHT_STEP_KG = 2.5;
-
-function findNextPosition(exercises, logsForDate) {
-  for (let ei = 0; ei < exercises.length; ei++) {
-    const exercise = exercises[ei];
-    const totalSets = Math.max(1, exercise.targetSets || 1);
-    const sets = logsForDate?.[exercise.id] || [];
-    for (let si = 0; si < totalSets; si++) {
-      if (!sets.find((s) => s.setIndex === si && s.completed)) {
-        return { exerciseIndex: ei, setIndex: si };
-      }
-    }
-  }
-  return null;
-}
 
 const REST_RING_RADIUS = 70;
 const REST_RING_CIRCUMFERENCE = 2 * Math.PI * REST_RING_RADIUS;
@@ -70,10 +63,10 @@ function RestRing({ totalSeconds, resetKey }) {
 
 export default function WorkoutSessionView({ task, workoutLogSources, dateKey, logsForDate, onLogSet, onClose }) {
   const exercises = task.exercises || [];
-  const start = findNextPosition(exercises, logsForDate) || { exerciseIndex: 0, setIndex: 0 };
+  const start = findNextSupersetPosition(exercises, logsForDate) || { exerciseIndex: 0, setIndex: 0 };
   const [exerciseIndex, setExerciseIndex] = useState(start.exerciseIndex);
   const [setIndex, setSetIndex] = useState(start.setIndex);
-  const [finished, setFinished] = useState(findNextPosition(exercises, logsForDate) === null);
+  const [finished, setFinished] = useState(findNextSupersetPosition(exercises, logsForDate) === null);
   const [resting, setResting] = useState(false);
   const [restRemaining, setRestRemaining] = useState(0);
   // Captured separately from `exercise.restSeconds` because markDone() calls goNext() right
@@ -90,6 +83,7 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
   // native's WorkoutSessionScreen.kt uses the identical pattern (its own `logsByExercise` state).
   const [sessionLogs, setSessionLogs] = useState(logsForDate);
 
+  const groupLabels = supersetGroupLabels(exercises);
   const exercise = exercises[exerciseIndex];
   const isDuration = exercise?.unit === 'seconds';
   // Purely a label/framing choice now (see the weight block below) - a calisthenics exercise's
@@ -165,22 +159,23 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
     setResting(false);
   };
 
+  // Round-robins within a linked superset group (every member's set N before any member's set
+  // N+1) instead of finishing one exercise before starting the next - a solo, ungrouped
+  // exercise is just a group of one, so this is the exact same traversal every exercise used
+  // before supersets existed. See utils/supersets.js.
   const goNext = () => {
-    if (setIndex + 1 < totalSets) {
-      setSetIndex(setIndex + 1);
-    } else if (exerciseIndex + 1 < exercises.length) {
-      setExerciseIndex(exerciseIndex + 1);
-      setSetIndex(0);
+    const next = nextSupersetPosition(exercises, { exerciseIndex, setIndex });
+    if (next) {
+      setExerciseIndex(next.exerciseIndex);
+      setSetIndex(next.setIndex);
     }
   };
 
   const goPrev = () => {
-    if (setIndex > 0) {
-      setSetIndex(setIndex - 1);
-    } else if (exerciseIndex > 0) {
-      const prevExercise = exercises[exerciseIndex - 1];
-      setExerciseIndex(exerciseIndex - 1);
-      setSetIndex(Math.max(0, (prevExercise.targetSets || 1) - 1));
+    const prev = prevSupersetPosition(exercises, { exerciseIndex, setIndex });
+    if (prev) {
+      setExerciseIndex(prev.exerciseIndex);
+      setSetIndex(prev.setIndex);
     }
   };
 
@@ -191,15 +186,18 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
       [exercise.id]: (prev?.[exercise.id] || []).filter((s) => s.setIndex !== setIndex).concat({ setIndex, ...values }),
     }));
     setRingAnimKey((k) => k + 1);
-    const hasNextSet = setIndex + 1 < totalSets;
-    const hasNextExercise = exerciseIndex + 1 < exercises.length;
-    if ((hasNextSet || hasNextExercise) && exercise.restSeconds) {
+    const next = nextSupersetPosition(exercises, { exerciseIndex, setIndex });
+    // No rest mid-superset - completing one group member's set chains straight into the next
+    // member's own set at the same round, regardless of this exercise's own restSeconds. Rest
+    // only applies once the *last* member of a group finishes a round (or for a plain,
+    // ungrouped exercise, exactly as before this feature existed).
+    if (next && exercise.restSeconds && shouldRestAfter(exercises, exerciseIndex)) {
       setRestRemaining(exercise.restSeconds);
       setRestTotalSeconds(exercise.restSeconds);
       setRestAnimKey((k) => k + 1);
       setResting(true);
     }
-    if (hasNextSet || hasNextExercise) {
+    if (next) {
       goNext();
     } else {
       setFinished(true);
@@ -277,7 +275,7 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
               key={ex.id}
               className={`workout-exercise-chip ${i === exerciseIndex ? 'active' : ''} ${
                 doneCount >= exTotal ? 'complete' : ''
-              }`}
+              } ${groupLabels[ex.id] ? 'superset-grouped' : ''}`}
               onClick={() => jumpTo(i)}
             >
               {ex.name || 'Exercise'}
@@ -312,6 +310,7 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
         </div>
       ) : (
         <div className="workout-set-panel">
+          {groupLabels[exercise.id] && <span className="superset-group-label">Superset {groupLabels[exercise.id]}</span>}
           <h3 className="workout-exercise-name">{exercise.name}</h3>
 
           <div className="workout-set-dots">
@@ -409,7 +408,7 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
             <button
               type="button"
               className="workout-set-nav-btn"
-              disabled={exerciseIndex === 0 && setIndex === 0}
+              disabled={!prevSupersetPosition(exercises, { exerciseIndex, setIndex })}
               onClick={goPrev}
             >
               <ChevronLeft size={26} />
@@ -418,7 +417,7 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
             <button
               type="button"
               className="workout-set-nav-btn"
-              disabled={exerciseIndex === exercises.length - 1 && setIndex === totalSets - 1}
+              disabled={!nextSupersetPosition(exercises, { exerciseIndex, setIndex })}
               onClick={goNext}
             >
               <ChevronRight size={26} />

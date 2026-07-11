@@ -2249,6 +2249,30 @@ Fixed with a combined selector (`.icon-badge.app-logo-badge`, genuinely higher s
 instead of relying on source order, which is what any future override needs too if it can't
 guarantee it'll always be declared after `.icon-badge` in the file.
 
+**A real regression the `flex-wrap: nowrap` fix above caused, found from a real device
+screenshot: the "Update ready to install" banner squeezed into the icon row and pushed the
+settings gear off-screen instead of dropping to its own line.** `UpdateChecker`'s banner/toast
+elements had always relied on `flex-basis: 100%` to force themselves onto a new flex line below
+the header's icon buttons — a trick that only works when the parent flex container actually
+allows wrapping. Setting `.app-header` to `flex-wrap: nowrap` (to stop the *icon row itself* from
+wrapping the gear onto a second row under width pressure) silently defeated that for the banner
+too, since there was never a design decision that the banner needed to survive nowrap — the two
+features were never tested together. Fixed by fully decoupling the two: `App.jsx`'s header is now
+a plain block wrapping two independent pieces — `.app-header-row` (a nowrap flex row: logo,
+title, version badge, the round update-check button, the settings gear — exactly what "App header
+version badge" above already fixed) and, as a separate full-width block below it, `UpdateStatusBar`
+(the banner/toast/error states). Since the banner is no longer a flex sibling of the icon buttons
+at all, it never has to fight for room in that row again, and the icon row itself is untouched by
+whatever the banner is doing. This required lifting `UpdateChecker.jsx`'s state out into its own
+hook (`src/hooks/useUpdateChecker.js`) so `App.jsx` can hold one instance and feed two small,
+purely presentational components from it — the default-exported `UpdateChecker` (just the round
+icon button, rendered inside `.app-header-row`) and the named `UpdateStatusBar` export (the
+banner/toast area, rendered below it) — rather than one component owning both pieces of markup
+and being unable to place them in two different layout contexts. Verified with a static HTML
+fixture (loading the real compiled `App.css`) confirming the settings gear's bounding box stays
+fully within a 360px viewport with the banner showing, and that the banner renders strictly below
+the icon row rather than overlapping/squeezing into it.
+
 ### A recurring ESLint false-positive
 
 `no-unused-vars` sometimes misfires on a destructured capitalized variable used only as a

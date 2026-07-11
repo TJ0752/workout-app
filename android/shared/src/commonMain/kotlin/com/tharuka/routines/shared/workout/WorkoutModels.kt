@@ -17,7 +17,12 @@ data class Exercise(
     // case getLastUsedWeight falls back to matching by name, mirroring
     // src/utils/workouts.js's buildWorkoutLogSources. Trailing, with a default, for the same
     // WorkoutLogicTest positional-constructor reason as `type` above.
-    val exerciseId: String? = null
+    val exerciseId: String? = null,
+    // Contiguous exercises sharing this id form a superset - see SupersetLogic.kt. Mirrors
+    // src/utils/supersets.js's identical field on the JS Exercise shape exactly; null/absent
+    // means "not part of a superset," same as every exercise before this field existed.
+    // Trailing, with a default, for the same WorkoutLogicTest positional-constructor reason.
+    val supersetGroupId: String? = null
 )
 
 /** One task's exercises + full log history - the flattened shape getLastUsedWeight scans across

@@ -5,6 +5,12 @@ import { DAY_LABELS } from '../utils/date';
 import { ICON_OPTIONS, suggestIconId } from '../utils/icons';
 import { generateId } from '../utils/id';
 import { getExerciseNames } from '../storage';
+import {
+  isLinkedToNext,
+  normalizeSupersetGroups,
+  supersetGroupLabels,
+  toggleSupersetLink,
+} from '../utils/supersets';
 import ActivityLogView from './ActivityLogView';
 
 function toggleDay(days, day) {
@@ -41,6 +47,10 @@ function makeExercise() {
     targetDurationSeconds: null,
     unit: 'reps',
     restSeconds: null,
+    // Contiguous exercises sharing this id form a superset - see utils/supersets.js. null/absent
+    // means "not part of a superset," identical to how every exercise behaved before this field
+    // existed, so no backfill was needed for pre-existing data.
+    supersetGroupId: null,
   };
 }
 
@@ -289,7 +299,7 @@ function ExerciseNameInput({ value, exerciseNames, onChange, onSelectExisting })
   );
 }
 
-function exerciseSummary(ex) {
+function exerciseSummary(ex, groupLabel) {
   const setsPart = `${ex.targetSets ?? '?'} sets`;
   const amountPart =
     ex.unit === 'seconds'
@@ -297,7 +307,8 @@ function exerciseSummary(ex) {
         ? formatHms(ex.targetDurationSeconds)
         : '?'
       : `${ex.targetReps ?? '?'} reps`;
-  return `${isCalisthenics(ex) ? 'Calisthenics' : 'Weights'} · ${setsPart} × ${amountPart}`;
+  const base = `${isCalisthenics(ex) ? 'Calisthenics' : 'Weights'} · ${setsPart} × ${amountPart}`;
+  return groupLabel ? `${base} · Superset ${groupLabel}` : base;
 }
 
 function ExerciseListEditor({ task, onChange, exerciseNames }) {
@@ -307,9 +318,21 @@ function ExerciseListEditor({ task, onChange, exerciseNames }) {
   // every card fully expanded with no way to collapse it at all.
   const [editingExerciseId, setEditingExerciseId] = useState(null);
   const [expandAll, setExpandAll] = useState(false);
+  const groupLabels = supersetGroupLabels(exercises);
 
   const updateExercise = (id, patch) => {
-    onChange({ ...task, exercises: exercises.map((ex) => (ex.id === id ? { ...ex, ...patch } : ex)) });
+    let next = exercises.map((ex) => (ex.id === id ? { ...ex, ...patch } : ex));
+    // A superset's rounds have to move in lockstep - every exercise in the group logs "set N"
+    // at the same time, so their set counts can't independently drift. Rather than validate
+    // and block on a mismatch, editing one member's Sets just carries the value to the rest
+    // of its group automatically.
+    if (Object.prototype.hasOwnProperty.call(patch, 'targetSets')) {
+      const groupId = next.find((ex) => ex.id === id)?.supersetGroupId;
+      if (groupId) {
+        next = next.map((ex) => (ex.supersetGroupId === groupId ? { ...ex, targetSets: patch.targetSets } : ex));
+      }
+    }
+    onChange({ ...task, exercises: next });
   };
 
   const addExercise = () => {
@@ -319,8 +342,127 @@ function ExerciseListEditor({ task, onChange, exerciseNames }) {
   };
 
   const removeExercise = (id) => {
-    onChange({ ...task, exercises: exercises.filter((ex) => ex.id !== id) });
+    // normalizeSupersetGroups cleans up a group that this deletion left at size 1 - it should
+    // render (and behave in a session) as a plain, ungrouped exercise again, not a "superset of
+    // one" with a stale, meaningless groupId still attached.
+    const next = normalizeSupersetGroups(exercises.filter((ex) => ex.id !== id));
+    onChange({ ...task, exercises: next });
   };
+
+  const toggleLink = (index) => {
+    onChange({ ...task, exercises: toggleSupersetLink(exercises, index) });
+  };
+
+  const isGroupStart = (i) => {
+    if (!groupLabels[exercises[i].id]) return false;
+    return i === 0 || !isLinkedToNext(exercises, i - 1);
+  };
+
+  const renderExerciseFields = (ex, linkedToNext) => (
+    <>
+      <div className="inline-fields">
+        <label>
+          Exercise name
+          <ExerciseNameInput
+            value={ex.name}
+            exerciseNames={exerciseNames}
+            onChange={(name) => updateExercise(ex.id, { name, exerciseId: null })}
+            onSelectExisting={(match) => updateExercise(ex.id, { name: match.name, exerciseId: match.id })}
+          />
+        </label>
+        <button type="button" className="task-edit-icon-btn" onClick={() => removeExercise(ex.id)}>
+          Delete
+        </button>
+      </div>
+      <div className="type-toggle">
+        <button
+          type="button"
+          className={!isCalisthenics(ex) ? 'active' : ''}
+          onClick={() => updateExercise(ex.id, { type: 'weights' })}
+        >
+          Weights
+        </button>
+        <button
+          type="button"
+          className={isCalisthenics(ex) ? 'active' : ''}
+          onClick={() => updateExercise(ex.id, { type: 'calisthenics' })}
+        >
+          Calisthenics
+        </button>
+      </div>
+      <div className="type-toggle">
+        <button
+          type="button"
+          className={ex.unit !== 'seconds' ? 'active' : ''}
+          onClick={() =>
+            updateExercise(ex.id, { unit: 'reps', targetDurationSeconds: null, targetReps: ex.targetReps ?? 10 })
+          }
+        >
+          Reps
+        </button>
+        <button
+          type="button"
+          className={ex.unit === 'seconds' ? 'active' : ''}
+          onClick={() =>
+            updateExercise(ex.id, {
+              unit: 'seconds',
+              targetReps: null,
+              targetDurationSeconds: ex.targetDurationSeconds ?? 30,
+            })
+          }
+        >
+          Duration
+        </button>
+      </div>
+      <div className="inline-fields">
+        <label>
+          Sets{ex.supersetGroupId ? ' (whole superset)' : ''}
+          <input
+            type="number"
+            min="1"
+            value={ex.targetSets ?? ''}
+            onChange={(e) => updateExercise(ex.id, { targetSets: e.target.value ? Number(e.target.value) : null })}
+          />
+        </label>
+        {ex.unit === 'seconds' ? (
+          <DurationHMSInput
+            label="Duration/set"
+            totalSeconds={ex.targetDurationSeconds}
+            onChange={(secs) => updateExercise(ex.id, { targetDurationSeconds: secs })}
+          />
+        ) : (
+          <label>
+            Reps/set
+            <input
+              type="number"
+              min="1"
+              value={ex.targetReps ?? ''}
+              onChange={(e) =>
+                updateExercise(ex.id, { targetReps: e.target.value ? Number(e.target.value) : null })
+              }
+            />
+          </label>
+        )}
+      </div>
+      <div className="inline-fields">
+        {linkedToNext ? (
+          <p className="superset-rest-note">No rest - moves straight into the next superset exercise.</p>
+        ) : (
+          <label>
+            {ex.supersetGroupId ? 'Rest after this superset, sec (optional)' : 'Rest between sets, sec (optional)'}
+            <input
+              type="number"
+              min="0"
+              value={ex.restSeconds ?? ''}
+              onChange={(e) =>
+                updateExercise(ex.id, { restSeconds: e.target.value ? Number(e.target.value) : null })
+              }
+            />
+          </label>
+        )}
+      </div>
+    </>
+  );
 
   return (
     <div>
@@ -340,131 +482,46 @@ function ExerciseListEditor({ task, onChange, exerciseNames }) {
         )}
       </div>
       <div className="task-edit-list">
-        {exercises.map((ex) => {
+        {exercises.map((ex, i) => {
           const isOpen = expandAll || editingExerciseId === ex.id;
-          if (!isOpen) {
-            return (
-              <div className="task-edit-row" key={ex.id}>
-                <div className="task-edit-info">
-                  <div className="name">{ex.name || '(unnamed exercise)'}</div>
-                  <div className="meta">{exerciseSummary(ex)}</div>
-                </div>
-                <button type="button" className="task-edit-icon-btn" onClick={() => setEditingExerciseId(ex.id)}>
-                  Edit
-                </button>
-                <button type="button" className="task-edit-icon-btn" onClick={() => removeExercise(ex.id)}>
-                  Delete
-                </button>
-              </div>
-            );
-          }
+          const groupLabel = groupLabels[ex.id];
+          const linkedToNext = isLinkedToNext(exercises, i);
           return (
-            <div className="form-card" key={ex.id}>
-              <div className="inline-fields">
-                <label>
-                  Exercise name
-                  <ExerciseNameInput
-                    value={ex.name}
-                    exerciseNames={exerciseNames}
-                    onChange={(name) => updateExercise(ex.id, { name, exerciseId: null })}
-                    onSelectExisting={(match) => updateExercise(ex.id, { name: match.name, exerciseId: match.id })}
-                  />
-                </label>
-                <button type="button" className="task-edit-icon-btn" onClick={() => removeExercise(ex.id)}>
-                  Delete
-                </button>
-              </div>
-              <div className="type-toggle">
-                <button
-                  type="button"
-                  className={!isCalisthenics(ex) ? 'active' : ''}
-                  onClick={() => updateExercise(ex.id, { type: 'weights' })}
-                >
-                  Weights
-                </button>
-                <button
-                  type="button"
-                  className={isCalisthenics(ex) ? 'active' : ''}
-                  onClick={() => updateExercise(ex.id, { type: 'calisthenics' })}
-                >
-                  Calisthenics
-                </button>
-              </div>
-              <div className="type-toggle">
-                <button
-                  type="button"
-                  className={ex.unit !== 'seconds' ? 'active' : ''}
-                  onClick={() =>
-                    updateExercise(ex.id, { unit: 'reps', targetDurationSeconds: null, targetReps: ex.targetReps ?? 10 })
-                  }
-                >
-                  Reps
-                </button>
-                <button
-                  type="button"
-                  className={ex.unit === 'seconds' ? 'active' : ''}
-                  onClick={() =>
-                    updateExercise(ex.id, {
-                      unit: 'seconds',
-                      targetReps: null,
-                      targetDurationSeconds: ex.targetDurationSeconds ?? 30,
-                    })
-                  }
-                >
-                  Duration
-                </button>
-              </div>
-              <div className="inline-fields">
-                <label>
-                  Sets
-                  <input
-                    type="number"
-                    min="1"
-                    value={ex.targetSets ?? ''}
-                    onChange={(e) =>
-                      updateExercise(ex.id, { targetSets: e.target.value ? Number(e.target.value) : null })
-                    }
-                  />
-                </label>
-                {ex.unit === 'seconds' ? (
-                  <DurationHMSInput
-                    label="Duration/set"
-                    totalSeconds={ex.targetDurationSeconds}
-                    onChange={(secs) => updateExercise(ex.id, { targetDurationSeconds: secs })}
-                  />
-                ) : (
-                  <label>
-                    Reps/set
-                    <input
-                      type="number"
-                      min="1"
-                      value={ex.targetReps ?? ''}
-                      onChange={(e) =>
-                        updateExercise(ex.id, { targetReps: e.target.value ? Number(e.target.value) : null })
-                      }
-                    />
-                  </label>
-                )}
-              </div>
-              <div className="inline-fields">
-                <label>
-                  Rest between sets, sec (optional)
-                  <input
-                    type="number"
-                    min="0"
-                    value={ex.restSeconds ?? ''}
-                    onChange={(e) =>
-                      updateExercise(ex.id, { restSeconds: e.target.value ? Number(e.target.value) : null })
-                    }
-                  />
-                </label>
-              </div>
-              {!expandAll && (
-                <div className="inline-fields">
-                  <button type="button" style={{ flex: 1 }} onClick={() => setEditingExerciseId(null)}>
-                    Done
+            <div key={ex.id}>
+              {isGroupStart(i) && <div className="superset-group-label">Superset {groupLabel}</div>}
+              {isOpen ? (
+                <div className={`form-card ${groupLabel ? 'superset-grouped' : ''}`}>
+                  {renderExerciseFields(ex, linkedToNext)}
+                  {!expandAll && (
+                    <div className="inline-fields">
+                      <button type="button" style={{ flex: 1 }} onClick={() => setEditingExerciseId(null)}>
+                        Done
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className={`task-edit-row ${groupLabel ? 'superset-grouped' : ''}`}>
+                  <div className="task-edit-info">
+                    <div className="name">{ex.name || '(unnamed exercise)'}</div>
+                    <div className="meta">{exerciseSummary(ex, groupLabel)}</div>
+                  </div>
+                  <button type="button" className="task-edit-icon-btn" onClick={() => setEditingExerciseId(ex.id)}>
+                    Edit
+                  </button>
+                  <button type="button" className="task-edit-icon-btn" onClick={() => removeExercise(ex.id)}>
+                    Delete
                   </button>
                 </div>
+              )}
+              {i < exercises.length - 1 && (
+                <button
+                  type="button"
+                  className={`superset-link-btn ${linkedToNext ? 'linked' : ''}`}
+                  onClick={() => toggleLink(i)}
+                >
+                  {linkedToNext ? '🔗 Superset link - tap to unlink' : '+ Link as superset with next exercise'}
+                </button>
               )}
             </div>
           );

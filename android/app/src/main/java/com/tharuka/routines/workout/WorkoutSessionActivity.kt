@@ -204,6 +204,7 @@ class WorkoutSessionActivity : ComponentActivity() {
                     restSeconds = obj.optIntOrNull("restSeconds"),
                     type = obj.optString("type", "weights"),
                     exerciseId = obj.optStringOrNull("exerciseId"),
+                    supersetGroupId = obj.optStringOrNull("supersetGroupId"),
                 )
             )
         }
