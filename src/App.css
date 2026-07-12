@@ -516,6 +516,21 @@
   font-weight: 600;
 }
 
+.workout-picker-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  width: 100%;
+  margin: 0.6rem 0 1rem;
+  padding: 0.55rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--card-border);
+  background: var(--card);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .today-list {
   list-style: none;
   padding: 0;
@@ -1926,6 +1941,62 @@
 .dd-pct {
   color: var(--text-soft);
   font-size: 0.9em;
+}
+
+.workout-picker-panel {
+  max-height: 80vh;
+}
+
+.workout-picker-section + .workout-picker-section {
+  margin-top: 1rem;
+}
+
+.workout-picker-section-title {
+  font-weight: 600;
+  font-size: 0.85em;
+  color: var(--text-soft);
+  margin-bottom: 0.5rem;
+}
+
+.workout-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.workout-picker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+}
+
+.workout-picker-row-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.workout-picker-row-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workout-picker-row-sub {
+  font-size: 0.8em;
+  color: var(--text-soft);
+}
+
+.workout-picker-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
 }
 
 .breakdown-list {

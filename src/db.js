@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 
 const DB_NAME = 'routines';
-const DB_VERSION = 11;
+const DB_VERSION = 12;
 
 const sqlite = new SQLiteConnection(CapacitorSQLite);
 let dbInstance = null;
@@ -290,6 +290,34 @@ const MIGRATIONS = [
     toVersion: 11,
     statements: [`ALTER TABLE exercises ADD COLUMN category TEXT;`],
   },
+  {
+    // Lets one occurrence of a due task be cancelled outright with no analytics effect ("skip"),
+    // not just moved to a different day - the ad-hoc/one-off workout flow's "swap out today's
+    // scheduled workout" and "cancel one of several scheduled today" actions both reuse this exact
+    // same task_reschedules mechanism a real reschedule already uses, rather than a second,
+    // parallel concept: originalDate still stops counting as due (getTaskFraction's own
+    // originalDate check never looked at newDate to begin with), and dueByReschedule's own
+    // `r.newDate === dateKey` comparison already never matches a null newDate, so a skip row
+    // simply produces no landing day - zero changes needed in getTaskFraction/getRoutineFraction
+    // themselves. new_date was NOT NULL since toVersion:10; SQLite can't relax a NOT NULL
+    // constraint via ALTER TABLE, so this rebuilds the table (create/copy/drop/rename) instead,
+    // preserving every existing row untouched.
+    toVersion: 12,
+    statements: [
+      `CREATE TABLE task_reschedules_new (
+        id TEXT PRIMARY KEY NOT NULL,
+        task_id TEXT NOT NULL,
+        original_date TEXT NOT NULL,
+        new_date TEXT,
+        created_at TEXT NOT NULL
+      );`,
+      `INSERT INTO task_reschedules_new SELECT id, task_id, original_date, new_date, created_at FROM task_reschedules;`,
+      `DROP TABLE task_reschedules;`,
+      `ALTER TABLE task_reschedules_new RENAME TO task_reschedules;`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_task_reschedules_task_original
+        ON task_reschedules(task_id, original_date);`,
+    ],
+  },
 ];
 
 /**
@@ -355,6 +383,28 @@ async function ensureExerciseCategoryColumn(db) {
   await db.run(`ALTER TABLE exercises ADD COLUMN category TEXT;`);
 }
 
+/** Same self-heal template again, for the toVersion:12 nullable-new_date rebuild - lets a
+ * cancelled/"skipped" occurrence (the ad-hoc workout swap/cancel flow) be recorded with no landing
+ * date at all, distinct from a genuine move. PRAGMA table_info's `notnull` column is 1 when the
+ * column still has the old NOT NULL constraint. */
+async function ensureTaskRescheduleNullable(db) {
+  const info = await db.query(`PRAGMA table_info(task_reschedules);`);
+  const newDateCol = (info.values || []).find((col) => col.name === 'new_date');
+  if (!newDateCol || newDateCol.notnull === 0) return;
+  await db.run(`CREATE TABLE task_reschedules_new (
+    id TEXT PRIMARY KEY NOT NULL,
+    task_id TEXT NOT NULL,
+    original_date TEXT NOT NULL,
+    new_date TEXT,
+    created_at TEXT NOT NULL
+  );`);
+  await db.run(`INSERT INTO task_reschedules_new SELECT id, task_id, original_date, new_date, created_at FROM task_reschedules;`);
+  await db.run(`DROP TABLE task_reschedules;`);
+  await db.run(`ALTER TABLE task_reschedules_new RENAME TO task_reschedules;`);
+  await db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_reschedules_task_original
+    ON task_reschedules(task_id, original_date);`);
+}
+
 async function openDatabase() {
   const isWeb = Capacitor.getPlatform() === 'web';
   if (isWeb) {
@@ -373,6 +423,7 @@ async function openDatabase() {
   await ensureRoutineDateColumns(db);
   await ensureTaskRescheduleSchema(db);
   await ensureExerciseCategoryColumn(db);
+  await ensureTaskRescheduleNullable(db);
   return db;
 }
 

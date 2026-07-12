@@ -2067,6 +2067,74 @@ completion-adjacent).
   `android-emulator-verify.yml` real-device harness (or a manual on-device try) can prove beyond
   compile-correctness and code review.
 
+### Forward date navigation on Today (`TodayView.jsx`)
+
+`DateNav` no longer caps navigation at today - a future day is projected with the exact same
+due-ness math (`getTaskFraction`/`getRoutineFraction`) every other date already uses, since
+neither function special-cases past/present/future at all; there's nothing to load or compute
+differently the further out you go, so there's no forward limit. A future day is deliberately a
+*planning/reschedule-only* view, not a way to log ahead of time: `TodayView`'s own `isFuture`
+(`dateKey > todayKey()`) gates every completion-input control - the boolean checkbox, quantity
+quick-add/Custom buttons, and (via their pre-existing `!isToday` gates, unaffected by this change)
+timer/workout starts - while `RescheduleControl` stays fully available on any future day, since its
+own range logic (`getRescheduleRange`) was already anchored to the *viewed* date, not "today," and
+needed no changes at all. A gold "Planning ahead" tag (`.date-nav-future-tag`, reusing
+`--warn`/`--warn-soft`) marks a future day at a glance.
+
+### Ad-hoc/one-off workouts, and skipping a scheduled one (`TodayView.jsx`'s `WorkoutPickerModal`, `storage.js`, `notifications.js`)
+
+A "Start Workout" button (today-only, hidden entirely if no workout task exists anywhere yet)
+opens a picker listing every workout-type task across every routine - not just what's due today -
+so a workout can be logged regardless of schedule. This needed no new analytics plumbing at all:
+`handleLogWorkoutSet` already writes both `workout_logs` (keyed by task id + date, merged
+cross-routine by `exerciseId` via `getFitnessOverview` - see "Exercise repository" above) and a
+`completions` row for that task/date unconditionally, and `getTaskFraction`/`getRoutineFraction`
+only ever look at a task's own `days`/version to decide due-ness, never at whether a completions
+row exists - so logging a set for a task that isn't due today just writes an inert completions row
+for a date that was never going to count toward that task's own streak/consistency anyway, while
+the exercise-level PR/volume/e1RM history updates immediately and correctly, exactly like any other
+logged set.
+
+- **Cancelling ("skip") one of today's scheduled workouts, with no analytics effect, reuses the
+  existing per-occurrence reschedule mechanism instead of inventing a second concept** - a direct
+  product decision (see the git history for this feature): a skip is a reschedule with no landing
+  date. `task_reschedules.new_date` was `NOT NULL` since it was introduced (`DB_VERSION = 10`);
+  `DB_VERSION = 12` rebuilds the table (SQLite can't relax a `NOT NULL` constraint via `ALTER
+  TABLE`, only a create/copy/drop/rename) to make it nullable, with the usual
+  `ensureTaskRescheduleNullable` self-heal check (`PRAGMA table_info`'s `notnull` column) alongside
+  every other schema-drift guard this codebase has needed since `DB_VERSION = 8`'s real partial-
+  apply bug. `storage.js`'s `skipTaskOccurrence(taskId, date)` is a thin, intent-naming wrapper over
+  `setTaskReschedule(taskId, date, null)` - no new storage primitive was needed.
+- **`getTaskFraction`/`getRoutineFraction` needed zero code changes for this.** `originalDate`
+  already stops counting as due regardless of what (if anything) `newDate` is - that check never
+  looked at `newDate` to begin with. The "does some reschedule land on this date" check
+  (`reschedules.some((r) => r.newDate === dateKey)`) already only ever matches a real date string,
+  so a `null` `newDate` simply never matches anything - a skip row produces no landing day, for
+  free.
+- **Undo reuses the identical `onClearReschedule` path a real reschedule's Undo already uses** -
+  `WorkoutPickerModal` calls `onRescheduleTask(task, todayKey(), null)` to skip and
+  `onClearReschedule(task, todayKey())` to undo, both already-existing `TodayView` props. No new
+  `App.jsx` handler was needed for either action.
+- **A skipped task disappears from the normal due list entirely** (since it's no longer due), so
+  there'd be no way to undo it from there - unlike a genuine move, which shows "Moved from {date}" +
+  Undo on the *new* day via the ordinary `RescheduleControl`. `WorkoutPickerModal` computes its own
+  "Scheduled today" section independent of the live due list - by checking `isTaskDueOn(task,
+  taskVersionsMap, today, [])` (an empty reschedules array, i.e. the *naive* schedule ignoring any
+  reschedule) rather than reading off `dueRoutines` - specifically so a just-skipped task still
+  shows up there with a "Skipped today" tag and its own Undo button, instead of silently vanishing
+  the moment it's cancelled.
+- **"Swap out" a scheduled workout is just these two existing actions used together** - Skip the
+  scheduled task, then Start a different one from the same picker - rather than a single compound
+  "swap" action. Both are independently useful (skip-without-replacing covers "cancel one of
+  several scheduled today"; starting a different workout without skipping anything covers "log an
+  extra session alongside what's scheduled"), so a single fused action would have removed
+  flexibility without saving a meaningful number of taps.
+- **Native reminders**: `scheduleTaskNotifications`'s existing one-shot reschedule-reminder loop
+  (`RescheduleReminderScheduler`, see "Per-occurrence task reschedule" above) now skips any row with
+  `newDate == null` - a skip already suppresses the original day's recurring due/extra reminders via
+  the pre-existing `skipDates` mechanism (which never depended on `newDate` either), but there's no
+  landing date to arm a one-shot alarm for.
+
 ### Routine editor usability (`RoutinesView.jsx`, `RoutineForm.jsx`)
 
 Three small fixes to the routine-editing flow, all found by direct user report of friction while

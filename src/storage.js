@@ -753,7 +753,8 @@ export async function logWorkoutSet(taskId, dateKey, exercise, setIndex, values)
  * (task_id, original_date) via the table's own unique index, so rescheduling the same original
  * date a second time replaces the previous move instead of stacking a second one. originalDate
  * stops counting as due (treated as nothing-scheduled, not a miss); newDate becomes due in its
- * place, even if it falls outside task.days for that week.
+ * place, even if it falls outside task.days for that week. newDate may be null - see
+ * skipTaskOccurrence below.
  */
 export async function setTaskReschedule(taskId, originalDate, newDate) {
   const db = await ready();
@@ -763,6 +764,18 @@ export async function setTaskReschedule(taskId, originalDate, newDate) {
   );
   await persist();
   return getTaskReschedulesForAnalytics();
+}
+
+/**
+ * Cancels one occurrence of a due task outright, with no landing day and no analytics effect -
+ * the ad-hoc/one-off workout flow's "swap out today's scheduled workout" and "cancel one of
+ * several scheduled today" actions. A thin, intent-naming wrapper over setTaskReschedule(taskId,
+ * date, null): originalDate stops counting as due exactly like a real reschedule (getTaskFraction
+ * doesn't distinguish the two), but there's no newDate for anything to become due on instead.
+ * Undone the same way a real reschedule is (clearTaskReschedule).
+ */
+export async function skipTaskOccurrence(taskId, date) {
+  return setTaskReschedule(taskId, date, null);
 }
 
 /** Undoes a reschedule, reverting originalDate back to its normal due status. */

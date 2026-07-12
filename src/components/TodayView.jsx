@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Flame } from 'lucide-react';
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Dumbbell, Flame, X } from 'lucide-react';
 import { getRoutineFraction, getTaskFraction, dateToKey, todayKey, startOfDay, calcRoutineStreak } from '../utils/date';
 import { getRescheduleRange, isValidRescheduleTarget } from '../utils/reschedule';
 
@@ -183,6 +183,122 @@ function RescheduleControl({ task, dateKey, reschedulesMap, onReschedule, onClea
   );
 }
 
+/**
+ * "Start Workout" launcher - loads every workout-type task across every routine (not just what's
+ * due today), so a one-off/ad-hoc session can be logged regardless of schedule. Logging sets
+ * through the ordinary onStartWorkout path already writes to that task's own exercise-repository
+ * history (getFitnessOverview merges by exercise, not by "was this due today"), so an ad-hoc
+ * session is reflected in analytics with zero extra plumbing.
+ *
+ * If a workout is genuinely scheduled today, it gets its own "Scheduled today" section with a
+ * Skip action - skipping reuses the exact same task_reschedules mechanism a real reschedule does
+ * (setTaskReschedule(taskId, date, null), see storage.js's skipTaskOccurrence), just with no
+ * landing date, so the original day is cancelled outright rather than moved - the "swap out"/
+ * "cancel one of several scheduled today" asks. Skip is a plain onRescheduleTask(task, date, null)
+ * call and Undo is the identical onClearReschedule a real reschedule already uses - no new App.jsx
+ * handler was needed for either.
+ */
+function WorkoutPickerModal({ routines, taskVersionsMap, reschedulesMap, onClose, onStartWorkout, onRescheduleTask, onClearReschedule }) {
+  const todayDateKey = todayKey();
+  const today = startOfDay(new Date());
+
+  const allWorkouts = routines
+    .filter((r) => r.active && !r.archived && !(r.startDate && r.startDate > todayDateKey))
+    .flatMap((r) => r.tasks.filter((t) => t.completionType === 'workout').map((t) => ({ task: t, routine: r })));
+
+  // Naive "would be due today" ignoring any reschedule (empty reschedules array), so a
+  // skipped/moved task still shows up here with its current reschedule state instead of silently
+  // vanishing the moment it's cancelled.
+  const scheduledToday = allWorkouts.filter(({ task }) => isTaskDueOn(task, taskVersionsMap, today, []));
+  const scheduledIds = new Set(scheduledToday.map(({ task }) => task.id));
+  const otherWorkouts = allWorkouts.filter(({ task }) => !scheduledIds.has(task.id));
+
+  const start = (task, routine) => {
+    onStartWorkout(task, routine, todayDateKey);
+    onClose();
+  };
+
+  return (
+    <div className="day-drilldown-overlay" onClick={onClose}>
+      <div className="day-drilldown-panel workout-picker-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="day-drilldown-header">
+          <strong>Start a workout</strong>
+          <button type="button" className="day-drilldown-close" onClick={onClose} aria-label="Close">
+            <X size={18} />
+          </button>
+        </div>
+
+        {scheduledToday.length > 0 && (
+          <div className="workout-picker-section">
+            <div className="workout-picker-section-title">Scheduled today</div>
+            <div className="workout-picker-list">
+              {scheduledToday.map(({ task, routine }) => {
+                const todaysReschedule = (reschedulesMap[task.id] || []).find((r) => r.originalDate === todayDateKey);
+                const skipped = todaysReschedule && todaysReschedule.newDate == null;
+                const moved = todaysReschedule && todaysReschedule.newDate != null;
+                return (
+                  <div className="workout-picker-row" key={task.id}>
+                    <div className="workout-picker-row-text">
+                      <span className="workout-picker-row-title">{task.title}</span>
+                      <span className="workout-picker-row-sub">{routine.title}</span>
+                    </div>
+                    {skipped ? (
+                      <div className="workout-picker-row-actions">
+                        <span className="reschedule-tag">Skipped today</span>
+                        <button type="button" className="reschedule-btn" onClick={() => onClearReschedule(task, todayDateKey)}>
+                          Undo
+                        </button>
+                      </div>
+                    ) : moved ? (
+                      <span className="reschedule-tag">Moved to {formatShortDate(todaysReschedule.newDate)}</span>
+                    ) : (
+                      <div className="workout-picker-row-actions">
+                        <button type="button" className="qty-btn primary" onClick={() => start(task, routine)}>
+                          Start
+                        </button>
+                        <button
+                          type="button"
+                          className="reschedule-btn"
+                          onClick={() => onRescheduleTask(task, todayDateKey, null)}
+                        >
+                          Skip
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="workout-picker-section">
+          <div className="workout-picker-section-title">
+            {scheduledToday.length > 0 ? 'Start a different workout' : 'All workouts'}
+          </div>
+          {otherWorkouts.length === 0 ? (
+            <p className="empty-state">No other workouts set up yet.</p>
+          ) : (
+            <div className="workout-picker-list">
+              {otherWorkouts.map(({ task, routine }) => (
+                <div className="workout-picker-row" key={task.id}>
+                  <div className="workout-picker-row-text">
+                    <span className="workout-picker-row-title">{task.title}</span>
+                    <span className="workout-picker-row-sub">{routine.title}</span>
+                  </div>
+                  <button type="button" className="qty-btn primary" onClick={() => start(task, routine)}>
+                    Start
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function QuantityControl({
   task,
   routine,
@@ -357,6 +473,7 @@ export default function TodayView({
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [now, setNow] = useState(() => new Date());
   const [selectedDate, setSelectedDate] = useState(() => startOfDay(new Date()));
+  const [showWorkoutPicker, setShowWorkoutPicker] = useState(false);
 
   useEffect(() => {
     const interval = setInterval(() => setNow(new Date()), 60000);
@@ -435,6 +552,12 @@ export default function TodayView({
     });
   };
 
+  // "Start Workout" - an ad-hoc/one-off session, independent of what's scheduled today (see
+  // WorkoutPickerModal above). Today-only, matching the existing !isToday gate every other
+  // workout-start affordance already uses (WorkoutTaskCard's own Start/Resume button); hidden
+  // entirely when there's no workout task anywhere yet, rather than opening onto two empty lists.
+  const hasAnyWorkoutTask = routines.some((r) => r.tasks.some((t) => t.completionType === 'workout'));
+
   return (
     <div className="today-view">
       <div className="today-hero">
@@ -450,6 +573,23 @@ export default function TodayView({
       </div>
 
       <DateNav date={selectedDate} onChange={setSelectedDate} />
+
+      {isToday && hasAnyWorkoutTask && (
+        <button type="button" className="workout-picker-trigger" onClick={() => setShowWorkoutPicker(true)}>
+          <Dumbbell size={16} /> Start Workout
+        </button>
+      )}
+      {showWorkoutPicker && (
+        <WorkoutPickerModal
+          routines={routines}
+          taskVersionsMap={taskVersionsMap}
+          reschedulesMap={reschedulesMap}
+          onClose={() => setShowWorkoutPicker(false)}
+          onStartWorkout={onStartWorkout}
+          onRescheduleTask={onRescheduleTask}
+          onClearReschedule={onClearReschedule}
+        />
+      )}
 
       {dueRoutines.length === 0 && (
         <p className="empty-state">

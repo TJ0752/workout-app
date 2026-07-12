@@ -418,6 +418,17 @@ describe('native reschedule reminders', () => {
     });
   });
 
+  it('suppresses the original day via skipDates but schedules no one-shot alarm for a skipped (cancelled) occurrence', async () => {
+    const skippedTask = task({ id: 'skipped-task' });
+    const routine = { id: 'routine-skipped', title: 'R', tasks: [skippedTask], active: true, notes: '' };
+    const reschedules = [{ originalDate: TODAY_KEY, newDate: null }];
+
+    await scheduleTaskNotifications(skippedTask, routine, {}, reschedules);
+
+    expect(calls.dueReminderScheduled[0].skipDates).toEqual([TODAY_KEY]);
+    expect(calls.rescheduleReminderScheduled).toHaveLength(0);
+  });
+
   it('cancels every reschedule reminder for an inactive task, a task with no active days, or a paused routine', async () => {
     const inactiveTask = task({ id: 'inactive-reschedule', active: false });
     const routine = { id: 'r-inactive-reschedule', title: 'R', tasks: [inactiveTask], active: true, notes: '' };

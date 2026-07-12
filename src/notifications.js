@@ -128,10 +128,12 @@ export async function cancelRoutineGroupSummary(routineId) {
  * `reschedules` (default []) is this one task's own task_reschedules rows ({originalDate,
  * newDate} pairs - see storage.js/utils/reschedule.js). Each row means two things natively: the
  * recurring due/extra reminders must not fire visibly on `originalDate` (skipDates, passed to
- * nativeScheduleDueReminder - see DueReminderAlarmReceiver.kt), and a genuine one-shot alarm
- * needs to exist for `newDate` (nativeScheduleRescheduleReminder - see
+ * nativeScheduleDueReminder - see DueReminderAlarmReceiver.kt), and, when `newDate` is set, a
+ * genuine one-shot alarm needs to exist for it (nativeScheduleRescheduleReminder - see
  * RescheduleReminderScheduler.kt), since every recurring scheduler only ever knows a set of
- * weekdays, never a specific calendar date outside them.
+ * weekdays, never a specific calendar date outside them. A row with `newDate: null` is a plain
+ * cancellation (skipTaskOccurrence, storage.js) - originalDate still gets suppressed via
+ * skipDates, but there's no landing date to arm a one-shot alarm for.
  */
 export async function scheduleTaskNotifications(task, routine, completions = {}, reschedules = []) {
   if (!Capacitor.isNativePlatform()) return;
@@ -201,6 +203,7 @@ export async function scheduleTaskNotifications(task, routine, completions = {},
   // "clear everything, then re-arm what's current" is simplest and always correct here.
   await nativeCancelRescheduleReminders(task.id);
   for (const r of reschedules) {
+    if (r.newDate == null) continue; // A skip (cancel) has nothing to arm a one-shot alarm for.
     await nativeScheduleRescheduleReminder({
       taskId: task.id,
       newDate: r.newDate,

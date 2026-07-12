@@ -181,6 +181,12 @@ describe('getTaskFraction', () => {
       expect(getTaskFraction(versions, {}, FIXED_NOW, reschedules)).toBeNull();
     });
 
+    it('treats a skipped (newDate: null) occurrence as not due, with no landing day created', () => {
+      const versions = [boolVersion({ days: [TUESDAY] })];
+      const reschedules = [{ originalDate: todayKey(), newDate: null }];
+      expect(getTaskFraction(versions, { [todayKey()]: 1 }, FIXED_NOW, reschedules)).toBeNull();
+    });
+
     it('defaults to normal day-of-week behavior when no reschedules are passed', () => {
       const versions = [boolVersion()];
       expect(getTaskFraction(versions, { [todayKey()]: 1 }, FIXED_NOW)).toBe(1);
