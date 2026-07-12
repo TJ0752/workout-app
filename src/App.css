@@ -2200,15 +2200,30 @@
 .workout-session-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 0.5rem;
 }
 
 .workout-session-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 1.2em;
   font-weight: 600;
 }
 
-.workout-session-close {
+.workout-session-timer {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text-soft);
+  font-size: 0.95em;
+}
+
+.workout-session-close,
+.workout-session-restart {
+  flex-shrink: 0;
   width: 34px;
   height: 34px;
   border-radius: 999px;

@@ -1438,6 +1438,45 @@ driving a native Compose screen that has nothing to do with the WebView. The
 or a future API-36 CI emulator image — `android-emulator-verify.yml` currently runs API 30,
 which exercises the unchanged plain-notification fallback path, not the new one.
 
+**Restart workout, and a live upward-ticking session timer.** Both platforms' header gained a
+live `formatHms`-formatted elapsed-time display (`workout-session-timer` / a plain `Text` in
+`TopAppBar`'s `actions`) that ticks every second from when the session screen opened, computed
+as a `Date.now()`/`System.currentTimeMillis()` diff against a captured `sessionStartedAt`
+(matching the same wall-clock-diff pattern `DurationTimer`'s own live number already uses,
+rather than a naive per-tick increment that would drift) — and a Restart action (↺) next to
+Close that discards every set logged today for this task and starts the session over from the
+first exercise/set, the whole-session analog of `DurationTimer`'s own "Start again" for one set.
+- **Confirmed before anything is discarded** — a plain `window.confirm` on web, a Material
+  `AlertDialog` on native (the first `AlertDialog` anywhere in this native codebase; every other
+  icon-like button in this file is a plain `Text` glyph, not a vector icon, so Restart follows
+  suit with "↺" rather than pulling in a new icon library dependency for one button).
+- **The actual destructive write (`storage.js`'s `resetWorkoutSessionForToday(taskId, dateKey)`)
+  deletes both `workout_logs` and the `completions` row for that task/date outright** — no
+  soft-delete/versioning, since neither table is versioned to begin with (this is deliberately
+  in the same "genuine hard delete" category as `permanentlyDeleteRoutine`, just narrower in
+  scope: one task, one day). Every screen's own local state (`sessionLogs` /
+  `logsByExercise`, `exerciseIndex`/`setIndex` back to 0, `finished`/`resting` cleared,
+  `sessionStartedAt`/`elapsedSeconds` reset) resets **synchronously, the instant the confirm
+  fires** — not after awaiting the DB round-trip — the same reasoning `sessionLogs` itself
+  already existed for (the web SQLite write is async; waiting on it before updating the screen
+  would leave a stale set/timer visible for a beat).
+- **Native still can't touch SQLite directly**, so the actual delete happens JS-side: confirming
+  Restart calls `onRestartWorkout()` → `WorkoutSessionBridge.onRestartRequested` →
+  `WorkoutSessionPlugin`'s new `workoutSessionRestarted` event → `nativeWorkoutSession.js`'s
+  `initWorkoutRestartListener` → `App.jsx`'s `handleRestartWorkout` — the exact same
+  same-process-bridge-event shape `onSetLogged`/`onQuantityTimerLogged` already established, one
+  more field on `WorkoutSessionBridge` rather than a new mechanism.
+- **The finished screen shows the session's total elapsed time** (`WorkoutCompleteScreen` gained
+  an `elapsedSeconds` param on both platforms) alongside the existing "N of M sets logged" line.
+- Verified on web via a Playwright round-trip logging a set, confirming the header timer
+  advances (`0:00` → `0:02` after a ~2s wait), then confirming Restart both resets the on-screen
+  set count to `0/3` *and* leaves `workout_logs` genuinely empty (read directly off the app's own
+  SQLite connection, not just inferred from the UI). The native Kotlin side follows the identical
+  shape but — like every other native-only change in this section — can only be compile-checked
+  by `android-build.yml`'s CI run in this environment (no local Android SDK); a real-device or
+  emulator pass is the next step to prove it beyond code review, the same caveat every other
+  native-only addition here carries until it's had one.
+
 ### Quantity-as-timer (`RoutineForm.jsx`, `TodayView.jsx`, `QuantityTimerView.jsx`, native `workout/QuantityTimerScreen.kt`)
 
 A `quantity`-completionType task can be set up as a timer instead of a plain number —

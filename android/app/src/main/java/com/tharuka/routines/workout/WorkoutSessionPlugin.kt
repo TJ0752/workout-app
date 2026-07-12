@@ -24,6 +24,9 @@ class WorkoutSessionPlugin : Plugin() {
         WorkoutSessionBridge.onQuantityTimerLogged = { data ->
             notifyListeners("quantityTimerLogged", data, true)
         }
+        WorkoutSessionBridge.onRestartRequested = { data ->
+            notifyListeners("workoutSessionRestarted", data, true)
+        }
     }
 
     @PluginMethod

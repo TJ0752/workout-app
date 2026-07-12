@@ -18,6 +18,7 @@ import {
   isNativeWorkoutSessionAvailable,
   startNativeWorkoutSession,
   initWorkoutSetListener,
+  initWorkoutRestartListener,
   startNativeQuantityTimer,
   initQuantityTimerListener,
 } from './nativeWorkoutSession';
@@ -41,6 +42,7 @@ import {
   getTaskVersionsForAnalytics,
   logWorkoutSet,
   getAllWorkoutLogs,
+  resetWorkoutSessionForToday,
   getTaskReschedulesForAnalytics,
   setTaskReschedule,
   clearTaskReschedule,
@@ -104,6 +106,7 @@ function App() {
   const updateChecker = useUpdateChecker();
   const handleLogWorkoutSetRef = useRef(null);
   const handleLogQuantityTimerRef = useRef(null);
+  const handleRestartWorkoutRef = useRef(null);
   const autoArchiveInFlightRef = useRef(null);
 
   const refreshAll = async () => {
@@ -270,6 +273,15 @@ function App() {
       if (task) await handleLogQuantityTimerRef.current(task, dateKey, seconds);
     });
 
+    // Fired once the user confirms "Restart workout" on the native session screen - the screen's
+    // own local state already reset itself synchronously; this just performs the actual
+    // destructive DB write (resetWorkoutSessionForToday), same as the web path's onRestartWorkout.
+    const workoutRestartListenerPromise = initWorkoutRestartListener(async (taskId, dateKey) => {
+      const state = await refreshAll();
+      const task = findTask(state.routines, taskId);
+      if (task) await handleRestartWorkoutRef.current(task, dateKey);
+    });
+
     // Fired roughly every 15 minutes by the native background-sync foreground service (see
     // BackgroundSyncService.kt) as long as the app process is alive, foreground or backgrounded
     // - keeps digest/summary/streak-risk content fresh without requiring the user to reopen the
@@ -286,6 +298,7 @@ function App() {
       notificationTapListenerPromise?.then((handle) => handle.remove());
       workoutListenerPromise?.then((handle) => handle.remove());
       quantityTimerListenerPromise?.then((handle) => handle.remove());
+      workoutRestartListenerPromise?.then((handle) => handle.remove());
       backgroundSyncListenerPromise?.then((handle) => handle.remove());
     };
   }, []);
@@ -508,6 +521,27 @@ function App() {
   };
   handleLogWorkoutSetRef.current = handleLogWorkoutSet;
 
+  // "Restart workout" - discards today's logged sets for this task and resets its completion
+  // fraction, so a session can be redone from scratch. The session view itself resets its own
+  // local (synchronous) state the instant the user confirms, rather than waiting on this async
+  // round-trip - see WorkoutSessionView.jsx's handleRestart.
+  const handleRestartWorkout = async (task, dateKey) => {
+    const { workoutLogsByTask: nextLogs, completions: nextCompletions } = await resetWorkoutSessionForToday(
+      task.id,
+      dateKey
+    );
+    setWorkoutLogsByTask(nextLogs);
+    setCompletions(nextCompletions);
+    setCompletionTimestamps(await getCompletionTimestamps());
+    if (dateKey === todayKey()) {
+      await syncDynamicNotifications(routines, taskVersionsMap, nextCompletions);
+      await refreshTaskReminderVisibility(task, nextCompletions);
+      const routine = findRoutineForTask(routines, task.id);
+      if (routine) await updateRoutineGroupSummary(routine, nextCompletions);
+    }
+  };
+  handleRestartWorkoutRef.current = handleRestartWorkout;
+
   // The one value a quantity-as-timer session logs - additive (via handleAddQuantity), matching
   // the plain quick-add buttons' own semantics, since a timer can reasonably be run more than
   // once in a day (e.g. two separate meditation sessions) and each run should add to the day's
@@ -560,6 +594,7 @@ function App() {
           onLogSet={(exercise, setIndex, values) =>
             handleLogWorkoutSet(activeSession.task, activeSession.dateKey, exercise, setIndex, values)
           }
+          onRestartWorkout={() => handleRestartWorkout(activeSession.task, activeSession.dateKey)}
           onClose={handleCloseSession}
         />
       </div>

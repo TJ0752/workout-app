@@ -14,4 +14,11 @@ object WorkoutSessionBridge {
     // WorkoutSessionActivity's pureTimer branch. A separate field rather than reusing onSetLogged
     // since a pure timer has no Exercise/setIndex at all, just {taskId, dateKey, seconds}.
     var onQuantityTimerLogged: ((JSObject) -> Unit)? = null
+
+    // Fired when the user confirms "Restart workout" - the actual destructive DB write
+    // (resetWorkoutSessionForToday) must happen JS-side, same reasoning as onSetLogged: native
+    // code must never touch the app's SQLite file directly. The screen's own local state resets
+    // synchronously regardless of whether this round-trip has finished (see
+    // WorkoutSessionScreen.kt's handleRestart).
+    var onRestartRequested: ((JSObject) -> Unit)? = null
 }

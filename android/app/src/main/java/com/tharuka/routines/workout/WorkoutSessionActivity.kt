@@ -137,6 +137,12 @@ class WorkoutSessionActivity : ComponentActivity() {
                                 snapshot.isPR,
                             )
                         },
+                        onRestartWorkout = {
+                            val event = JSObject()
+                            event.put("taskId", taskId)
+                            event.put("dateKey", dateKey)
+                            WorkoutSessionBridge.onRestartRequested?.invoke(event)
+                        },
                         onClose = { finishWithResult() },
                     )
                 }

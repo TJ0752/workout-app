@@ -748,6 +748,27 @@ export async function logWorkoutSet(taskId, dateKey, exercise, setIndex, values)
 }
 
 /**
+ * "Restart workout" - discards every set logged for this task today and resets its completion
+ * fraction back to nothing-logged, so a session can be redone from scratch (a mis-timed or
+ * abandoned run, or just wanting a clean re-log) - the same "discard and redo" idea
+ * DurationTimer's own "Start again" already offers for a single set, scaled up to the whole
+ * session. Deliberately today-only and destructive (no soft-delete/versioning - workout_logs and
+ * completions aren't versioned tables to begin with), so the caller must confirm before calling
+ * this.
+ */
+export async function resetWorkoutSessionForToday(taskId, dateKey) {
+  const db = await ready();
+  await db.run('DELETE FROM workout_logs WHERE task_id = ? AND date = ?', [taskId, dateKey]);
+  await db.run('DELETE FROM completions WHERE task_id = ? AND date = ?', [taskId, dateKey]);
+  await persist();
+  // Sequential, not Promise.all - the web SQLite backend's db.query isn't safe to call
+  // concurrently on the same connection (see resolveExerciseIds/permanentlyDeleteRoutine).
+  const workoutLogsByTask = await getAllWorkoutLogs();
+  const completions = await getCompletions();
+  return { workoutLogsByTask, completions };
+}
+
+/**
  * A one-time, per-occurrence override of a task's due day - unversioned on purpose, since it's a
  * single-instance move, not a change to the recurring schedule task.days describes. Upserted per
  * (task_id, original_date) via the table's own unique index, so rescheduling the same original

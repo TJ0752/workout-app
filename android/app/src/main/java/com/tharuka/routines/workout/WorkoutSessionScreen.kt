@@ -30,6 +30,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
@@ -153,6 +154,7 @@ fun WorkoutSessionScreen(
     onRestStart: (Int) -> Unit,
     onRestEnd: () -> Unit,
     onProgressUpdate: (ProgressSnapshot) -> Unit,
+    onRestartWorkout: () -> Unit,
     onClose: () -> Unit,
 ) {
     var logsByExercise by remember { mutableStateOf(initialLogs) }
@@ -168,6 +170,20 @@ fun WorkoutSessionScreen(
     // rest duration whenever the two differ. Mirrors WorkoutSessionView.jsx's identical fix.
     var restTotalSeconds by remember { mutableStateOf(0) }
     var restAnimKey by remember { mutableStateOf(0) }
+
+    // Live, upward-ticking total session time - mirrors WorkoutSessionView.jsx's identical
+    // sessionStartedAt/elapsedSeconds pair exactly, including the "counts from when this screen
+    // opened, not a true cross-session total" caveat and the reset-on-Restart behavior below.
+    var sessionStartedAt by remember { mutableStateOf(System.currentTimeMillis()) }
+    var elapsedSeconds by remember { mutableStateOf(0) }
+    var showRestartConfirm by remember { mutableStateOf(false) }
+
+    LaunchedEffect(sessionStartedAt) {
+        while (true) {
+            elapsedSeconds = ((System.currentTimeMillis() - sessionStartedAt) / 1000).toInt()
+            delay(1000)
+        }
+    }
 
     fun notifyProgressUpdate(lastSetSummary: String? = null, isPR: Boolean = false) {
         onProgressUpdate(
@@ -193,6 +209,23 @@ fun WorkoutSessionScreen(
                 onRestEnd()
             }
         }
+    }
+
+    // Discards today's logged sets for this task and starts over from the first exercise/set -
+    // the whole-session analog of DurationTimer's own "Start again" for one set. onRestartWorkout
+    // does the actual destructive DB write (resetWorkoutSessionForToday via the JS bridge); every
+    // piece of this screen's own state resets immediately rather than waiting on that round-trip.
+    // Mirrors WorkoutSessionView.jsx's identical handleRestart.
+    fun handleRestart() {
+        onRestartWorkout()
+        logsByExercise = emptyMap()
+        exerciseIndex = 0
+        setIndex = 0
+        finished = false
+        resting = false
+        sessionStartedAt = System.currentTimeMillis()
+        elapsedSeconds = 0
+        notifyProgressUpdate()
     }
 
     val exercise = exercises.getOrNull(exerciseIndex) ?: return
@@ -353,8 +386,30 @@ fun WorkoutSessionScreen(
     val groupLabels = remember(exercises) { supersetGroupLabels(exercises) }
 
     if (finished) {
-        WorkoutCompleteScreen(totalCompletedSets = totalCompletedSets, totalPlannedSets = totalPlannedSets, onClose = onClose)
+        WorkoutCompleteScreen(
+            totalCompletedSets = totalCompletedSets,
+            totalPlannedSets = totalPlannedSets,
+            elapsedSeconds = elapsedSeconds,
+            onClose = onClose,
+        )
         return
+    }
+
+    if (showRestartConfirm) {
+        AlertDialog(
+            onDismissRequest = { showRestartConfirm = false },
+            title = { Text("Restart workout?") },
+            text = { Text("All sets logged today for \"$taskTitle\" will be cleared.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showRestartConfirm = false
+                    handleRestart()
+                }) { Text("Restart") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRestartConfirm = false }) { Text("Cancel") }
+            },
+        )
     }
 
     Scaffold(
@@ -363,6 +418,14 @@ fun WorkoutSessionScreen(
             TopAppBar(
                 title = { Text(taskTitle, fontWeight = FontWeight.Bold) },
                 actions = {
+                    Text(
+                        formatHms(elapsedSeconds),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AppPalette.TextSoft,
+                        modifier = Modifier.padding(end = 4.dp),
+                    )
+                    IconButton(onClick = { showRestartConfirm = true }) { Text("↺", fontSize = 18.sp) }
                     IconButton(onClick = onClose) { Text("✕", fontSize = 18.sp) }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = AppPalette.Background),
@@ -1050,7 +1113,12 @@ private fun BigNavButton(symbol: String, enabled: Boolean, onClick: () -> Unit) 
  * the "main completion page" whose dominant color should match the rest of the app's accent
  * green rather than reading as a plain white Material dialog. */
 @Composable
-private fun WorkoutCompleteScreen(totalCompletedSets: Int, totalPlannedSets: Int, onClose: () -> Unit) {
+private fun WorkoutCompleteScreen(
+    totalCompletedSets: Int,
+    totalPlannedSets: Int,
+    elapsedSeconds: Int,
+    onClose: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1064,6 +1132,7 @@ private fun WorkoutCompleteScreen(totalCompletedSets: Int, totalPlannedSets: Int
         Text("Workout complete", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Color.White, textAlign = TextAlign.Center)
         Spacer(Modifier.height(6.dp))
         Text("$totalCompletedSets of $totalPlannedSets sets logged", fontSize = 15.sp, color = Color.White.copy(alpha = 0.85f))
+        Text("Total time: ${formatHms(elapsedSeconds)}", fontSize = 15.sp, color = Color.White.copy(alpha = 0.85f))
         Spacer(Modifier.height(28.dp))
         Button(
             onClick = onClose,

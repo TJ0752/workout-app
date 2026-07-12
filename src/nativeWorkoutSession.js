@@ -38,6 +38,20 @@ export function initWorkoutSetListener(onSetLogged) {
 }
 
 /**
+ * Fired once when the user confirms "Restart workout" on the native session screen (see
+ * WorkoutSessionScreen.kt's handleRestart) - the screen's own local state already reset itself
+ * synchronously by the time this arrives; this listener is purely responsible for the actual
+ * destructive DB write (resetWorkoutSessionForToday), the same "native can't touch SQLite
+ * directly" reasoning every other bridge event in this file already follows.
+ */
+export function initWorkoutRestartListener(onRestart) {
+  if (!WorkoutSession) return null;
+  return WorkoutSession.addListener('workoutSessionRestarted', (event) => {
+    onRestart(event.taskId, event.dateKey);
+  });
+}
+
+/**
  * Launches the same native Activity/foreground-service host as a real workout session, but with
  * a `pureTimer` payload carrying just a target - no exercises/logs/workoutLogSources at all - for
  * a quantity task set up as a timer (RoutineForm's "Input as: Timer" mode). Reusing this host

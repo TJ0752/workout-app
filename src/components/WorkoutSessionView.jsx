@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Check } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Check, RotateCcw } from 'lucide-react';
 import { getExercisePR, getExerciseVolume, getLastUsedWeight, kgToLb, lbToKg } from '../utils/workouts';
 import {
   findNextSupersetPosition,
@@ -9,6 +9,7 @@ import {
   supersetGroupLabels,
 } from '../utils/supersets';
 import { MomentumRing, DurationTimer } from './DurationTimer';
+import { formatHms } from '../utils/tasks';
 
 /** "60" for a whole number, "62.5" otherwise. */
 function formatNumber(value) {
@@ -61,7 +62,7 @@ function RestRing({ totalSeconds, resetKey }) {
   );
 }
 
-export default function WorkoutSessionView({ task, workoutLogSources, dateKey, logsForDate, onLogSet, onClose }) {
+export default function WorkoutSessionView({ task, workoutLogSources, dateKey, logsForDate, onLogSet, onRestartWorkout, onClose }) {
   const exercises = task.exercises || [];
   const start = findNextSupersetPosition(exercises, logsForDate) || { exerciseIndex: 0, setIndex: 0 };
   const [exerciseIndex, setExerciseIndex] = useState(start.exerciseIndex);
@@ -69,6 +70,12 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
   const [finished, setFinished] = useState(findNextSupersetPosition(exercises, logsForDate) === null);
   const [resting, setResting] = useState(false);
   const [restRemaining, setRestRemaining] = useState(0);
+  // Live, upward-ticking total session time - counts from when this session screen was opened
+  // (or last restarted), not a true cross-session "time spent on this workout ever" figure,
+  // since nothing tracks that across separate app opens. Reset alongside every other piece of
+  // session state on Restart (handleRestart below).
+  const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now());
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   // Captured separately from `exercise.restSeconds` because markDone() calls goNext() right
   // after starting a rest, which reassigns `exercise` to the *upcoming* one - reading
   // restSeconds from it later (e.g. at render time) would use the wrong exercise's configured
@@ -150,7 +157,32 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
     return () => clearTimeout(t);
   }, [resting, restRemaining]);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - sessionStartedAt) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [sessionStartedAt]);
+
   if (!exercise) return null;
+
+  // Discards today's logged sets for this task and starts over from the first exercise/set - the
+  // whole-session analog of DurationTimer's own "Start again" for one set. onRestartWorkout does
+  // the actual destructive DB write (resetWorkoutSessionForToday, App.jsx); every piece of this
+  // screen's own local state resets immediately, synchronously, rather than waiting on that async
+  // round-trip - the same reasoning sessionLogs itself already exists for.
+  const handleRestart = () => {
+    if (!window.confirm(`Restart "${task.title}"? All sets logged today for it will be cleared.`)) return;
+    onRestartWorkout?.();
+    setSessionLogs({});
+    setExerciseIndex(0);
+    setSetIndex(0);
+    setFinished(false);
+    setResting(false);
+    setSessionStartedAt(Date.now());
+    setElapsedSeconds(0);
+    setRingAnimKey((k) => k + 1);
+  };
 
   const jumpTo = (ei) => {
     setExerciseIndex(ei);
@@ -245,6 +277,7 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
         <p>
           {totalCompletedSets} of {totalPlannedSets} sets logged
         </p>
+        <p className="workout-complete-time">Total time: {formatHms(elapsedSeconds)}</p>
         <button type="button" className="workout-complete-done-btn" onClick={onClose}>
           Done
         </button>
@@ -259,6 +292,10 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
     <div className="workout-session">
       <div className="workout-session-header">
         <span className="workout-session-title">{task.title}</span>
+        <span className="workout-session-timer">{formatHms(elapsedSeconds)}</span>
+        <button type="button" className="workout-session-restart" onClick={handleRestart} aria-label="Restart workout">
+          <RotateCcw size={16} />
+        </button>
         <button type="button" className="workout-session-close" onClick={onClose} aria-label="Close">
           <span aria-hidden="true">✕</span>
         </button>
