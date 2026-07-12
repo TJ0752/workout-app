@@ -425,7 +425,14 @@ fun WorkoutSessionScreen(
                         color = AppPalette.TextSoft,
                         modifier = Modifier.padding(end = 4.dp),
                     )
-                    IconButton(onClick = { showRestartConfirm = true }) { Text("↺", fontSize = 18.sp) }
+                    // A plain text label, not a Unicode glyph like the close button's "✕" - "↺"/"⟲"
+                    // style rotate-arrow glyphs aren't reliably covered by every device's system
+                    // font the way common punctuation-range symbols are, which risks silently
+                    // rendering as nothing (a blank, easy-to-miss button) rather than failing
+                    // loudly. Plain ASCII text carries no such risk.
+                    TextButton(onClick = { showRestartConfirm = true }) {
+                        Text("Restart", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
                     IconButton(onClick = onClose) { Text("✕", fontSize = 18.sp) }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = AppPalette.Background),

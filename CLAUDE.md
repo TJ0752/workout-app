@@ -1443,13 +1443,17 @@ live `formatHms`-formatted elapsed-time display (`workout-session-timer` / a pla
 `TopAppBar`'s `actions`) that ticks every second from when the session screen opened, computed
 as a `Date.now()`/`System.currentTimeMillis()` diff against a captured `sessionStartedAt`
 (matching the same wall-clock-diff pattern `DurationTimer`'s own live number already uses,
-rather than a naive per-tick increment that would drift) — and a Restart action (↺) next to
-Close that discards every set logged today for this task and starts the session over from the
-first exercise/set, the whole-session analog of `DurationTimer`'s own "Start again" for one set.
+rather than a naive per-tick increment that would drift) — and a Restart action next to Close
+that discards every set logged today for this task and starts the session over from the first
+exercise/set, the whole-session analog of `DurationTimer`'s own "Start again" for one set. Web
+uses `lucide-react`'s `RotateCcw` (a proper SVG icon, no font-coverage risk); native renders it as
+a plain `TextButton` reading "Restart" rather than a single Unicode arrow glyph (`↺`/`⟲`) — the
+first version used a glyph, matching every other icon-like button in this file (`✕` for close),
+but a rotate-arrow character isn't reliably covered by every device's system font the way common
+punctuation-range symbols are, risking a silently blank button rather than a loud failure; plain
+ASCII text carries no such risk.
 - **Confirmed before anything is discarded** — a plain `window.confirm` on web, a Material
-  `AlertDialog` on native (the first `AlertDialog` anywhere in this native codebase; every other
-  icon-like button in this file is a plain `Text` glyph, not a vector icon, so Restart follows
-  suit with "↺" rather than pulling in a new icon library dependency for one button).
+  `AlertDialog` on native (the first `AlertDialog` anywhere in this native codebase).
 - **The actual destructive write (`storage.js`'s `resetWorkoutSessionForToday(taskId, dateKey)`)
   deletes both `workout_logs` and the `completions` row for that task/date outright** — no
   soft-delete/versioning, since neither table is versioned to begin with (this is deliberately
