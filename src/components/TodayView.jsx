@@ -58,14 +58,19 @@ function CountdownLabel({ time, windowStart, now, done, showCountdown, className
 function DateNav({ date, onChange }) {
   const key = dateToKey(date);
   const isToday = key === todayKey();
+  const isFuture = key > todayKey();
   const label = isToday
     ? 'Today'
     : date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 
+  // No forward cap - a future day is just today's routines/tasks projected forward with the
+  // exact same due-ness math every other date already uses (getTaskFraction/getRoutineFraction
+  // don't special-case "in the future" at all), so there's nothing to load or compute
+  // differently the further out you go. Completion input itself is still blocked on a future day
+  // (see isFuture below) - this is a planning/reschedule view, not a way to log ahead of time.
   const shiftDay = (delta) => {
     const next = new Date(date);
     next.setDate(next.getDate() + delta);
-    if (dateToKey(next) > todayKey()) return;
     onChange(startOfDay(next));
   };
 
@@ -75,22 +80,16 @@ function DateNav({ date, onChange }) {
         <button type="button" className="date-nav-arrow" onClick={() => shiftDay(-1)} aria-label="Previous day">
           <ChevronLeft size={18} />
         </button>
-        <button
-          type="button"
-          className="date-nav-arrow"
-          onClick={() => shiftDay(1)}
-          disabled={isToday}
-          aria-label="Next day"
-        >
+        <button type="button" className="date-nav-arrow" onClick={() => shiftDay(1)} aria-label="Next day">
           <ChevronRight size={18} />
         </button>
       </div>
       <label className="date-nav-label">
         {label}
+        {isFuture && <span className="date-nav-future-tag">Planning ahead</span>}
         <input
           type="date"
           value={key}
-          max={todayKey()}
           onChange={(e) => {
             if (!e.target.value) return;
             const [y, m, d] = e.target.value.split('-').map(Number);
@@ -195,6 +194,7 @@ function QuantityControl({
   now,
   showCountdown,
   isToday,
+  isFuture,
   routineStreak,
   reschedulesMap = {},
   onRescheduleTask,
@@ -242,12 +242,18 @@ function QuantityControl({
         ) : (
           <>
             {quickAmounts.map((amount) => (
-              <button key={amount} className="qty-btn primary" onClick={() => onAddQuantity(task, amount, dateKey)}>
+              <button
+                key={amount}
+                className="qty-btn primary"
+                disabled={isFuture}
+                onClick={() => onAddQuantity(task, amount, dateKey)}
+              >
                 + {amount}
               </button>
             ))}
             <button
               className="qty-btn"
+              disabled={isFuture}
               onClick={() => {
                 const input = window.prompt(`Set ${task.title} total for this day:`, String(actual));
                 if (input === null) return;
@@ -261,6 +267,7 @@ function QuantityControl({
         )}
         {isPartial && <span className="badge-partial">Partial</span>}
         {isTimer && !isToday && <span className="badge-partial">Today only</span>}
+        {!isTimer && isFuture && <span className="badge-partial">Not yet</span>}
       </div>
       {onRescheduleTask && (
         <RescheduleControl
@@ -394,6 +401,11 @@ export default function TodayView({
 
   const dateKey = dateToKey(selectedDate);
   const isToday = dateKey === todayKey();
+  // A future day is a pure planning/reschedule view - the exact same due-ness projection as
+  // any other date (getTaskFraction/getRoutineFraction don't distinguish past/future at all),
+  // but every completion-input control below is disabled here since nothing can genuinely be
+  // logged before the day itself happens. Reschedule stays fully available regardless.
+  const isFuture = dateKey > todayKey();
   const dayLabel = isToday
     ? 'Today'
     : selectedDate.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
@@ -470,6 +482,7 @@ export default function TodayView({
                       now={now}
                       showCountdown={isToday}
                       isToday={isToday}
+                      isFuture={isFuture}
                       routineStreak={routineStreak}
                       reschedulesMap={reschedulesMap}
                       onRescheduleTask={onRescheduleTask}
@@ -509,6 +522,7 @@ export default function TodayView({
                   <input
                     type="checkbox"
                     checked={done}
+                    disabled={isFuture}
                     onChange={() => onToggleComplete(task, !done, dateKey)}
                   />
                   <span className="icon-badge">
@@ -587,6 +601,7 @@ export default function TodayView({
                             now={now}
                             showCountdown={isToday}
                             isToday={isToday}
+                            isFuture={isFuture}
                             reschedulesMap={reschedulesMap}
                             onRescheduleTask={onRescheduleTask}
                             onClearReschedule={onClearReschedule}
@@ -632,6 +647,7 @@ export default function TodayView({
                         <button
                           type="button"
                           className={`check-circle sm ${done ? 'done' : ''}`}
+                          disabled={isFuture}
                           onClick={() => onToggleComplete(task, !done, dateKey)}
                         >
                           {done && <Check size={12} />}

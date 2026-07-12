@@ -506,6 +506,16 @@
   cursor: pointer;
 }
 
+.date-nav-future-tag {
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 0.75em;
+  font-weight: 600;
+}
+
 .today-list {
   list-style: none;
   padding: 0;
