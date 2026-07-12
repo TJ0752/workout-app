@@ -1,6 +1,7 @@
 import { Preferences } from '@capacitor/preferences';
 import { getDb, persist } from './db';
 import { generateId } from './utils/id';
+import { inferExerciseCategory } from './utils/exerciseCategory';
 
 const LEGACY_ROUTINES_KEY = 'routines';
 const LEGACY_COMPLETIONS_KEY = 'completions';
@@ -243,17 +244,32 @@ async function migrateFromPreferencesOnce(db) {
  * newly typed exercise name with no exerciseId yet) and the one-time backfill below (for
  * exercises that existed before this table did).
  */
-async function resolveExerciseId(db, name) {
+/**
+ * `categoryOverride` (from the exercise editor's Category dropdown, only set when the user
+ * explicitly picked a value rather than leaving it on the inferred default) always wins and
+ * updates the repository row even if one already exists - this is the "editable/overwritable"
+ * half of the design. `inferredCategory` (utils/exerciseCategory.js's best-effort guess from
+ * type/unit) is only ever used to seed a *brand-new* repository row; it never touches an
+ * existing row's category, so a later save of some other task reusing this same exercise can't
+ * silently clobber a category the user (or an earlier save) already settled on.
+ */
+async function resolveExerciseId(db, name, { inferredCategory = null, categoryOverride = null } = {}) {
   const trimmed = (name || '').trim();
   if (!trimmed) return null;
-  const rows = await db.query('SELECT id FROM exercises WHERE name = ? COLLATE NOCASE', [trimmed]);
+  const rows = await db.query('SELECT id, category FROM exercises WHERE name = ? COLLATE NOCASE', [trimmed]);
   const existing = (rows.values || [])[0];
-  if (existing) return existing.id;
+  if (existing) {
+    if (categoryOverride && categoryOverride !== existing.category) {
+      await db.run('UPDATE exercises SET category = ? WHERE id = ?', [categoryOverride, existing.id]);
+    }
+    return existing.id;
+  }
   const id = generateId();
-  await db.run('INSERT INTO exercises (id, name, created_at) VALUES (?, ?, ?)', [
+  await db.run('INSERT INTO exercises (id, name, created_at, category) VALUES (?, ?, ?, ?)', [
     id,
     trimmed,
     new Date().toISOString(),
+    categoryOverride || inferredCategory || null,
   ]);
   return id;
 }
@@ -261,17 +277,28 @@ async function resolveExerciseId(db, name) {
 /**
  * Resolves (or creates) an exerciseId for every exercise in a workout task that doesn't already
  * have one - picking one from the autosuggest list already carries its id, typing a brand-new
- * name doesn't yet. Sequential (not `Promise.all`) on purpose: a real bug found via a two-exercise
- * routine failing to save ("cannot start a transaction within a transaction") - the web SQLite
- * backend's `db.query`/`db.run` calls aren't safe to run concurrently on the same connection, and
- * `Promise.all` over an async map issues exactly that (two brand-new exercise names both hitting
- * the insert path at once). A `for` loop keeps each resolution's query+insert pair fully
- * finished before the next exercise's begins.
+ * name doesn't yet. Also resolves each exercise's repository `category` (see resolveExerciseId
+ * above) using `inferExerciseCategory` for a brand-new exercise's default, and the exercise's own
+ * `categoryOverride` field (set by RoutineForm's Category dropdown, only present when the user
+ * explicitly chose one) to update an existing row. Sequential (not `Promise.all`) on purpose: a
+ * real bug found via a two-exercise routine failing to save ("cannot start a transaction within a
+ * transaction") - the web SQLite backend's `db.query`/`db.run` calls aren't safe to run
+ * concurrently on the same connection, and `Promise.all` over an async map issues exactly that
+ * (two brand-new exercise names both hitting the insert path at once). A `for` loop keeps each
+ * resolution's query+insert pair fully finished before the next exercise's begins.
  */
 async function resolveExerciseIds(db, exercises) {
   const resolved = [];
   for (const ex of exercises) {
-    resolved.push({ ...ex, exerciseId: ex.exerciseId || (await resolveExerciseId(db, ex.name)) });
+    // Always resolved (not just when exerciseId is missing) so a categoryOverride on an
+    // already-resolved exercise still gets applied to its repository row this save - the extra
+    // SELECT this costs per already-known exercise is cheap next to a real routine's exercise
+    // count.
+    const resolvedId = await resolveExerciseId(db, ex.name, {
+      inferredCategory: inferExerciseCategory(ex),
+      categoryOverride: ex.categoryOverride || null,
+    });
+    resolved.push({ ...ex, exerciseId: ex.exerciseId || resolvedId });
   }
   return resolved;
 }
@@ -302,7 +329,7 @@ async function backfillExerciseRepositoryOnce(db) {
     let changed = false;
     for (const ex of exercises) {
       if (ex.exerciseId || !ex.name?.trim()) continue;
-      ex.exerciseId = await resolveExerciseId(db, ex.name);
+      ex.exerciseId = await resolveExerciseId(db, ex.name, { inferredCategory: inferExerciseCategory(ex) });
       changed = true;
     }
     if (changed) {
@@ -326,10 +353,11 @@ async function ready() {
   return readyPromise;
 }
 
-/** Every exercise ever named, for the RoutineForm exercise editor's autosuggest. */
+/** Every exercise ever named, for the RoutineForm exercise editor's autosuggest and its Category
+ * dropdown (which needs each candidate's current repository category to show/preselect it). */
 export async function getExerciseNames() {
   const db = await ready();
-  const result = await db.query('SELECT id, name FROM exercises ORDER BY name COLLATE NOCASE ASC');
+  const result = await db.query('SELECT id, name, category FROM exercises ORDER BY name COLLATE NOCASE ASC');
   return result.values || [];
 }
 
@@ -571,6 +599,34 @@ export async function getCompletions() {
     completions[row.task_id][row.date] = row.value;
   }
   return completions;
+}
+
+/**
+ * `completions.updated_at` (written on every completion, see setCompletion below) has always
+ * been persisted but never read back until Analytics 2's on-time-rate needed it - kept as its
+ * own parallel `{ [taskId]: { [date]: isoString } }` map, the same shape/loading pattern as
+ * `taskVersionsMap`/`reschedulesMap`, rather than folding it into `getCompletions()`'s existing
+ * `{ [taskId]: { [date]: value } }` shape. That keeps every current consumer of `completions`
+ * (TodayView, HistoryView, notifications.js, the whole analytics.js pipeline) completely
+ * untouched - only the new Analytics 2 code needs to load this at all.
+ *
+ * Caveat for quantity tasks logged incrementally (e.g. a few quick-adds across the day):
+ * `updated_at` reflects the *last* write to that day's row, not the moment the target was first
+ * crossed, since completions are stored one row per (task, date) and overwritten in place. For a
+ * boolean task this is exact (one write = the completion moment); for quantity tasks it's a
+ * reasonable but imprecise proxy. Good enough for v1 - a real "first crossed target" timestamp
+ * would need its own additional, immutable column.
+ */
+export async function getCompletionTimestamps() {
+  const db = await ready();
+  const result = await db.query('SELECT task_id, date, updated_at FROM completions');
+  const timestamps = {};
+  for (const row of result.values || []) {
+    if (!row.updated_at) continue;
+    if (!timestamps[row.task_id]) timestamps[row.task_id] = {};
+    timestamps[row.task_id][row.date] = row.updated_at;
+  }
+  return timestamps;
 }
 
 export async function setCompletion(taskId, dateKey, value) {

@@ -2108,6 +2108,71 @@ actually using the app, not from a design review:
   off resets `editingExerciseId` to `null` rather than leaving whatever was last open still
   expanded.
 
+### Supersets (`src/utils/supersets.js`, `RoutineForm.jsx`, `WorkoutSessionView.jsx`, native `SupersetLogic.kt`/`WorkoutSessionScreen.kt`)
+
+Two or more exercises in a workout task's `exercises[]` can be linked into a superset:
+performed back-to-back with no rest between them, one shared rest only after the *last* member
+finishes a round. This changes session *navigation order* only — logging, PRs, volume, and every
+other exercise-level stat are completely untouched.
+
+- **Data model.** Contiguous exercises sharing the same `supersetGroupId` (a fresh
+  `generateId()` value, not a stable identity like `exerciseId`) form one group; `null` means
+  "not part of a superset," identical to every exercise's behavior before this field existed —
+  no migration was needed since `exercises` already lives inside the task's JSON blob. Groups
+  are only ever contiguous *by construction*: the only way to create/extend one is linking two
+  array-adjacent exercises (see below), never validated after the fact.
+- **`utils/supersets.js`** is pure and fully unit-tested (`supersets.test.js`), mirrored exactly
+  in Kotlin by `SupersetLogic.kt` (`SupersetLogicTest.kt`) — same function names, same behavior,
+  verified independently on each platform rather than one being a port assumed-correct from the
+  other:
+  - `isLinkedToNext(exercises, i)` — whether exercise `i` shares a group with `i+1`.
+  - `toggleSupersetLink(exercises, i)` — flips that one adjacency, then **rebuilds every group id
+    in the array from scratch** based on the resulting chain of linked/unlinked pairs, rather
+    than trying to hand-merge/split existing ids. This is what makes linking the last member of
+    an existing group to a fresh exercise correctly extend the group, and unlinking one link in a
+    3-member group correctly split it into a pair + a single, without a combinatorial explosion
+    of merge/split cases to get right.
+  - `normalizeSupersetGroups(exercises)` — same rebuild, without toggling anything; called after
+    any structural change (add/remove an exercise) that isn't itself a link toggle, so a group
+    left at size 1 (its only partner was deleted) collapses back to `null` instead of a
+    meaningless "superset of one."
+  - `groupExercises`/`supersetGroupLabels` — clusters the array into its contiguous groups and
+    assigns each *multi-member* group a display letter (A, B, C, ...), used identically by the
+    editor (group headers) and the session view (the "Superset A" label + exercise-nav-chip
+    accent).
+  - **Session navigation**: `buildSupersetSequence(exercises)` produces the full ordered
+    `(exerciseIndex, setIndex)` traversal for one session — round-robin within a group (every
+    member's set 1, then every member's set 2, ...) instead of finishing one exercise before
+    starting the next. A solo, ungrouped exercise is just a group of one, so this function is
+    always used unconditionally — it degrades to the exact plain in-order traversal every
+    exercise used before this feature existed, with zero special-casing needed anywhere it's
+    called. `findNextSupersetPosition`/`nextSupersetPosition`/`prevSupersetPosition` are built on
+    top of it; `shouldRestAfter(exercises, exerciseIndex)` is `false` only when that exercise is
+    chained mid-superset into the next member (no rest, regardless of that exercise's own
+    `restSeconds`), `true` otherwise (last member of a group, or any ungrouped exercise).
+  - `WorkoutSessionView.jsx` replaced its old local `findNextPosition`/`goNext`/`goPrev` and the
+    rest-trigger check in `logSetValues` with these functions directly;
+    `WorkoutSessionScreen.kt` mirrors the same replacement 1:1, including the identical
+    `movingToNewExercise`-based progress-notification refresh logic.
+- **Editor UI (`RoutineForm.jsx`'s `ExerciseListEditor`)** — builds directly on the exercise-card
+  collapse work above. Each pair of adjacent cards gets a `+ Link as superset with next exercise`
+  / `🔗 Superset link - tap to unlink` connector button between them; a multi-member group renders
+  a `Superset {letter}` header above its first card and a `superset-grouped` left-accent border on
+  every member (both collapsed rows and expanded cards, and the session's own exercise-nav
+  chips). **Editing "Sets" on any member auto-syncs the same value to every other member of its
+  group** — a superset's rounds have to move in lockstep, so rather than validating and blocking
+  on a mismatch, `updateExercise` just propagates the new `targetSets` across the whole group
+  whenever the patch touches it. The "Rest between sets" field is replaced with a plain note
+  ("No rest — moves straight into the next superset exercise") for every member except the last,
+  since that's the only one whose `restSeconds` is ever actually read by `shouldRestAfter` above.
+- **AI import (`src/aiImport.js`)** — an AI-generated exercise can carry a temporary
+  `supersetGroup` string label (any value, e.g. `"A"`); `resolveSupersetGroups` (called after
+  every exercise in a task has been converted) turns a *contiguous* run sharing a label into a
+  real shared `supersetGroupId`, exactly the same contiguity rule the editor enforces. A label
+  reused by a non-adjacent exercise (or a second separate contiguous run) can't be merged into
+  the first group — that reuse is left ungrouped with a note pushed onto the import's `notes`
+  list, rather than silently producing a different grouping than the AI likely intended.
+
 ### AI-generated routine import (`src/aiImport.js`, `SettingsView.jsx`)
 
 V1 of "generate routines with AI": a plain paste-JSON importer in Settings, not a chat interface
@@ -2272,6 +2337,158 @@ and being unable to place them in two different layout contexts. Verified with a
 fixture (loading the real compiled `App.css`) confirming the settings gear's bounding box stays
 fully within a 360px viewport with the banner showing, and that the banner renders strictly below
 the icon row rather than overlapping/squeezing into it.
+
+### Analytics 2 (`src/utils/analyticsV2.js`, `src/components/AnalyticsV2View.jsx`)
+
+A second, additive analytics tab (bottom nav, 5th icon) sitting entirely alongside the original
+Dashboard tab — nothing about that tab's behavior, data, or code changed. Modeled after a much
+richer analytics mockup the user supplied; built in three explicitly-scoped phases (1-3), with
+phases 4-5 documented here as the concrete plan for later rather than built now.
+
+**Why a second tab, not a redesign of the first.** The original Dashboard (`DashboardView.jsx`)
+stays the simple, fast, already-shipped screen it always was. Analytics 2 is where every new,
+heavier idea (custom date ranges, on-time tracking, workout categorization, per-routine
+drill-downs) lives, so the two can evolve independently and a Dashboard regression is never a
+side effect of an Analytics 2 change, or vice versa.
+
+**Scope decision (explicit product call, not a default):** Phase 1-3 shipped now. Calories and
+heart-rate fields (present in the original mockup for Running/HIIT cards) were deliberately never
+built — there's no wearable integration or bodyweight-profile data source behind either one, so
+adding bare manual-entry fields with no computed insight behind them was judged not worth it.
+Workout "category" (Strength/Bodyweight/Stretch & Mobility/Yoga/Running/HIIT) is *inferred*, not
+manually declared up front — but genuinely editable/overwritable, and lives on the shared
+**exercise repository** row (`storage.js`'s `resolveExerciseId`), not per-task-instance — the same
+real-world exercise (e.g. "Bench Press") should classify identically everywhere it's reused across
+routines, exactly like `exerciseId` itself already unifies PR/volume history cross-routine (see
+"Exercise repository" above).
+
+**Phase 1 — reshape existing data, no schema changes.** The Overview screen (completion ring,
+streak tiles, weekly trend, top routines list, Habit Heatmap, Progress vs Goal, a custom date
+range picker) and the Routine/Workout detail drill-downs are all built from data the app already
+had — `getDashboardStats` (analytics.js, unchanged) plus a handful of new small aggregators in
+`analyticsV2.js` (`getPeriodTotals` for "Routines completed X/Y", `getRoutineDayOfWeekBreakdown`
+scoped to one routine instead of all of them, `getTaskAverageValue`, `getTaskHeatmapSeries`,
+`getRoutineTrendSeries`). `analytics.js` itself only gained purely additive support: a
+`'calendarMonth'` range id (1st-of-month through today — genuinely distinct from the pre-existing
+`'month'`, which was already a rolling 30-day window the whole time, just relabeled "Last 30 Days"
+for this tab) and `{ id: 'custom', start: 'YYYY-MM-DD' }` range objects, both handled by extending
+`rangeStartDate`/`buildTrend`'s existing dispatch rather than new code paths — every pre-existing
+call site with a plain string range id behaves byte-for-byte identically to before.
+- **A custom range only ever has a start date, always running through today — not an arbitrary
+  `[start, end]` window.** This is deliberate: `getOverallConsistency`/`getLongestOverallStreak`
+  (called inside `getDashboardStats`) always anchor their own lookback at the real "now"
+  (`utils/date.js`'s `lastNDates`), so a custom range ending in the past would silently compute
+  those two stats over the wrong days. Restricting to "custom start, through today" sidesteps
+  that mismatch entirely while still covering the actual ask ("show me since this date").
+  `getCompletionRateDelta` (the Overview's "+9% vs previous period") deliberately does **not**
+  reuse `getDashboardStats` for its "previous period" side, for the same reason in reverse — it
+  needs an arbitrary window that legitimately ends in the past, so it's a self-contained
+  computation using only `getRoutineFraction` directly, untouched by the consistency/streak
+  lookback issue.
+
+**Phase 2 — on-time tracking.** `completions.updated_at` had been written to SQLite on every
+completion since the very first version of the completions table, but `storage.js`'s
+`getCompletions()` only ever `SELECT`ed `value`, silently discarding it — nothing downstream had
+ever needed a completion *timestamp*, only *that day's value*. `getCompletionTimestamps()` is a
+new, parallel `{ [taskId]: { [date]: isoString } }` map (loaded once in `App.jsx`'s `refreshAll`,
+same "load once, pass down" shape as `taskVersionsMap`/`reschedulesMap`) — deliberately **not**
+folded into `getCompletions()`'s existing `{ [taskId]: { [date]: value } }` shape, so every
+pre-existing consumer of `completions` (TodayView, HistoryView, notifications.js, the entire
+`analytics.js` pipeline) stays completely untouched; only Analytics 2 reads it.
+- **Every lightweight completion handler in `App.jsx` (`handleToggleComplete`,
+  `handleAddQuantity`, `handleSetQuantity`, `handleLogWorkoutSet`) now also refreshes
+  `completionTimestamps` after writing** — these handlers patch `completions` directly rather
+  than calling the full `refreshAll()` (a deliberate performance choice from before this feature
+  existed), so without this, on-time-rate would show stale data until the next full reload.
+- **Quantity-task caveat, accepted for v1 rather than solved:** `getTaskOnTimeRate`
+  (`analyticsV2.js`) compares a completed day's captured timestamp against that day's effective
+  `time` (due-by). For a quantity task logged incrementally (e.g. several quick-adds across the
+  day), `updated_at` only ever reflects the *last* write to that day's single completions row,
+  not when the target was first crossed — a reasonable but imprecise proxy, not exact the way it
+  is for a boolean task. A real fix would need a second, immutable `first_completed_at` column;
+  not worth the schema churn unless this proxy turns out to be actively misleading in practice.
+  Days with no captured timestamp at all (data logged before this feature existed) are excluded
+  from both the numerator and denominator, not counted as late.
+
+**Phase 3 — exercise categorization + focus-area tagging.** Two new, independent per-exercise
+concepts:
+- **`category`** (`DB_VERSION = 11`, one nullable `TEXT` column added to the `exercises`
+  repository table, self-heal-guarded by `ensureExerciseCategoryColumn` the same way every prior
+  migration since `DB_VERSION = 8`'s real partial-apply bug has been) — one of
+  `strength`/`bodyweight`/`stretch_mobility`/`yoga`/`running`/`hiit`
+  (`utils/exerciseCategory.js`'s `EXERCISE_CATEGORIES`; the last two exist purely so a user can
+  start tagging runs/HIIT sessions now, ahead of Phase 4's dedicated screens ever landing).
+  `inferExerciseCategory(exercise)` is a deliberately simple best-effort default from only
+  `type`/`unit` (weights+reps → strength, calisthenics+reps → bodyweight, any duration exercise →
+  `stretch_mobility` as the more common case) — it never tries to guess Yoga vs. Stretch &
+  Mobility, Running, or HIIT, since there's no real signal for any of those yet.
+  - **Resolution and override semantics live in `storage.js`'s `resolveExerciseId`/
+    `resolveExerciseIds`, mirroring the existing `exerciseId` resolution flow exactly.** A
+    brand-new repository row gets seeded with the inferred category (or an explicit
+    `categoryOverride`, if the RoutineForm dropdown was touched). An *existing* row's category is
+    **only ever updated when `categoryOverride` is explicitly present** — a plain resave with no
+    override touches nothing, so one task reusing "Bench Press" without ever opening its Category
+    dropdown can't silently clobber a category some other task's save (or the user directly)
+    already set. `categoryOverride` is a write-only instruction on the task-instance exercise
+    object (never read back — `makeExercise()`'s own comment explains why), not a persisted field
+    itself.
+  - **Editor UI**: a `Category` `<select>` in `RoutineForm.jsx`'s `ExerciseListEditor`, positioned
+    right after the Weights/Calisthenics toggle. Its displayed value is computed fresh on every
+    render (`displayCategoryFor`): `categoryOverride` (if set this session) → the repository's own
+    current category (looked up in the already-loaded `exerciseNames`, now extended to include
+    `category` alongside `id`/`name`) → the inferred default — never a value read back from
+    `categoryOverride` itself, since that field is write-only.
+- **`focusArea`** — a plain, free-text, per-task-instance field (`task.exercises[].focusArea`, no
+  schema change needed, same as `supersetGroupId`) shown only for duration-unit exercises
+  ("Hamstrings", "Balance", anything — not a fixed enum). Powers `getFocusAreaBreakdown(task,
+  logsForTask)`'s "Top Areas"/"Top Focus Areas" list: total logged duration grouped by tag,
+  descending, with untagged-but-logged time grouped under "Untagged" rather than dropped. **A
+  real bug caught by testing an actual logged session, not by inspection**: the first version
+  assumed `logsForTask` (i.e. `workoutLogsByTask[task.id]`) was a flat `{ [exerciseId]: [sets] }`
+  map; it's actually date-first (`{ [date]: { [exerciseId]: [sets] } }`,
+  `storage.js`'s `getAllWorkoutLogs`), the same shape `utils/workouts.js`'s `getWorkoutStats`
+  already has to flatten across dates for the exact same reason — fixed by flattening the same
+  way (`Object.values(logsByDate).flatMap(...)`), caught when "Top Areas" silently rendered empty
+  for an exercise that had genuinely just been logged in a live Playwright round-trip.
+- **AI import** — `aiImport.js`'s `convertExercise` accepts an optional `category` (validated
+  against the same `EXERCISE_CATEGORIES` enum, becoming `categoryOverride`) and free-text
+  `focusArea`, both passed straight through `resolveSupersetGroups`'s final field-list rebuild
+  (which had to be told about them explicitly — it reconstructs each exercise as a fixed field
+  list, not a spread, so a new field silently drops out unless added there too).
+
+**Workout Detail's per-category treatment**, reached by tapping a workout task from a Routine
+Detail's Tasks sub-tab: `getTaskDominantCategory(task, exerciseCategoryById)` picks whichever
+category is most common among the task's own exercises (ties break toward whichever was seen
+first — not worth a more elaborate rule for a 2-exercise tie), and that decides the Overview
+sub-tab's headline stat (total volume for `strength`, total reps otherwise, total time for
+`stretch_mobility`/`yoga`) and whether "Top Areas" renders at all (duration categories only). The
+Exercises/Progress sub-tabs reuse `utils/workouts.js`'s existing `getWorkoutStats` output
+completely unchanged — category never affects per-exercise PR/volume/trend computation, only
+which aggregate/label the screen chooses to lead with.
+
+**Not built (Phase 4 — Cardio + HIIT, the largest remaining piece).** Running/cardio has no data
+model at all today — no distance field, no pace, no dedicated logging UI. It would need a new
+exercise unit mode (`unit: 'distance'`, a `targetDistanceMeters`), and genuinely new session
+logging screens on both `WorkoutSessionView.jsx` and `WorkoutSessionScreen.kt` (mirroring the
+scope of the original `DurationTimer` work, not a small addition). HIIT's "round completion
+status" (Completed/Partial/Incomplete, not just done/not-done) would need a real change to the
+logged-set model — today a set's `completed` is a plain boolean; a tri-state `status` field
+touches both session screens' core logging loop. Both are real, scoped-but-substantial follow-up
+work, not started.
+
+**Not built (Phase 5 — Health Score, full insights engine, Routine Journal).** A composite
+0-100 "Health Score" (Consistency + On-time Rate + Momentum + Sustainability, each already
+computable or nearly so once Phase 2 landed) needs explicit formula sign-off before building —
+particularly "Momentum" (this-window vs. previous-window delta, `getCompletionRateDelta` already
+computes the raw ingredient) and "Sustainability" (no formula decided; a volatility-based measure
+like `100 - stddev(daily %)` was the working idea, unconfirmed). A rules-based insights engine
+("Schedule Adjustment," "Consistency Win," "Task Impact," "Best Performance Window," "Reduce
+Routine Overload," "Target Suggestion," ...) is genuinely a small extensible module — each rule a
+`(routineData) => Insight | null` function — not one function, and every rule shown in the
+original mockup needs its own short design pass, not just a generic "correlate X with Y." Routine
+Journal (free-text, *dated* notes per routine — distinct from the existing single static
+`routine.notes` field) needs one new small unversioned table (`routine_journal_entries`: id,
+routine_id, date, text, created_at) and plain CRUD; no design ambiguity, just not built yet.
 
 ### A recurring ESLint false-positive
 

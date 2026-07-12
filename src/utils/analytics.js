@@ -20,7 +20,18 @@ function datesBetween(start, end) {
   return dates;
 }
 
-function rangeStartDate(range, routines, today) {
+// A range is either one of the existing string ids ('week'/'month'/'all', unchanged) or
+// { id: 'custom', start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' } - added for Analytics 2's custom date
+// range picker (utils/analyticsV2.js). 'calendarMonth' is also new: unlike the pre-existing
+// 'month' (a rolling 30-day window, kept exactly as-is so the original Dashboard tab is
+// unaffected), it's the 1st of the current calendar month through today - Analytics 2 offers
+// both as genuinely distinct presets ("This Month" vs "Last 30 Days"), matching the mockup.
+function isCustomRange(range) {
+  return Boolean(range) && typeof range === 'object' && range.id === 'custom';
+}
+
+export function rangeStartDate(range, routines, today) {
+  if (isCustomRange(range)) return new Date(`${range.start}T00:00:00`);
   if (range === 'week') {
     const d = new Date(today);
     d.setDate(d.getDate() - 6);
@@ -30,6 +41,9 @@ function rangeStartDate(range, routines, today) {
     const d = new Date(today);
     d.setDate(d.getDate() - 29);
     return d;
+  }
+  if (range === 'calendarMonth') {
+    return new Date(today.getFullYear(), today.getMonth(), 1);
   }
   if (routines.length === 0) return today;
   return routines.reduce((min, r) => {
@@ -66,15 +80,32 @@ function bucketPct(routines, taskVersionsMap, completions, dates, reschedulesMap
   return avg === null ? null : Math.round(avg * 100);
 }
 
+// 'week'/'month'/'all' each map to one fixed bucket style below - unchanged from before custom
+// ranges existed. A custom range (or the new 'calendarMonth') picks the closest-fitting style by
+// its own day count instead, so a 5-day custom range still gets daily bars rather than one lonely
+// "Wk1" bucket, and a 90-day one gets monthly instead of an unreadable wall of weekly bars.
+function trendBucketStyle(range, dayCount) {
+  if (isCustomRange(range)) {
+    if (dayCount <= 8) return 'daily';
+    if (dayCount <= 62) return 'weekly';
+    return 'monthly';
+  }
+  if (range === 'week') return 'daily';
+  if (range === 'month' || range === 'calendarMonth') return 'weekly';
+  return 'monthly';
+}
+
 function buildTrend(routines, taskVersionsMap, completions, dates, range, reschedulesMap = {}) {
-  if (range === 'week') {
+  const style = trendBucketStyle(range, dates.length);
+
+  if (style === 'daily') {
     return dates.map((date) => ({
       label: date.toLocaleDateString(undefined, { weekday: 'short' }).slice(0, 2),
       pct: bucketPct(routines, taskVersionsMap, completions, [date], reschedulesMap),
     }));
   }
 
-  if (range === 'month') {
+  if (style === 'weekly') {
     return chunkArray(dates, 7).map((chunk, index) => ({
       label: `Wk${index + 1}`,
       pct: bucketPct(routines, taskVersionsMap, completions, chunk, reschedulesMap),
@@ -93,7 +124,7 @@ function buildTrend(routines, taskVersionsMap, completions, dates, range, resche
   }));
 }
 
-function buildDayOfWeekBreakdown(routines, taskVersionsMap, completions, dates, reschedulesMap = {}) {
+export function buildDayOfWeekBreakdown(routines, taskVersionsMap, completions, dates, reschedulesMap = {}) {
   const buckets = Array.from({ length: 7 }, () => []);
   for (const date of dates) {
     for (const routine of routines) {
@@ -221,6 +252,12 @@ export function getDayBreakdown(routines, taskVersionsMap, completions, date, re
 }
 
 export function getDashboardStats(routines, taskVersionsMap, completions, range, reschedulesMap = {}) {
+  // A custom range only ever picks a custom *start* date, always running through today - not an
+  // arbitrary [start, end] window. This is deliberate: getOverallConsistency/
+  // getLongestOverallStreak below always anchor their own lookback at the real "now"
+  // (utils/date.js's lastNDates), so a custom range ending in the past would silently compute
+  // those two stats over the wrong window. Restricting to "custom start, through today" sidesteps
+  // that mismatch entirely while still covering the common case ("show me since this date").
   const today = new Date();
   const start = rangeStartDate(range, routines, today);
   const dates = datesBetween(start, today);

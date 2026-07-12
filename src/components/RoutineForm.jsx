@@ -11,6 +11,7 @@ import {
   supersetGroupLabels,
   toggleSupersetLink,
 } from '../utils/supersets';
+import { EXERCISE_CATEGORIES, inferExerciseCategory } from '../utils/exerciseCategory';
 import ActivityLogView from './ActivityLogView';
 
 function toggleDay(days, day) {
@@ -51,6 +52,18 @@ function makeExercise() {
     // means "not part of a superset," identical to how every exercise behaved before this field
     // existed, so no backfill was needed for pre-existing data.
     supersetGroupId: null,
+    // Which body part/area this exercise targets (e.g. "Hamstrings", "Balance") - a plain
+    // per-task-instance field (unlike category below), free text so it fits any workout style
+    // without a rigid enum. Only meaningfully used for duration-based exercises today - see
+    // utils/analyticsV2.js's getFocusAreaBreakdown ("Top Areas"/"Top Focus Areas").
+    focusArea: null,
+    // Set only when the user explicitly picks a value in the Category dropdown (see
+    // ExerciseListEditor below) - the *actual* category lives on the shared exercise repository
+    // row (storage.js's resolveExerciseId), not here; this is just the one-shot instruction to
+    // overwrite it on save. Never read back from a loaded exercise (the dropdown's displayed
+    // value comes from exerciseNames' own category field instead), so it's fine for this to stay
+    // null on every reload.
+    categoryOverride: null,
   };
 }
 
@@ -358,6 +371,15 @@ function ExerciseListEditor({ task, onChange, exerciseNames }) {
     return i === 0 || !isLinkedToNext(exercises, i - 1);
   };
 
+  // The category shown/edited here always reflects the shared exercise *repository* row (once
+  // resolved), not anything stored on this task-instance exercise - categoryOverride is a
+  // write-only instruction (see makeExercise's own comment), not a read source. A brand-new,
+  // not-yet-saved exercise falls back to the best-effort inferred default instead.
+  const displayCategoryFor = (ex) => {
+    const repoEntry = exerciseNames.find((n) => n.id === ex.exerciseId);
+    return ex.categoryOverride || repoEntry?.category || inferExerciseCategory(ex);
+  };
+
   const renderExerciseFields = (ex, linkedToNext) => (
     <>
       <div className="inline-fields">
@@ -389,6 +411,21 @@ function ExerciseListEditor({ task, onChange, exerciseNames }) {
         >
           Calisthenics
         </button>
+      </div>
+      <div className="inline-fields">
+        <label>
+          Category
+          <select
+            value={displayCategoryFor(ex)}
+            onChange={(e) => updateExercise(ex.id, { categoryOverride: e.target.value })}
+          >
+            {EXERCISE_CATEGORIES.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
       <div className="type-toggle">
         <button
@@ -444,6 +481,19 @@ function ExerciseListEditor({ task, onChange, exerciseNames }) {
           </label>
         )}
       </div>
+      {ex.unit === 'seconds' && (
+        <div className="inline-fields">
+          <label>
+            Focus area (optional)
+            <input
+              type="text"
+              placeholder="e.g. Hamstrings, Balance"
+              value={ex.focusArea || ''}
+              onChange={(e) => updateExercise(ex.id, { focusArea: e.target.value || null })}
+            />
+          </label>
+        </div>
+      )}
       <div className="inline-fields">
         {linkedToNext ? (
           <p className="superset-rest-note">No rest - moves straight into the next superset exercise.</p>

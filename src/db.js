@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 
 const DB_NAME = 'routines';
-const DB_VERSION = 10;
+const DB_VERSION = 11;
 
 const sqlite = new SQLiteConnection(CapacitorSQLite);
 let dbInstance = null;
@@ -276,6 +276,20 @@ const MIGRATIONS = [
         ON task_reschedules(task_id, original_date);`,
     ],
   },
+  {
+    // Analytics 2's workout breakdown needs to classify each exercise (Strength/Bodyweight/
+    // Stretch & Mobility/Yoga/...) - this lives on the shared exercise *repository* row, not
+    // per-task-instance, per an explicit product decision: the same real-world exercise (e.g.
+    // "Bench Press") should classify the same way everywhere it's logged, across every routine
+    // that reuses it, exactly like exerciseId itself already unifies PR/volume history across
+    // routines (see "Exercise repository" in CLAUDE.md). category is nullable and inferred at
+    // resolution time (storage.js's resolveExerciseId) from the task-instance config actually
+    // being saved - never overwritten by a later inference once a value exists, so a user's
+    // explicit override (or an earlier inference) always wins over a fresh guess from some other
+    // task reusing the same exercise. See utils/analyticsV2.js's inferExerciseCategory.
+    toVersion: 11,
+    statements: [`ALTER TABLE exercises ADD COLUMN category TEXT;`],
+  },
 ];
 
 /**
@@ -333,6 +347,14 @@ async function ensureTaskRescheduleSchema(db) {
     ON task_reschedules(task_id, original_date);`);
 }
 
+/** Same self-heal template again, for the toVersion:11 exercises.category column. */
+async function ensureExerciseCategoryColumn(db) {
+  const info = await db.query(`PRAGMA table_info(exercises);`);
+  const hasColumn = (info.values || []).some((col) => col.name === 'category');
+  if (hasColumn) return;
+  await db.run(`ALTER TABLE exercises ADD COLUMN category TEXT;`);
+}
+
 async function openDatabase() {
   const isWeb = Capacitor.getPlatform() === 'web';
   if (isWeb) {
@@ -350,6 +372,7 @@ async function openDatabase() {
   await ensureQuantityModeColumns(db);
   await ensureRoutineDateColumns(db);
   await ensureTaskRescheduleSchema(db);
+  await ensureExerciseCategoryColumn(db);
   return db;
 }
 

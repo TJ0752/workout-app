@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
-import { Sun, ListTodo, BarChart3, Calendar, Settings as SettingsIcon } from 'lucide-react';
+import { Sun, ListTodo, BarChart3, Calendar, TrendingUp, Settings as SettingsIcon } from 'lucide-react';
 import './App.css';
 import TodayView from './components/TodayView';
 import RoutinesView from './components/RoutinesView';
 import DashboardView from './components/DashboardView';
+import AnalyticsV2View from './components/AnalyticsV2View';
 import HistoryView from './components/HistoryView';
 import Logo from './components/Logo';
 import UpdateChecker, { UpdateStatusBar } from './components/UpdateChecker';
@@ -34,6 +35,7 @@ import {
   upsertTask,
   deleteTask as deleteTaskFromStore,
   getCompletions,
+  getCompletionTimestamps,
   setCompletion,
   addToCompletion,
   getTaskVersionsForAnalytics,
@@ -42,6 +44,7 @@ import {
   getTaskReschedulesForAnalytics,
   setTaskReschedule,
   clearTaskReschedule,
+  getExerciseNames,
 } from './storage';
 import {
   initNotifications,
@@ -74,6 +77,10 @@ const TABS = [
   { id: 'routines', label: 'Routines', Icon: ListTodo },
   { id: 'dashboard', label: 'Dashboard', Icon: BarChart3 },
   { id: 'history', label: 'History', Icon: Calendar },
+  // A second, additive analytics surface (see CLAUDE.md's "Analytics 2") - deliberately its own
+  // tab rather than folded into the existing Dashboard tab above, so nothing about that tab's
+  // behavior changes for anyone who never opens this one.
+  { id: 'analyticsV2', label: 'Analytics 2', Icon: TrendingUp },
 ];
 
 function App() {
@@ -83,6 +90,12 @@ function App() {
   const [taskVersionsMap, setTaskVersionsMap] = useState({});
   const [reschedulesMap, setReschedulesMap] = useState({});
   const [workoutLogsByTask, setWorkoutLogsByTask] = useState({});
+  // Analytics 2 only - see CLAUDE.md. completionTimestamps powers on-time-rate tracking;
+  // exerciseCategories is the exercise repository's own {id, name, category} rows, used to
+  // classify workout tasks (Strength/Bodyweight/Stretch & Mobility/Yoga/...) for the Workout
+  // Detail screen. Neither is read by any pre-existing screen.
+  const [completionTimestamps, setCompletionTimestamps] = useState({});
+  const [exerciseCategories, setExerciseCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeSession, setActiveSession] = useState(null);
   const [focusTarget, setFocusTarget] = useState(null);
@@ -94,24 +107,31 @@ function App() {
   const autoArchiveInFlightRef = useRef(null);
 
   const refreshAll = async () => {
-    const [storedRoutines, storedCompletions, versionsMap, workoutLogs, reschedules] = await Promise.all([
-      getRoutines(),
-      getCompletions(),
-      getTaskVersionsForAnalytics(),
-      getAllWorkoutLogs(),
-      getTaskReschedulesForAnalytics(),
-    ]);
+    const [storedRoutines, storedCompletions, versionsMap, workoutLogs, reschedules, timestamps, exerciseRepo] =
+      await Promise.all([
+        getRoutines(),
+        getCompletions(),
+        getTaskVersionsForAnalytics(),
+        getAllWorkoutLogs(),
+        getTaskReschedulesForAnalytics(),
+        getCompletionTimestamps(),
+        getExerciseNames(),
+      ]);
     setRoutines(storedRoutines);
     setCompletions(storedCompletions);
     setTaskVersionsMap(versionsMap);
     setWorkoutLogsByTask(workoutLogs);
     setReschedulesMap(reschedules);
+    setCompletionTimestamps(timestamps);
+    setExerciseCategories(exerciseRepo);
     return {
       routines: storedRoutines,
       completions: storedCompletions,
       taskVersionsMap: versionsMap,
       workoutLogsByTask: workoutLogs,
       reschedulesMap: reschedules,
+      completionTimestamps: timestamps,
+      exerciseCategories: exerciseRepo,
     };
   };
 
@@ -372,6 +392,11 @@ function App() {
   const handleToggleComplete = async (task, done, dateKey = todayKey()) => {
     const next = await setCompletion(task.id, dateKey, done);
     setCompletions(next);
+    // Analytics 2's on-time-rate tracking (see CLAUDE.md) reads completion timestamps live -
+    // without this, it would keep showing stale data until the next full refreshAll() (e.g. app
+    // reopen), since these lightweight completion handlers only ever patched `completions`
+    // before this field existed.
+    setCompletionTimestamps(await getCompletionTimestamps());
     if (dateKey === todayKey()) {
       await syncDynamicNotifications(routines, taskVersionsMap, next);
       await refreshTaskReminderVisibility(task, next);
@@ -383,6 +408,7 @@ function App() {
   const handleAddQuantity = async (task, delta, dateKey = todayKey()) => {
     const next = await addToCompletion(task.id, dateKey, delta);
     setCompletions(next);
+    setCompletionTimestamps(await getCompletionTimestamps());
     if (dateKey === todayKey()) {
       await syncDynamicNotifications(routines, taskVersionsMap, next);
       const routine = findRoutineForTask(routines, task.id);
@@ -397,6 +423,7 @@ function App() {
   const handleSetQuantity = async (task, value, dateKey = todayKey()) => {
     const next = await setCompletion(task.id, dateKey, value);
     setCompletions(next);
+    setCompletionTimestamps(await getCompletionTimestamps());
     if (dateKey === todayKey()) {
       await syncDynamicNotifications(routines, taskVersionsMap, next);
       const routine = findRoutineForTask(routines, task.id);
@@ -471,6 +498,7 @@ function App() {
     const fraction = computeSessionFraction(task.exercises, logsForDate);
     const nextCompletions = await setCompletion(task.id, dateKey, fraction);
     setCompletions(nextCompletions);
+    setCompletionTimestamps(await getCompletionTimestamps());
     if (dateKey === todayKey()) {
       await syncDynamicNotifications(routines, taskVersionsMap, nextCompletions);
       await refreshTaskReminderVisibility(task, nextCompletions);
@@ -634,6 +662,17 @@ function App() {
             completions={completions}
             taskVersionsMap={taskVersionsMap}
             reschedulesMap={reschedulesMap}
+          />
+        )}
+        {tab === 'analyticsV2' && (
+          <AnalyticsV2View
+            routines={routines}
+            completions={completions}
+            taskVersionsMap={taskVersionsMap}
+            reschedulesMap={reschedulesMap}
+            workoutLogsByTask={workoutLogsByTask}
+            completionTimestamps={completionTimestamps}
+            exerciseCategories={exerciseCategories}
           />
         )}
       </main>

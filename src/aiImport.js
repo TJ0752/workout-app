@@ -1,6 +1,7 @@
 import { generateId } from './utils/id';
 import { MAX_EXTRA_REMINDERS } from './utils/tasks';
 import { ICON_OPTIONS } from './utils/icons';
+import { EXERCISE_CATEGORIES } from './utils/exerciseCategory';
 
 const VALID_ICON_IDS = new Set(ICON_OPTIONS.map((o) => o.id));
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -9,6 +10,7 @@ const COMPLETION_TYPES = ['boolean', 'quantity', 'workout'];
 const QUANTITY_MODES = ['number', 'timer'];
 const EXERCISE_TYPES = ['weights', 'calisthenics'];
 const EXERCISE_UNITS = ['reps', 'seconds'];
+const VALID_EXERCISE_CATEGORY_IDS = new Set(EXERCISE_CATEGORIES.map((c) => c.id));
 
 /**
  * The exact schema an AI chat should be told to output - built from the same constants the
@@ -51,7 +53,9 @@ Output ONLY a single raw JSON object (no markdown fences, no commentary before o
               "targetReps": 10,
               "targetDurationSeconds": 30,
               "restSeconds": 60,
-              "supersetGroup": "optional string label, e.g. \\"A\\" - see Rules below"
+              "supersetGroup": "optional string label, e.g. \\"A\\" - see Rules below",
+              "category": "one of: ${EXERCISE_CATEGORIES.map((c) => c.id).join(', ')} — or omit to auto-infer from type/unit",
+              "focusArea": "optional string, e.g. \\"Hamstrings\\" or \\"Balance\\" - a body part/area this exercise targets"
             }
           ]
         }
@@ -72,6 +76,12 @@ Rules:
   same label (any string) to link them. Linked exercises MUST be adjacent/consecutive in the
   "exercises" array - a label used on non-adjacent exercises is ignored. Omit entirely for a
   normal, standalone exercise.
+- "category" classifies the exercise (Strength/Bodyweight/Stretch & Mobility/Yoga/Running/HIIT)
+  for the analytics screens - it's shared across every routine that reuses the same exercise
+  name, so set it once per real-world exercise, not per routine. Safe to omit; a reasonable
+  default gets inferred from "type"/"unit".
+- "focusArea" is just a label (e.g. "Hamstrings", "Core", "Balance") - it doesn't have to match
+  any fixed list.
 - Every field not marked "required" can be omitted entirely - sensible defaults are used.
 - A routine with exactly one task doesn't need that task's own "title" (it's shown flat, using
   the routine's own title).
@@ -126,6 +136,13 @@ function convertExercise(raw, label, index, notes) {
   // produce this app's own generateId() scheme.
   const supersetGroup = typeof raw.supersetGroup === 'string' && raw.supersetGroup.trim() ? raw.supersetGroup.trim() : null;
 
+  let categoryOverride = null;
+  if (raw.category != null) {
+    if (VALID_EXERCISE_CATEGORY_IDS.has(raw.category)) categoryOverride = raw.category;
+    else notes.push(`${exLabel}: "category" ignored (must be one of ${[...VALID_EXERCISE_CATEGORY_IDS].join(', ')}) - left to auto-infer.`);
+  }
+  const focusArea = typeof raw.focusArea === 'string' && raw.focusArea.trim() ? raw.focusArea.trim() : null;
+
   return {
     id: generateId(),
     name,
@@ -137,6 +154,8 @@ function convertExercise(raw, label, index, notes) {
     restSeconds,
     supersetGroupId: null,
     supersetGroup,
+    categoryOverride,
+    focusArea,
   };
 }
 
@@ -181,6 +200,8 @@ function resolveSupersetGroups(exercises, label, notes) {
     unit: ex.unit,
     restSeconds: ex.restSeconds,
     supersetGroupId: ex.supersetGroupId,
+    categoryOverride: ex.categoryOverride,
+    focusArea: ex.focusArea,
   }));
 }
 

@@ -70,3 +70,31 @@ describe('parseAiImportText - superset import', () => {
     expect(results[0].tasks[0].exercises[0].supersetGroupId).toBeNull();
   });
 });
+
+describe('parseAiImportText - exercise category and focus area', () => {
+  it('accepts a valid category as categoryOverride', () => {
+    const { results } = parseAiImportText(workoutJson([{ name: 'Plank', unit: 'seconds', category: 'yoga' }]));
+    expect(results[0].tasks[0].exercises[0].categoryOverride).toBe('yoga');
+  });
+
+  it('leaves categoryOverride null when omitted', () => {
+    const { results } = parseAiImportText(workoutJson([{ name: 'Bench Press' }]));
+    expect(results[0].tasks[0].exercises[0].categoryOverride).toBeNull();
+  });
+
+  it('rejects an invalid category, defaults to null, and notes it', () => {
+    const { results, notes } = parseAiImportText(workoutJson([{ name: 'Bench Press', category: 'cardio' }]));
+    expect(results[0].tasks[0].exercises[0].categoryOverride).toBeNull();
+    expect(notes.some((n) => n.includes('"category" ignored'))).toBe(true);
+  });
+
+  it('accepts a free-text focusArea', () => {
+    const { results } = parseAiImportText(workoutJson([{ name: 'Hamstring Stretch', focusArea: 'Hamstrings' }]));
+    expect(results[0].tasks[0].exercises[0].focusArea).toBe('Hamstrings');
+  });
+
+  it('leaves focusArea null when omitted', () => {
+    const { results } = parseAiImportText(workoutJson([{ name: 'Bench Press' }]));
+    expect(results[0].tasks[0].exercises[0].focusArea).toBeNull();
+  });
+});
