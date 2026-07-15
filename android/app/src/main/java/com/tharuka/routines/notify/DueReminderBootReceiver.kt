@@ -17,6 +17,7 @@ class DueReminderBootReceiver : BroadcastReceiver() {
         for (entry in DueReminderStore.readAll(context)) {
             DueReminderScheduler.arm(context, entry)
             DueReminderScheduler.armWindowStart(context, entry)
+            DueReminderScheduler.armExpiry(context, entry)
         }
     }
 }

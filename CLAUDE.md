@@ -1023,6 +1023,23 @@ above, all direct product requests rather than bugs:
   `null`; a task with a real one gets the parsed hour/minute) — the native alarm-firing/repost
   behavior itself can only be proven on a real device or the `android-emulator-verify.yml` harness,
   the same caveat every other native-only addition in this section carries.
+- **A reminder now auto-dismisses itself at end of day, whether the task was ever completed or
+  not.** Before this, an unmarked (or even a "completed, dismissable" — see above) reminder had no
+  natural expiry: nothing ever actively cleared it once the day was effectively over, so it could
+  sit in the shade overnight. A task is due for its *entire* calendar day regardless of
+  `windowStart`/`time` (see the data-model docs above) — that whole day is "the expected period" —
+  so a new `DueReminderExpiryAlarmReceiver` fires once near the end of each due day
+  (`END_OF_DAY_HOUR:END_OF_DAY_MINUTE`, 23:55 — not literal midnight, to leave a small buffer
+  before the next day's own due-time alarm could plausibly fire) and unconditionally clears
+  `awaitingCompletion` + cancels the notification, regardless of `doneToday`. Unlike
+  `armWindowStart`, this has no opt-in/null case — `DueReminderScheduler.armExpiry` is armed for
+  *every* task alongside `arm()`/`armWindowStart()`, using a third, independently-armed
+  `EXPIRY_ALARM_ID_BASE` PendingIntent namespace (same "separate alarm, same eventual notification
+  id" shape as the window-start alarm). Self-reschedules next week's occurrence unconditionally on
+  every fire, and (like `arm()`/`armWindowStart()`) is re-armed on boot by `DueReminderBootReceiver`
+  and torn down by `DueReminderScheduler.cancel()` alongside the due-time and window-start alarms.
+  No JS-side changes were needed for this one — it's a pure native lifecycle addition riding along
+  on the exact same `schedule()`/`cancel()` calls that already existed.
 
 ### Persistent background-sync foreground service (`BackgroundSyncService.kt`)
 

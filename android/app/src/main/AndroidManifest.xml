@@ -49,6 +49,10 @@
             android:exported="false" />
 
         <receiver
+            android:name=".notify.DueReminderExpiryAlarmReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".notify.DueReminderDismissReceiver"
             android:exported="false" />
 

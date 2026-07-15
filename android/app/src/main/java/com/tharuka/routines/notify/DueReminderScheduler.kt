@@ -21,6 +21,17 @@ internal const val DUE_REMINDER_ID_BASE = 600_000_000
 // the gap between DUE_REMINDER_ID_BASE (600M) and GROUP_SUMMARY_ID_BASE (700M) - see CLAUDE.md's
 // notification-id-ranges list, which this must stay disjoint from too.
 internal const val WINDOW_START_ALARM_ID_BASE = 620_000_000
+// Same PendingIntent-requestCode namespace reasoning as WINDOW_START_ALARM_ID_BASE - a third,
+// independently-armed alarm per task, also eventually posting to (or here, clearing) the same
+// notification id. 640M keeps a clean 20M-wide gap alongside the other two in this "due-reminder
+// alarm family" cluster, still disjoint from every other range in CLAUDE.md's list.
+internal const val EXPIRY_ALARM_ID_BASE = 640_000_000
+// A task is due for its entire calendar day regardless of windowStart/time (see CLAUDE.md) - this
+// is "the expected period," and 23:55 (not literal midnight) leaves a small buffer before the
+// next day's own due-time alarm could plausibly fire, avoiding any edge-case race right at
+// rollover.
+internal const val END_OF_DAY_HOUR = 23
+internal const val END_OF_DAY_MINUTE = 55
 internal const val EXTRA_TASK_ID = "taskId"
 
 internal fun dueReminderNotificationId(taskId: String): Int = DUE_REMINDER_ID_BASE + hashToInt(taskId)
@@ -105,6 +116,7 @@ object DueReminderScheduler {
         if (!contentUnchanged) {
             arm(context, incoming)
             armWindowStart(context, incoming)
+            armExpiry(context, incoming)
         }
     }
 
@@ -113,6 +125,60 @@ object DueReminderScheduler {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         alarmManager.cancel(pendingIntent(context, taskId))
         cancelWindowStart(context, taskId)
+        cancelExpiry(context, taskId)
+    }
+
+    /**
+     * Arms a once-per-due-day cleanup alarm at END_OF_DAY_HOUR:END_OF_DAY_MINUTE that
+     * auto-dismisses the reminder if it's still showing, whether the task was ever completed or
+     * not - unlike armWindowStart, this applies unconditionally to every task (the "whole
+     * calendar day is the expected period" rule has no opt-in), so a reminder never lingers,
+     * pinned or otherwise, into the next day.
+     */
+    internal fun armExpiry(context: Context, entry: DueReminderEntry) {
+        val calendar = Calendar.getInstance()
+        val todayWeekday = calendar.get(Calendar.DAY_OF_WEEK) - 1
+        val nowHour = calendar.get(Calendar.HOUR_OF_DAY)
+        val nowMinute = calendar.get(Calendar.MINUTE)
+        val daysFromNow = computeNextOccurrenceDaysFromNow(
+            entry.days,
+            END_OF_DAY_HOUR,
+            END_OF_DAY_MINUTE,
+            todayWeekday,
+            nowHour,
+            nowMinute,
+        ) ?: return
+
+        calendar.add(Calendar.DAY_OF_YEAR, daysFromNow)
+        calendar.set(Calendar.HOUR_OF_DAY, END_OF_DAY_HOUR)
+        calendar.set(Calendar.MINUTE, END_OF_DAY_MINUTE)
+        calendar.set(Calendar.SECOND, 0)
+        calendar.set(Calendar.MILLISECOND, 0)
+
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val pending = expiryPendingIntent(context, entry.taskId)
+        val canScheduleExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
+        if (canScheduleExact) {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pending)
+        } else {
+            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pending)
+        }
+    }
+
+    internal fun cancelExpiry(context: Context, taskId: String) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        alarmManager.cancel(expiryPendingIntent(context, taskId))
+    }
+
+    private fun expiryPendingIntent(context: Context, taskId: String): PendingIntent {
+        val intent = Intent(context, DueReminderExpiryAlarmReceiver::class.java)
+        intent.putExtra(EXTRA_TASK_ID, taskId)
+        return PendingIntent.getBroadcast(
+            context,
+            EXPIRY_ALARM_ID_BASE + hashToInt(taskId),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
     }
 
     /**
