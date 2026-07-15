@@ -1023,14 +1023,17 @@ above, all direct product requests rather than bugs:
   `null`; a task with a real one gets the parsed hour/minute) — the native alarm-firing/repost
   behavior itself can only be proven on a real device or the `android-emulator-verify.yml` harness,
   the same caveat every other native-only addition in this section carries.
-- **A reminder now auto-dismisses itself at end of day, whether the task was ever completed or
-  not.** Before this, an unmarked (or even a "completed, dismissable" — see above) reminder had no
-  natural expiry: nothing ever actively cleared it once the day was effectively over, so it could
-  sit in the shade overnight. A task is due for its *entire* calendar day regardless of
-  `windowStart`/`time` (see the data-model docs above) — that whole day is "the expected period" —
-  so a new `DueReminderExpiryAlarmReceiver` fires once near the end of each due day
-  (`END_OF_DAY_HOUR:END_OF_DAY_MINUTE`, 23:55 — not literal midnight, to leave a small buffer
-  before the next day's own due-time alarm could plausibly fire) and unconditionally clears
+- **A reminder now auto-dismisses itself shortly after its own due-by moment passes, whether the
+  task was ever completed or not.** Before this, an unmarked (or even a "completed, dismissable" —
+  see above) reminder had no natural expiry: nothing ever actively cleared it, so it could sit in
+  the shade indefinitely. This is deliberately an *individual, per-task* moment
+  (`entry.hour:entry.minute`, the task's own due-by time), not a single shared clock time every
+  task waits until — an early first version used a fixed end-of-day cutoff (23:55) for every task
+  alike, which was explicitly rejected in favor of each task's own due time. A new
+  `DueReminderExpiryAlarmReceiver` fires `EXPIRY_BUFFER_MS` (2 minutes — purely so it can't race
+  the due-time alarm itself, which needs to actually post/re-alert the notification before this
+  dismisses it; `AlarmManager` doesn't guarantee ordering between two independently-scheduled
+  alarms landing at the identical millisecond) after that moment, and unconditionally clears
   `awaitingCompletion` + cancels the notification, regardless of `doneToday`. Unlike
   `armWindowStart`, this has no opt-in/null case — `DueReminderScheduler.armExpiry` is armed for
   *every* task alongside `arm()`/`armWindowStart()`, using a third, independently-armed
@@ -1038,8 +1041,16 @@ above, all direct product requests rather than bugs:
   id" shape as the window-start alarm). Self-reschedules next week's occurrence unconditionally on
   every fire, and (like `arm()`/`armWindowStart()`) is re-armed on boot by `DueReminderBootReceiver`
   and torn down by `DueReminderScheduler.cancel()` alongside the due-time and window-start alarms.
-  No JS-side changes were needed for this one — it's a pure native lifecycle addition riding along
-  on the exact same `schedule()`/`cancel()` calls that already existed.
+  **The overdue-catch-up path needed its own direct arm.** `armExpiry`'s own next-occurrence math
+  reuses the identical `computeNextOccurrenceDaysFromNow` call `arm()` uses for the due-time alarm,
+  which never targets "later today if already passed" — so for a task caught up via the existing
+  overdue-immediate-post path (see `schedule()`'s `overdueToday` branch above), that same math
+  would skip straight to *next week*, leaving the just-posted notification with no expiry armed
+  for today at all. Fixed by calling `armExpiryAt(context, taskId, now + EXPIRY_BUFFER_MS)`
+  directly from that branch instead, whose own self-reschedule re-establishes the normal weekly
+  cadence from there. No JS-side changes were needed for any of this — it's a pure native
+  lifecycle addition riding along on the exact same `schedule()`/`cancel()` calls that already
+  existed.
 
 ### Persistent background-sync foreground service (`BackgroundSyncService.kt`)
 

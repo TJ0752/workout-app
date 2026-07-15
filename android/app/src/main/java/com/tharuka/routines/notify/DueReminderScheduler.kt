@@ -26,12 +26,13 @@ internal const val WINDOW_START_ALARM_ID_BASE = 620_000_000
 // notification id. 640M keeps a clean 20M-wide gap alongside the other two in this "due-reminder
 // alarm family" cluster, still disjoint from every other range in CLAUDE.md's list.
 internal const val EXPIRY_ALARM_ID_BASE = 640_000_000
-// A task is due for its entire calendar day regardless of windowStart/time (see CLAUDE.md) - this
-// is "the expected period," and 23:55 (not literal midnight) leaves a small buffer before the
-// next day's own due-time alarm could plausibly fire, avoiding any edge-case race right at
-// rollover.
-internal const val END_OF_DAY_HOUR = 23
-internal const val END_OF_DAY_MINUTE = 55
+// A short delay after a task's own due-by moment (entry.hour:entry.minute), not a shared
+// end-of-day cutoff every task waits until - "the expected [period] end" is that task's own
+// due-by time, individually different per task. The buffer exists purely so this alarm can't race
+// the due-time alarm itself, which needs to actually post/re-alert the notification at
+// entry.hour:entry.minute before this dismisses it - AlarmManager doesn't guarantee ordering
+// between two independently-scheduled alarms landing at the identical millisecond.
+internal const val EXPIRY_BUFFER_MS = 2 * 60_000L
 internal const val EXTRA_TASK_ID = "taskId"
 
 internal fun dueReminderNotificationId(taskId: String): Int = DUE_REMINDER_ID_BASE + hashToInt(taskId)
@@ -112,11 +113,18 @@ object DueReminderScheduler {
             // possibly a full week away.
             val notification = buildDueReminderNotification(context, incoming)
             NotificationManagerCompat.from(context).notify(dueReminderNotificationId(incoming.taskId), notification)
+            // Today's own due moment has already passed (that's what overdueToday means), so
+            // armExpiry's normal next-occurrence math would skip straight to next week for the
+            // exact same reason arm() does - leaving this just-caught-up notification with no
+            // expiry armed for today at all. Arm one directly, a short buffer from right now,
+            // instead; its own self-reschedule (DueReminderExpiryAlarmReceiver) re-establishes
+            // the normal weekly cadence from there.
+            armExpiryAt(context, incoming.taskId, System.currentTimeMillis() + EXPIRY_BUFFER_MS)
         }
         if (!contentUnchanged) {
             arm(context, incoming)
             armWindowStart(context, incoming)
-            armExpiry(context, incoming)
+            if (!overdueToday) armExpiry(context, incoming)
         }
     }
 
@@ -129,11 +137,12 @@ object DueReminderScheduler {
     }
 
     /**
-     * Arms a once-per-due-day cleanup alarm at END_OF_DAY_HOUR:END_OF_DAY_MINUTE that
-     * auto-dismisses the reminder if it's still showing, whether the task was ever completed or
-     * not - unlike armWindowStart, this applies unconditionally to every task (the "whole
-     * calendar day is the expected period" rule has no opt-in), so a reminder never lingers,
-     * pinned or otherwise, into the next day.
+     * Arms a once-per-due-day cleanup alarm a short buffer (EXPIRY_BUFFER_MS) after *this task's
+     * own* due-by moment (entry.hour:entry.minute) that auto-dismisses the reminder if it's still
+     * showing, whether the task was ever completed or not - an individual, per-task moment, not a
+     * single clock time every task shares. Applies unconditionally to every task (unlike
+     * armWindowStart, there's no opt-in), so a reminder never lingers, pinned or otherwise, past
+     * its own due time.
      */
     internal fun armExpiry(context: Context, entry: DueReminderEntry) {
         val calendar = Calendar.getInstance()
@@ -142,26 +151,30 @@ object DueReminderScheduler {
         val nowMinute = calendar.get(Calendar.MINUTE)
         val daysFromNow = computeNextOccurrenceDaysFromNow(
             entry.days,
-            END_OF_DAY_HOUR,
-            END_OF_DAY_MINUTE,
+            entry.hour,
+            entry.minute,
             todayWeekday,
             nowHour,
             nowMinute,
         ) ?: return
 
         calendar.add(Calendar.DAY_OF_YEAR, daysFromNow)
-        calendar.set(Calendar.HOUR_OF_DAY, END_OF_DAY_HOUR)
-        calendar.set(Calendar.MINUTE, END_OF_DAY_MINUTE)
+        calendar.set(Calendar.HOUR_OF_DAY, entry.hour)
+        calendar.set(Calendar.MINUTE, entry.minute)
         calendar.set(Calendar.SECOND, 0)
         calendar.set(Calendar.MILLISECOND, 0)
 
+        armExpiryAt(context, entry.taskId, calendar.timeInMillis + EXPIRY_BUFFER_MS)
+    }
+
+    internal fun armExpiryAt(context: Context, taskId: String, triggerAtMillis: Long) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val pending = expiryPendingIntent(context, entry.taskId)
+        val pending = expiryPendingIntent(context, taskId)
         val canScheduleExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
         if (canScheduleExact) {
-            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pending)
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pending)
         } else {
-            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pending)
+            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pending)
         }
     }
 

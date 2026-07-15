@@ -6,13 +6,12 @@ import android.content.Intent
 import androidx.core.app.NotificationManagerCompat
 
 /**
- * Fires once near the end of each day a task is due (see DueReminderScheduler.armExpiry) and
- * auto-dismisses the reminder if it's still showing - a task is due for its entire calendar day
- * regardless of windowStart/time (see CLAUDE.md), so once that day is essentially over there's
- * nothing left to remind about, whether the task was completed or not. Unlike a swipe (which only
- * reappears while awaitingCompletion is true - see DueReminderDismissReceiver), this
- * unconditionally clears the flag and cancels the notification, so a reminder never lingers,
- * pinned or otherwise, into the next day. A harmless no-op if nothing was showing.
+ * Fires a short buffer after each task's own due-by moment (see DueReminderScheduler.armExpiry)
+ * and auto-dismisses the reminder if it's still showing - an individual, per-task "expected end
+ * time," not a single clock time every task shares. Unlike a swipe (which only reappears while
+ * awaitingCompletion is true - see DueReminderDismissReceiver), this unconditionally clears the
+ * flag and cancels the notification, whether the task was ever completed or not, so a reminder
+ * never lingers past its own due-by moment. A harmless no-op if nothing was showing.
  */
 class DueReminderExpiryAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
