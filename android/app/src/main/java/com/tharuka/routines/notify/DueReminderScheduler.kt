@@ -15,6 +15,12 @@ import java.util.Calendar
 // GROUP_SUMMARY_ID_BASE=700,000,000 in src/notifications.js) and the native
 // SUMMARY_NOTIFICATION_ID=800,000,001 also introduced by this migration - see CLAUDE.md.
 internal const val DUE_REMINDER_ID_BASE = 600_000_000
+// A PendingIntent requestCode namespace, not a notification id - the window-start alarm and the
+// due-time alarm both eventually post to the *same* notification id (dueReminderNotificationId),
+// but need distinct AlarmManager PendingIntents to coexist as two separate armed alarms. Sits in
+// the gap between DUE_REMINDER_ID_BASE (600M) and GROUP_SUMMARY_ID_BASE (700M) - see CLAUDE.md's
+// notification-id-ranges list, which this must stay disjoint from too.
+internal const val WINDOW_START_ALARM_ID_BASE = 620_000_000
 internal const val EXTRA_TASK_ID = "taskId"
 
 internal fun dueReminderNotificationId(taskId: String): Int = DUE_REMINDER_ID_BASE + hashToInt(taskId)
@@ -47,12 +53,14 @@ object DueReminderScheduler {
      * DueReminderEntry.
      */
     fun schedule(context: Context, entry: DueReminderEntry, isDoneToday: Boolean) {
-        val existing = DueReminderStore.read(context, entry.taskId)
-        // Content-only equality (ignoring awaitingCompletion, which is bookkeeping, not content)
-        // is what removes the need to ever destructively cancel+rearm on every resync - the exact
-        // bug catchUpDueReminderIfNeeded (formerly in src/notifications.js) was built to patch
-        // around for the old stock-plugin-backed reminder.
-        val contentUnchanged = existing?.copy(awaitingCompletion = false) == entry.copy(awaitingCompletion = false)
+        val incoming = entry.copy(doneToday = isDoneToday)
+        val existing = DueReminderStore.read(context, incoming.taskId)
+        // Content-only equality (ignoring awaitingCompletion/doneToday, both bookkeeping, not
+        // content) is what removes the need to ever destructively cancel+rearm on every resync -
+        // the exact bug catchUpDueReminderIfNeeded (formerly in src/notifications.js) was built to
+        // patch around for the old stock-plugin-backed reminder.
+        val contentUnchanged = existing?.copy(awaitingCompletion = false, doneToday = false) ==
+            incoming.copy(awaitingCompletion = false, doneToday = false)
 
         val calendar = Calendar.getInstance()
         // Calendar.DAY_OF_WEEK is 1=Sunday..7=Saturday; isOverdueToday/computeNextOccurrenceDaysFromNow
@@ -63,19 +71,26 @@ object DueReminderScheduler {
         // A skip date means this week's occurrence was moved elsewhere (task_reschedules) - the
         // task genuinely isn't due today, so there's nothing to catch up on even if the
         // day-of-week/time math alone would otherwise call it overdue.
-        val skippedToday = entry.skipDates.contains(todayDateKey())
+        val skippedToday = incoming.skipDates.contains(todayDateKey())
         val overdueToday = !isDoneToday && !skippedToday &&
-            isOverdueToday(entry.days, entry.hour, entry.minute, todayWeekday, nowHour, nowMinute)
+            isOverdueToday(incoming.days, incoming.hour, incoming.minute, todayWeekday, nowHour, nowMinute)
         val alreadyCaughtUp = contentUnchanged && existing?.awaitingCompletion == true
 
         if (contentUnchanged && !(overdueToday && !alreadyCaughtUp)) {
-            // Pure resync: nothing about the reminder's content changed and there's nothing new
-            // to catch up on - leave the existing alarm/notification exactly as they are.
+            // Pure resync: nothing about the reminder's real content changed and there's nothing
+            // new to catch up on - leave the existing alarm/notification exactly as they are.
+            // doneToday is bookkeeping-only, but still needs to stay fresh even on this fast path -
+            // DueReminderAlarmReceiver/WindowStartAlarmReceiver read it later and can't compute
+            // isTaskDoneToday themselves, so a stale value here would let an already-completed
+            // task's alarm post/re-alert anyway once it fires.
+            if (existing != null && existing.doneToday != isDoneToday) {
+                DueReminderStore.save(context, existing.copy(doneToday = isDoneToday))
+            }
             return
         }
 
         val awaitingCompletion = overdueToday || (contentUnchanged && existing?.awaitingCompletion == true)
-        DueReminderStore.save(context, entry.copy(awaitingCompletion = awaitingCompletion))
+        DueReminderStore.save(context, incoming.copy(awaitingCompletion = awaitingCompletion))
 
         if (overdueToday && !alreadyCaughtUp) {
             // The reminder should already be showing (due today, not done) but isn't going to
@@ -84,11 +99,12 @@ object DueReminderScheduler {
             // brand-new or just-edited overdue task - or one whose alarm silently missed its
             // moment (doze, device off) - would stay silent until its next natural occurrence,
             // possibly a full week away.
-            val notification = buildDueReminderNotification(context, entry)
-            NotificationManagerCompat.from(context).notify(dueReminderNotificationId(entry.taskId), notification)
+            val notification = buildDueReminderNotification(context, incoming)
+            NotificationManagerCompat.from(context).notify(dueReminderNotificationId(incoming.taskId), notification)
         }
         if (!contentUnchanged) {
-            arm(context, entry)
+            arm(context, incoming)
+            armWindowStart(context, incoming)
         }
     }
 
@@ -96,6 +112,68 @@ object DueReminderScheduler {
         DueReminderStore.clear(context, taskId)
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         alarmManager.cancel(pendingIntent(context, taskId))
+        cancelWindowStart(context, taskId)
+    }
+
+    /**
+     * Arms (or, if the task has no real windowStart, cancels) a proactive, silent post of the
+     * same due-reminder notification at task.windowStart - showing live status throughout a
+     * task's "active window," not just from its due-by time onward. A completely separate armed
+     * alarm from arm()/the due-time alarm (see WINDOW_START_ALARM_ID_BASE), even though both
+     * eventually post to the same notification id - the due-time alarm firing later still
+     * re-alerts normally, since actually becoming due is a real, attention-worthy moment.
+     */
+    internal fun armWindowStart(context: Context, entry: DueReminderEntry) {
+        val hour = entry.windowStartHour
+        if (hour == null) {
+            cancelWindowStart(context, entry.taskId)
+            return
+        }
+        val minute = entry.windowStartMinute ?: 0
+
+        val calendar = Calendar.getInstance()
+        val todayWeekday = calendar.get(Calendar.DAY_OF_WEEK) - 1
+        val nowHour = calendar.get(Calendar.HOUR_OF_DAY)
+        val nowMinute = calendar.get(Calendar.MINUTE)
+        val daysFromNow = computeNextOccurrenceDaysFromNow(
+            entry.days,
+            hour,
+            minute,
+            todayWeekday,
+            nowHour,
+            nowMinute,
+        ) ?: return
+
+        calendar.add(Calendar.DAY_OF_YEAR, daysFromNow)
+        calendar.set(Calendar.HOUR_OF_DAY, hour)
+        calendar.set(Calendar.MINUTE, minute)
+        calendar.set(Calendar.SECOND, 0)
+        calendar.set(Calendar.MILLISECOND, 0)
+
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val pending = windowStartPendingIntent(context, entry.taskId)
+        val canScheduleExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
+        if (canScheduleExact) {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pending)
+        } else {
+            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pending)
+        }
+    }
+
+    internal fun cancelWindowStart(context: Context, taskId: String) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        alarmManager.cancel(windowStartPendingIntent(context, taskId))
+    }
+
+    private fun windowStartPendingIntent(context: Context, taskId: String): PendingIntent {
+        val intent = Intent(context, WindowStartAlarmReceiver::class.java)
+        intent.putExtra(EXTRA_TASK_ID, taskId)
+        return PendingIntent.getBroadcast(
+            context,
+            WINDOW_START_ALARM_ID_BASE + hashToInt(taskId),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
     }
 
     internal fun arm(context: Context, entry: DueReminderEntry) {

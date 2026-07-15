@@ -45,6 +45,10 @@
             android:exported="false" />
 
         <receiver
+            android:name=".notify.WindowStartAlarmReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".notify.DueReminderDismissReceiver"
             android:exported="false" />
 

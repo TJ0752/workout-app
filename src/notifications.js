@@ -149,6 +149,13 @@ export async function scheduleTaskNotifications(task, routine, completions = {},
   const { title, body, group } = taskNotificationContent(task, routine, completions);
   const [hour, minute] = task.time.split(':').map(Number);
   const quickAddAmounts = task.completionType === 'quantity' ? quickAddAmountsFor(task) : [];
+  // A real (non-'00:00') windowStart gets its own proactive, silent native alarm
+  // (WindowStartAlarmReceiver.kt) showing live status from the start of the task's "active
+  // window," not just from its due-by time onward - null/null for the common case of a task
+  // that doesn't set one, so nothing changes for it (matches every other windowStart consumer's
+  // "no visible change" default).
+  const hasActiveWindow = task.windowStart && task.windowStart !== '00:00';
+  const [windowStartHour, windowStartMinute] = hasActiveWindow ? task.windowStart.split(':').map(Number) : [null, null];
 
   // The due-by reminder and its extra nudge times are both scheduled natively - one
   // self-rescheduling alarm per (task) for the due-by moment (see nativeScheduleDueReminder)
@@ -191,10 +198,14 @@ export async function scheduleTaskNotifications(task, routine, completions = {},
     // Lets DueReminderScheduler catch up immediately on an already-overdue, not-yet-done task
     // instead of waiting for its next natural occurrence (which may be a week away) - see
     // DueReminderScheduler.schedule's isDoneToday param for why this can't be computed natively.
+    // Also persisted into DueReminderEntry.doneToday so a *later* native alarm fire (which can't
+    // compute this itself) knows not to post/re-alert for an already-completed task.
     isDoneToday: isTaskDoneToday(task, completions),
     // Dates this recurring alarm must NOT visibly post/re-alert for, even though they match
     // task.days - this week's occurrence was moved elsewhere (see DueReminderAlarmReceiver.kt).
     skipDates: reschedules.map((r) => r.originalDate),
+    windowStartHour,
+    windowStartMinute,
   });
 
   // Rebuilt fresh from the task's current reschedules on every sync, not diffed against what

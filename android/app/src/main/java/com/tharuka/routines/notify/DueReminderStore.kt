@@ -21,12 +21,25 @@ data class DueReminderEntry(
     // DueReminderAlarmReceiver.kt/RescheduleReminderScheduler.kt). Empty for the common case of a
     // task with no active reschedules.
     val skipDates: List<String> = emptyList(),
+    // Non-null only for a task with a real (non-'00:00') task.windowStart - see
+    // DueReminderScheduler.armWindowStart/WindowStartAlarmReceiver. Both null means "no separate
+    // active-window post," the pre-existing behavior for every task that doesn't set one.
+    val windowStartHour: Int? = null,
+    val windowStartMinute: Int? = null,
+    // Bookkeeping, not content (same treatment as awaitingCompletion, excluded from
+    // DueReminderScheduler.schedule's content-equality check) - lets DueReminderAlarmReceiver/
+    // WindowStartAlarmReceiver, which can't compute isTaskDoneToday themselves (native must never
+    // read the app's SQLite DB), skip posting/re-alerting for a task that's already done today.
+    val doneToday: Boolean = false,
 )
 
 private const val PREFS_NAME = "native_notifications_due_reminders"
 
 private fun JSONObject.optStringOrNull(name: String): String? =
     if (has(name) && !isNull(name)) getString(name) else null
+
+private fun JSONObject.optIntOrNull(name: String): Int? =
+    if (has(name) && !isNull(name)) getInt(name) else null
 
 /**
  * One persisted entry per task, keyed by taskId - the source of truth for DueReminderScheduler,
@@ -51,6 +64,9 @@ object DueReminderStore {
         json.put("quickAddAmounts", JSONArray(entry.quickAddAmounts))
         json.put("awaitingCompletion", entry.awaitingCompletion)
         json.put("skipDates", JSONArray(entry.skipDates))
+        json.put("windowStartHour", entry.windowStartHour)
+        json.put("windowStartMinute", entry.windowStartMinute)
+        json.put("doneToday", entry.doneToday)
         prefs(context).edit().putString(entry.taskId, json.toString()).apply()
     }
 
@@ -94,6 +110,9 @@ object DueReminderStore {
                 quickAddAmounts = amountsList,
                 awaitingCompletion = json.optBoolean("awaitingCompletion", false),
                 skipDates = skipDatesList,
+                windowStartHour = json.optIntOrNull("windowStartHour"),
+                windowStartMinute = json.optIntOrNull("windowStartMinute"),
+                doneToday = json.optBoolean("doneToday", false),
             )
         } catch (e: org.json.JSONException) {
             null

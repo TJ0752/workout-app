@@ -127,6 +127,8 @@ class NativeNotificationsPlugin : Plugin() {
             completionType = call.getString("completionType") ?: "boolean",
             quickAddAmounts = quickAddAmounts,
             skipDates = skipDates,
+            windowStartHour = call.getInt("windowStartHour"),
+            windowStartMinute = call.getInt("windowStartMinute"),
         )
         val isDoneToday = call.getBoolean("isDoneToday", false) ?: false
         DueReminderScheduler.schedule(context, entry, isDoneToday)
@@ -145,9 +147,16 @@ class NativeNotificationsPlugin : Plugin() {
     }
 
     /**
-     * Called once a task is marked done, so its due-by reminder actually goes away instead of
-     * reappearing on the next swipe - clears awaitingCompletion (the flag
-     * DueReminderDismissReceiver checks) and cancels whatever's currently shown.
+     * Called once a task is marked done. Clears awaitingCompletion (the flag
+     * DueReminderDismissReceiver checks) so a swipe no longer reappears it - but if the reminder
+     * was already visibly showing (awaitingCompletion was true - it had fired at least once
+     * today, via the due-time alarm, a windowStart post, or overdue catch-up), it's rebuilt as a
+     * plain, silent, swipeable "final state" notification instead of being cancelled outright, so
+     * the user can still glance at the value they just logged (see buildDueReminderNotification's
+     * `completed` mode). A task completed well before its reminder ever appeared (the common
+     * case for most completions) still just no-ops via cancel(), matching the old behavior - this
+     * is deliberately scoped to "the notification you were just looking at," not "every
+     * completion anywhere spawns a new notification."
      */
     @PluginMethod
     fun dismissDueReminderToday(call: PluginCall) {
@@ -156,8 +165,15 @@ class NativeNotificationsPlugin : Plugin() {
             call.reject("taskId is required")
             return
         }
+        val entry = DueReminderStore.read(context, taskId)
+        val wasShowing = entry?.awaitingCompletion == true
         DueReminderStore.setAwaitingCompletion(context, taskId, false)
-        NotificationManagerCompat.from(context).cancel(dueReminderNotificationId(taskId))
+        if (wasShowing && entry != null) {
+            val notification = buildDueReminderNotification(context, entry, silent = true, completed = true)
+            NotificationManagerCompat.from(context).notify(dueReminderNotificationId(taskId), notification)
+        } else {
+            NotificationManagerCompat.from(context).cancel(dueReminderNotificationId(taskId))
+        }
         call.resolve()
     }
 

@@ -48,13 +48,22 @@ class DueReminderActionReceiver : BroadcastReceiver() {
 /**
  * If the app process is alive (DueReminderBridge.onAction wired by
  * NativeNotificationsPlugin.load()), dispatch directly - no need to touch the Activity at
- * all. If the process is dead, relaunch MainActivity carrying the action as plain typed
- * intent extras (not a JSON string - simpler and avoids a round-trip through org.json for
+ * all; the app stays exactly where it was (background or whatever screen is open), the same
+ * as it always has. If the process is dead, relaunch MainActivity carrying the action as plain
+ * typed intent extras (not a JSON string - simpler and avoids a round-trip through org.json for
  * this one hop); NativeNotificationsPlugin.load() picks them up from the launch intent once
  * the bridge is ready, the same moment it would normally happen anyway. This is an accepted
  * v1 tradeoff: unlike the stock plugin's headless action handling, a cold-start tap visibly
  * brings the app forward - matches what already happens when tapping the notification body
  * itself, not a new class of behavior.
+ *
+ * Also carries the same EXTRA_OPEN_TASK_ID/EXTRA_OPEN_ROUTINE_ID extras a notification-body tap
+ * already uses (see NotificationTapIntent.kt), read by the exact same existing code in
+ * NativeNotificationsPlugin.load() - so a cold-start quick-add doesn't just bring the app
+ * forward to whatever screen it last had open, it lands on Today scrolled to and highlighting
+ * the task that was just updated, matching what a body tap already does. Only applies to the
+ * cold-start path - a warm-process quick-add deliberately still doesn't interrupt whatever else
+ * is on screen (the app never comes forward at all in that case).
  *
  * Top-level (not a method on DueReminderActionReceiver) so ExtraReminderActionReceiver's
  * Mark-done/+N handling can reuse it exactly - JS's "dueReminderAction" event handler
@@ -66,10 +75,13 @@ internal fun dispatchDueReminderAction(context: Context, taskId: String, actionI
         handler.invoke(buildDueReminderActionData(taskId, actionId, amount))
         return
     }
+    val routineId = DueReminderStore.read(context, taskId)?.routineId
     val relaunch = Intent(context, MainActivity::class.java)
     relaunch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     relaunch.putExtra(EXTRA_PENDING_TASK_ID, taskId)
     relaunch.putExtra(EXTRA_PENDING_ACTION_ID, actionId)
     if (amount != null) relaunch.putExtra(EXTRA_PENDING_AMOUNT, amount)
+    relaunch.putExtra(EXTRA_OPEN_TASK_ID, taskId)
+    if (routineId != null) relaunch.putExtra(EXTRA_OPEN_ROUTINE_ID, routineId)
     context.startActivity(relaunch)
 }

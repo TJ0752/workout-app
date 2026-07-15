@@ -959,6 +959,71 @@ start opening a *different* task the moment the second is built.
   a temporary `.today-item-focused` outline (`App.css`) before calling `onFocusHandled` to clear
   the state.
 
+**Part F — active-window live status, cold-start quick-add focus, and a "still visible, now
+dismissable" completed state.** Three usability additions on top of the fully-native design
+above, all direct product requests rather than bugs:
+
+- **Live status throughout `task.windowStart`, not just from the due-by moment onward.** Before
+  this, the due reminder only ever appeared at/after `task.time` (or via overdue catch-up) — a
+  task with a real `windowStart` (e.g. "current" from 6am, due at 8pm) showed nothing during that
+  whole window even though the app's own Today screen already treated it as "current." A new
+  `WindowStartAlarmReceiver` mirrors `DueReminderAlarmReceiver` almost exactly (same
+  `computeNextOccurrenceDaysFromNow` arithmetic, now armed via `DueReminderScheduler.
+  armWindowStart`/`cancelWindowStart` against a distinct `WINDOW_START_ALARM_ID_BASE` PendingIntent
+  namespace since it's a second, independently-armed alarm that happens to post to the *same*
+  notification id as the due-time alarm) but posts `silent = true` (`buildDueReminderNotification`'s
+  new param, `NotificationCompat.setSilent`) — an unobtrusive appearance, not an alert, since
+  nothing is actually *due* yet. `windowStartHour`/`windowStartMinute` on `DueReminderEntry` are
+  both `null` for the common case of a task that doesn't set a custom `windowStart` (`'00:00'`),
+  so this is a no-op addition for every pre-existing task. `notifications.js`'s
+  `scheduleTaskNotifications` only passes non-null values when `task.windowStart !== '00:00'`.
+- **A cold-start quick-add now lands you on the task, not just "the app."** `DueReminderAction
+  Receiver`'s dead-process relaunch path already brought `MainActivity` forward (see Part B above)
+  but carried none of the deep-link extras a body-tap uses, so it opened to whatever screen was
+  last showing with nothing scrolled-to or highlighted. `dispatchDueReminderAction`'s relaunch
+  `Intent` now also carries `EXTRA_OPEN_TASK_ID`/`EXTRA_OPEN_ROUTINE_ID` (`NotificationTapIntent.kt`'s
+  existing constants, `routineId` looked up via `DueReminderStore.read(taskId)`), which
+  `NativeNotificationsPlugin.load()`'s *already-existing* launch-intent-extras check picks up for
+  free and fires the same `notificationTapped` event a body tap does — no plugin changes needed,
+  just the extra data on the same Intent. Deliberately scoped to the cold-start path only: a
+  warm-process quick-add still doesn't bring the app forward at all (untouched), so it doesn't
+  interrupt whatever else is on screen the way this change would if applied there too.
+- **A completed task's reminder now goes to a plain, dismissable "final state" instead of
+  vanishing outright — but only if it was actually showing.** `dismissDueReminderToday`
+  (`NativeNotificationsPlugin`) used to unconditionally `cancel()` the notification the moment a
+  task was marked done. It now checks whether the entry's `awaitingCompletion` was `true` (i.e.
+  the reminder had genuinely fired at least once today — due time, a windowStart post, or overdue
+  catch-up) before deciding: if so, it reposts via `buildDueReminderNotification(..., silent =
+  true, completed = true)` — no action buttons (nothing left to do), `setOngoing(false)` +
+  `setAutoCancel(true)` (a plain swipe or tap dismisses it for good), and no delete-intent at all
+  (no reappear-on-swipe, unlike the pending state). This lets a quick-add-from-notification flow
+  end with the final logged value still visible for a glance, rather than the notification just
+  disappearing the instant the target is hit. A task completed well before its reminder ever
+  appeared (the ordinary case for most completions, logged from the Today screen hours ahead of
+  the due time) still just silently `cancel()`s exactly as before — this is deliberately "the
+  notification you were just looking at gets a final state," not "every completion anywhere
+  spawns a new notification."
+- **A real latent bug found while building this, fixed as a natural side effect of the above.**
+  Neither `DueReminderAlarmReceiver` nor `ExtraReminderAlarmReceiver` had any way to know a task
+  was already done before posting/re-alerting — `isTaskDoneToday` is only ever computed JS-side
+  (native must never read the app's SQLite DB) and was never persisted for a later alarm fire to
+  check. In practice: completing a quantity task at, say, 6am for one due at 8pm meant the 8pm
+  alarm still fired and re-posted/re-alerted the reminder that evening, and any extra-reminder
+  nudge in between would have re-alerted it too. Fixed by adding `doneToday` to `DueReminderEntry`
+  — bookkeeping, not content (excluded from `schedule()`'s content-equality check exactly like
+  `awaitingCompletion` already was), refreshed on *every* `schedule()` call including the
+  no-op-content fast path (a boolean task's title/body don't change on completion the way a
+  quantity task's live-progress body does, so `doneToday` needed its own explicit freshness
+  guarantee independent of whether anything else changed) — both alarm receivers now check
+  `!entry.doneToday` before posting/re-alerting, still self-rescheduling next week's occurrence
+  regardless, the same "don't disturb the recurring schedule, only suppress this one visible
+  post" pattern `skipDates` already established.
+- Covered by `src/__tests__/notifications.test.js`'s existing `scheduleTaskNotifications` payload
+  assertions (a task with no custom `windowStart` passes `windowStartHour`/`windowStartMinute` as
+  `null`; a task with a real one gets the parsed hour/minute) — the native alarm-firing/repost
+  behavior itself can only be proven on a real device or the `android-emulator-verify.yml` harness,
+  the same caveat every other native-only addition in this section carries.
+
 ### Persistent background-sync foreground service (`BackgroundSyncService.kt`)
 
 None of the computed notifications above (summary, streak-risk, digests) can be freshly computed

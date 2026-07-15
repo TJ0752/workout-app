@@ -25,9 +25,10 @@ import androidx.core.app.NotificationManagerCompat
  * violated.
  *
  * If today is one of the due reminder's skipDates (this week's occurrence was moved elsewhere
- * via task_reschedules), suppressed entirely rather than falling back to the dedicated
- * notification - a nudge toward a task that isn't due today would be actively wrong, not just
- * unnecessary.
+ * via task_reschedules), or the task is already doneToday (see DueReminderScheduler.schedule -
+ * native can't compute isTaskDoneToday itself), suppressed entirely rather than falling back to
+ * the dedicated notification - a nudge toward a task that isn't due, or is already done, today
+ * would be actively wrong, not just unnecessary.
  */
 class ExtraReminderAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -38,7 +39,8 @@ class ExtraReminderAlarmReceiver : BroadcastReceiver() {
 
         val dueEntry = DueReminderStore.read(context, taskId)
         val skippedToday = dueEntry?.skipDates?.contains(todayDateKey()) == true
-        if (dueEntry != null && !skippedToday) {
+        val doneToday = dueEntry?.doneToday == true
+        if (dueEntry != null && !skippedToday && !doneToday) {
             DueReminderStore.setAwaitingCompletion(context, taskId, true)
             val notification = buildDueReminderNotification(context, dueEntry.copy(awaitingCompletion = true))
             NotificationManagerCompat.from(context).notify(dueReminderNotificationId(taskId), notification)

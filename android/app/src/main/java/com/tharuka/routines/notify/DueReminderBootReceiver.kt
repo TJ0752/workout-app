@@ -16,6 +16,7 @@ class DueReminderBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         for (entry in DueReminderStore.readAll(context)) {
             DueReminderScheduler.arm(context, entry)
+            DueReminderScheduler.armWindowStart(context, entry)
         }
     }
 }

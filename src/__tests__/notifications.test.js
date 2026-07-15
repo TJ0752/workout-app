@@ -200,6 +200,21 @@ describe('native due-by reminder', () => {
     });
     // Single-task routine - no group tag needed.
     expect(entry.group).toBeUndefined();
+    // No custom windowStart ('00:00', the default) - no separate active-window alarm.
+    expect(entry.windowStartHour).toBeNull();
+    expect(entry.windowStartMinute).toBeNull();
+  });
+
+  it('passes a parsed windowStartHour/Minute for a task with a real active window', async () => {
+    const windowTask = task({ id: 'window-task', windowStart: '06:30' });
+    const routine = { id: 'routine-window', title: 'Morning', tasks: [windowTask], active: true, notes: '' };
+
+    await scheduleTaskNotifications(windowTask, routine);
+
+    expect(calls.dueReminderScheduled[0]).toMatchObject({
+      windowStartHour: 6,
+      windowStartMinute: 30,
+    });
   });
 
   it('schedules the due-by reminder natively with quickAddAmounts for a quantity task', async () => {

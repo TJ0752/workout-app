@@ -15,15 +15,17 @@ import androidx.core.app.NotificationManagerCompat
  * chain instead.
  *
  * If today is one of entry.skipDates (this week's occurrence was moved elsewhere via
- * task_reschedules), the alarm still fires and still re-arms next week's occurrence as normal,
- * but nothing is posted/re-alerted - the task genuinely isn't due today.
+ * task_reschedules), or the task is already doneToday (see DueReminderScheduler.schedule - native
+ * can't compute isTaskDoneToday itself, so this reads the last value JS persisted), the alarm
+ * still fires and still re-arms next week's occurrence as normal, but nothing is posted/
+ * re-alerted - the task genuinely isn't due (or already handled) today.
  * RescheduleReminderScheduler owns the actual reminder for wherever this occurrence moved to.
  */
 class DueReminderAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val taskId = intent.getStringExtra(EXTRA_TASK_ID) ?: return
         val entry = DueReminderStore.read(context, taskId) ?: return
-        if (!entry.skipDates.contains(todayDateKey())) {
+        if (!entry.doneToday && !entry.skipDates.contains(todayDateKey())) {
             DueReminderStore.setAwaitingCompletion(context, taskId, true)
             val notification = buildDueReminderNotification(context, entry)
             NotificationManagerCompat.from(context).notify(dueReminderNotificationId(taskId), notification)

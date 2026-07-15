@@ -16,41 +16,60 @@ internal const val ACTION_SNOOZE = "com.tharuka.routines.notify.action.SNOOZE"
 internal const val EXTRA_AMOUNT = "amount"
 
 /**
- * Shared by DueReminderAlarmReceiver (the normal fire path) and DueReminderDismissReceiver (the
- * repost-on-swipe path, next stage) so both always build an identical notification. No more
+ * Shared by DueReminderAlarmReceiver (the normal fire path), WindowStartAlarmReceiver (the
+ * proactive active-window path), and DueReminderDismissReceiver (the repost-on-swipe path) so
+ * every one of them always builds an identical notification for a given entry/mode. No more
  * registered-actionTypeId indirection needed here (unlike @capacitor/local-notifications' action
  * model) - action PendingIntents are built directly per-notification since this code owns the
  * whole pipeline.
+ *
+ * `silent` (setSilent) suppresses sound/vibration/lights for this one post - used for the
+ * windowStart proactive post and the "just completed" repost, neither of which should demand
+ * attention the way an actual due-by or extra-reminder alert does.
+ *
+ * `completed` switches to a plain, swipeable "final state" notification once a task is marked
+ * done while its reminder is already showing: no action buttons (nothing left to do), not
+ * `ongoing` (so a plain swipe dismisses it for good), and no delete-intent (no reappear-on-swipe -
+ * see NativeNotificationsPlugin.dismissDueReminderToday).
  */
-internal fun buildDueReminderNotification(context: Context, entry: DueReminderEntry): Notification {
+internal fun buildDueReminderNotification(
+    context: Context,
+    entry: DueReminderEntry,
+    silent: Boolean = false,
+    completed: Boolean = false,
+): Notification {
     val notificationId = dueReminderNotificationId(entry.taskId)
-    val deleteIntent = Intent(context, DueReminderDismissReceiver::class.java)
-    deleteIntent.putExtra(EXTRA_TASK_ID, entry.taskId)
-    val deletePendingIntent = PendingIntent.getBroadcast(
-        context,
-        notificationId,
-        deleteIntent,
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-    )
 
     val builder = NotificationCompat.Builder(context, DUE_REMINDER_CHANNEL_ID)
         .setSmallIcon(android.R.drawable.ic_menu_recent_history)
         .setContentTitle(entry.title)
         .setContentText(entry.body)
-        .setOngoing(true)
-        .setAutoCancel(false)
-        .setDeleteIntent(deletePendingIntent)
+        .setOngoing(!completed)
+        .setAutoCancel(completed)
+        .setSilent(silent)
         .setGroup(APP_GROUP_KEY)
         .setContentIntent(notificationTapPendingIntent(context, notificationId, entry.taskId, entry.routineId))
 
-    if (entry.completionType == "quantity") {
-        for (amount in entry.quickAddAmounts) {
-            builder.addAction(0, "+$amount", actionPendingIntent(context, entry.taskId, notificationId, ACTION_ADD_QUANTITY, amount))
+    if (!completed) {
+        val deleteIntent = Intent(context, DueReminderDismissReceiver::class.java)
+        deleteIntent.putExtra(EXTRA_TASK_ID, entry.taskId)
+        val deletePendingIntent = PendingIntent.getBroadcast(
+            context,
+            notificationId,
+            deleteIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        builder.setDeleteIntent(deletePendingIntent)
+
+        if (entry.completionType == "quantity") {
+            for (amount in entry.quickAddAmounts) {
+                builder.addAction(0, "+$amount", actionPendingIntent(context, entry.taskId, notificationId, ACTION_ADD_QUANTITY, amount))
+            }
+        } else {
+            builder.addAction(0, "Mark done", actionPendingIntent(context, entry.taskId, notificationId, ACTION_MARK_DONE, null))
         }
-    } else {
-        builder.addAction(0, "Mark done", actionPendingIntent(context, entry.taskId, notificationId, ACTION_MARK_DONE, null))
+        builder.addAction(0, "Snooze 15m", actionPendingIntent(context, entry.taskId, notificationId, ACTION_SNOOZE, null))
     }
-    builder.addAction(0, "Snooze 15m", actionPendingIntent(context, entry.taskId, notificationId, ACTION_SNOOZE, null))
 
     return builder.build()
 }
