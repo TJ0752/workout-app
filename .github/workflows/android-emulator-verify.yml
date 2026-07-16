@@ -66,11 +66,25 @@ jobs:
           # scripts still using `am broadcast` (verify-daily-digest.mjs, verify-background-sync.mjs,
           # verify-group-summary.mjs) are known-affected and pending the same rework.
           #
-          # TEMPORARY: only running due-reminder + extra-reminder below while validating the new
-          # technique - restore the other 4 scripts once confirmed, then rework them the same way.
+          # TEMPORARY: only running due-reminder + extra-reminder + notification-lifecycle below
+          # while validating the new technique - restore the other 4 scripts once confirmed, then
+          # rework them the same way.
           script: |
             adb install -r android/app/build/outputs/apk/prod/debug/app-prod-debug.apk
             adb shell am start -n com.tharuka.routines/.MainActivity
             node scripts/verify-due-reminder.mjs
             adb shell am start -n com.tharuka.routines/.MainActivity
             node scripts/verify-extra-reminder.mjs
+            adb shell am start -n com.tharuka.routines/.MainActivity
+            node scripts/verify-notification-lifecycle.mjs
+
+      # Real PNGs off the actual device screen (see screenshotShade() in the verify scripts) -
+      # not just parsed dumpsys/uiautomator text, so a failure (or a routine review) can be
+      # inspected visually after the fact, not just read as pass/fail.
+      - name: Upload notification screenshots
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: notification-screenshots
+          path: screenshots/
+          if-no-files-found: warn
