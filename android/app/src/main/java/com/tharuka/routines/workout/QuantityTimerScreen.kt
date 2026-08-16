@@ -34,6 +34,7 @@ fun QuantityTimerScreen(
     taskTitle: String,
     targetSeconds: Int,
     initialSeconds: Int?,
+    preStartCountdownSeconds: Int = 5,
     onLog: (Int) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -54,7 +55,12 @@ fun QuantityTimerScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            DurationTimer(targetSeconds = targetSeconds, initialSeconds = initialSeconds, onLog = onLog)
+            DurationTimer(
+                targetSeconds = targetSeconds,
+                initialSeconds = initialSeconds,
+                preStartCountdownSeconds = preStartCountdownSeconds,
+                onLog = onLog,
+            )
         }
     }
 }

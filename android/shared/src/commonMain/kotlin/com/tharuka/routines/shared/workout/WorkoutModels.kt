@@ -22,7 +22,13 @@ data class Exercise(
     // src/utils/supersets.js's identical field on the JS Exercise shape exactly; null/absent
     // means "not part of a superset," same as every exercise before this field existed.
     // Trailing, with a default, for the same WorkoutLogicTest positional-constructor reason.
-    val supersetGroupId: String? = null
+    val supersetGroupId: String? = null,
+    // Only meaningful when `unit == "seconds"` - a "get ready" lead-in before the real timer
+    // starts, carved out of the tail end of any preceding rest rather than adding extra time (see
+    // RestRing/DurationTimer in WorkoutSessionScreen.kt). Null defaults to 5 at the call site
+    // (matching the JS side's own `?? 5` fallback), 0 disables it. Trailing, with a default, for
+    // the same WorkoutLogicTest positional-constructor reason as the fields above.
+    val preStartCountdownSeconds: Int? = null
 )
 
 /** One task's exercises + full log history - the flattened shape getLastUsedWeight scans across

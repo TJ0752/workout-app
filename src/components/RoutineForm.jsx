@@ -32,6 +32,10 @@ function makeTask(days) {
     quickAdd: null,
     quantityMode: 'number',
     autoUpdateTarget: false,
+    // Only meaningful in timer mode (see the Input-as toggle below) - a "get ready" lead-in
+    // before the real timer starts, ending with a beep at the target moment. 5s default, 0
+    // disables it entirely. See DurationTimer.jsx.
+    preStartCountdownSeconds: 5,
     exercises: [],
     active: true,
     createdAt: new Date().toISOString(),
@@ -48,6 +52,11 @@ function makeExercise() {
     targetDurationSeconds: null,
     unit: 'reps',
     restSeconds: null,
+    // Only meaningful for a duration-unit exercise - a "get ready" lead-in before the real
+    // timer starts, ending with a beep at the target moment. 5s default, 0 disables it. When
+    // this exercise is preceded by rest, the countdown is carved out of the *tail end* of that
+    // rest period rather than adding extra time - see RestRing in WorkoutSessionView.jsx.
+    preStartCountdownSeconds: 5,
     // Contiguous exercises sharing this id form a superset - see utils/supersets.js. null/absent
     // means "not part of a superset," identical to how every exercise behaved before this field
     // existed, so no backfill was needed for pre-existing data.
@@ -492,6 +501,19 @@ function ExerciseListEditor({ task, onChange, exerciseNames }) {
               onChange={(e) => updateExercise(ex.id, { focusArea: e.target.value || null })}
             />
           </label>
+          <label>
+            Pre-start countdown, sec (0 to disable)
+            <input
+              type="number"
+              min="0"
+              value={ex.preStartCountdownSeconds ?? 5}
+              onChange={(e) =>
+                updateExercise(ex.id, {
+                  preStartCountdownSeconds: e.target.value === '' ? 0 : Number(e.target.value),
+                })
+              }
+            />
+          </label>
         </div>
       )}
       <div className="inline-fields">
@@ -717,6 +739,21 @@ function TaskFields({ task, onChange, showTitle, exerciseNames }) {
                 new best for next time. The field above is always editable by hand too - lower it
                 anytime (a bad session inflated it, you're deloading, etc.) and the next real best
                 will raise it again from there.
+              </p>
+              <label>
+                Pre-start countdown, sec (0 to disable)
+                <input
+                  type="number"
+                  min="0"
+                  value={task.preStartCountdownSeconds ?? 5}
+                  onChange={(e) =>
+                    onChange({ ...task, preStartCountdownSeconds: e.target.value === '' ? 0 : Number(e.target.value) })
+                  }
+                />
+              </label>
+              <p className="field-hint">
+                A "get ready" lead-in shown before the timer actually starts running, so you're
+                not caught off guard. Ends with a beep exactly when the real countdown begins.
               </p>
             </>
           ) : (

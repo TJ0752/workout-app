@@ -67,6 +67,7 @@ class WorkoutSessionActivity : ComponentActivity() {
         if (pureTimer) {
             val targetSeconds = payload?.optIntOrNull("targetSeconds") ?: 0
             val initialSeconds = payload?.optIntOrNull("initialSeconds")
+            val preStartCountdownSeconds = payload?.optIntOrNull("preStartCountdownSeconds") ?: 5
             setContent {
                 MaterialTheme(colorScheme = WorkoutColorScheme) {
                     Surface {
@@ -74,6 +75,7 @@ class WorkoutSessionActivity : ComponentActivity() {
                             taskTitle = taskTitle,
                             targetSeconds = targetSeconds,
                             initialSeconds = initialSeconds,
+                            preStartCountdownSeconds = preStartCountdownSeconds,
                             onLog = { seconds ->
                                 val event = JSObject()
                                 event.put("taskId", taskId)
@@ -211,6 +213,7 @@ class WorkoutSessionActivity : ComponentActivity() {
                     type = obj.optString("type", "weights"),
                     exerciseId = obj.optStringOrNull("exerciseId"),
                     supersetGroupId = obj.optStringOrNull("supersetGroupId"),
+                    preStartCountdownSeconds = obj.optIntOrNull("preStartCountdownSeconds"),
                 )
             )
         }

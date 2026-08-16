@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 
 const DB_NAME = 'routines';
-const DB_VERSION = 12;
+const DB_VERSION = 13;
 
 const sqlite = new SQLiteConnection(CapacitorSQLite);
 let dbInstance = null;
@@ -318,6 +318,20 @@ const MIGRATIONS = [
         ON task_reschedules(task_id, original_date);`,
     ],
   },
+  {
+    // A timer-mode quantity task (quantity_mode: 'timer', see toVersion:8) can now have its own
+    // "get ready" pre-start countdown before the real timer begins - a plain per-task Int,
+    // nullable (NULL means "use the app's built-in 5s default", matching every task that predates
+    // this field), 0 explicitly disables it. Mirrors the same field on a workout duration
+    // exercise (task.exercises[].preStartCountdownSeconds) - that one needs no migration at all,
+    // since exercises already live inside the task's JSON blob (see the Supersets/focusArea
+    // precedent in CLAUDE.md), unlike this task-level field which is a real typed column.
+    toVersion: 13,
+    statements: [
+      `ALTER TABLE tasks ADD COLUMN pre_start_countdown_seconds INTEGER;`,
+      `ALTER TABLE task_versions ADD COLUMN pre_start_countdown_seconds INTEGER;`,
+    ],
+  },
 ];
 
 /**
@@ -405,6 +419,15 @@ async function ensureTaskRescheduleNullable(db) {
     ON task_reschedules(task_id, original_date);`);
 }
 
+/** Same self-heal template again, for the toVersion:13 pre_start_countdown_seconds column. */
+async function ensurePreStartCountdownColumn(db) {
+  const info = await db.query(`PRAGMA table_info(tasks);`);
+  const hasColumn = (info.values || []).some((col) => col.name === 'pre_start_countdown_seconds');
+  if (hasColumn) return;
+  await db.run(`ALTER TABLE tasks ADD COLUMN pre_start_countdown_seconds INTEGER;`);
+  await db.run(`ALTER TABLE task_versions ADD COLUMN pre_start_countdown_seconds INTEGER;`);
+}
+
 async function openDatabase() {
   const isWeb = Capacitor.getPlatform() === 'web';
   if (isWeb) {
@@ -424,6 +447,7 @@ async function openDatabase() {
   await ensureTaskRescheduleSchema(db);
   await ensureExerciseCategoryColumn(db);
   await ensureTaskRescheduleNullable(db);
+  await ensurePreStartCountdownColumn(db);
   return db;
 }
 

@@ -22,43 +22,101 @@ const REST_RING_RADIUS = 70;
 const REST_RING_CIRCUMFERENCE = 2 * Math.PI * REST_RING_RADIUS;
 
 /**
- * A ring of light that smoothly depletes back to its starting point over the rest duration - a
- * genuine CSS transition (not a per-second JS-driven redraw, which would look like discrete
- * ticks rather than a smooth sweep), so this is deliberately decoupled from the numeric
- * `restRemaining` countdown ticking alongside it. Rendered fully "lit" (no stroke-dashoffset)
- * for exactly one frame, then transitioned to fully depleted over `totalSeconds` - the
- * two-frame trick CSS transitions need, since a property can't visibly transition from a value
- * it's *initially rendered at* in the same paint. `resetKey` forces the two-frame sequence to
- * replay for every new rest period, even back-to-back ones with an identical duration (a plain
- * `totalSeconds` dependency wouldn't change in that case, so the effect wouldn't rerun).
+ * One depleting-or-growing sweep, rendered fully "lit" at `startFraction` for exactly one frame
+ * then transitioned to `endFraction` over `seconds` - the two-frame trick CSS transitions need,
+ * since a property can't visibly transition from a value it's *initially rendered at* in the same
+ * paint. `resetKey` forces the two-frame sequence to replay for every new segment, even
+ * back-to-back ones with identical values (a plain dependency on the values themselves wouldn't
+ * change in that case, so the effect wouldn't rerun). Shared by RestRing's two phases below - the
+ * plain rest depletion (1 -> some fraction) and the red pre-start countdown (0 -> 1) are the exact
+ * same mechanic, just different endpoints/color.
  */
-function RestRing({ totalSeconds, resetKey }) {
-  const [depleted, setDepleted] = useState(false);
-  const [justFinished, setJustFinished] = useState(false);
+function RestRingSegment({ startFraction, endFraction, seconds, resetKey, red, blink, onComplete }) {
+  const [animated, setAnimated] = useState(false);
 
   useEffect(() => {
-    setDepleted(false);
-    setJustFinished(false);
-    const raf = requestAnimationFrame(() => setDepleted(true));
+    setAnimated(false);
+    const raf = requestAnimationFrame(() => setAnimated(true));
     return () => cancelAnimationFrame(raf);
   }, [resetKey]);
+
+  const offsetFor = (f) => REST_RING_CIRCUMFERENCE * (1 - Math.max(0, Math.min(1, f)));
 
   return (
     <svg className="workout-rest-ring-svg" viewBox="0 0 160 160">
       <circle className="workout-rest-ring-track" cx="80" cy="80" r={REST_RING_RADIUS} />
       <circle
-        className={`workout-rest-ring-fill ${justFinished ? 'workout-rest-ring-blink' : ''}`}
+        className={`workout-rest-ring-fill ${red ? 'workout-rest-ring-countdown' : ''} ${blink ? 'workout-rest-ring-blink' : ''}`}
         cx="80"
         cy="80"
         r={REST_RING_RADIUS}
         style={{
           strokeDasharray: REST_RING_CIRCUMFERENCE,
-          strokeDashoffset: depleted ? REST_RING_CIRCUMFERENCE : 0,
-          transition: depleted ? `stroke-dashoffset ${totalSeconds}s linear` : 'none',
+          strokeDashoffset: animated ? offsetFor(endFraction) : offsetFor(startFraction),
+          transition: animated ? `stroke-dashoffset ${seconds}s linear` : 'none',
         }}
-        onTransitionEnd={() => setJustFinished(true)}
+        onTransitionEnd={onComplete}
       />
     </svg>
+  );
+}
+
+/**
+ * A ring of light that smoothly depletes back to its starting point over the rest duration -
+ * deliberately decoupled from the numeric `restRemaining` countdown ticking alongside it (a
+ * genuine CSS transition, not a per-second JS-driven redraw, which would look like discrete ticks
+ * rather than a smooth sweep).
+ *
+ * `preStartCountdownSeconds` (0 disables this entirely, matching the original behavior byte for
+ * byte) carves the countdown out of the *tail end* of this same rest period rather than adding
+ * extra time on top: for the first `totalSeconds - preStartCountdownSeconds` seconds this depletes
+ * exactly as before (gold, 1 -> the fraction remaining at the handoff point), then switches to a
+ * fresh red sweep growing from empty back to full over the final `preStartCountdownSeconds`
+ * seconds - not a continuation of wherever the gold ring left off, a brand new lap - ending fully
+ * lit exactly as rest (and this countdown) end together. If the configured countdown is longer
+ * than the rest period itself, the entire rest period is the red countdown.
+ */
+function RestRing({ totalSeconds, resetKey, preStartCountdownSeconds = 0 }) {
+  const countdownSeconds = Math.min(Math.max(0, preStartCountdownSeconds || 0), totalSeconds);
+  const plainSeconds = totalSeconds - countdownSeconds;
+  const [phase, setPhase] = useState(plainSeconds > 0 ? 'plain' : 'countdown');
+  const [justFinished, setJustFinished] = useState(false);
+
+  useEffect(() => {
+    setPhase(plainSeconds > 0 ? 'plain' : 'countdown');
+    setJustFinished(false);
+    if (plainSeconds > 0 && countdownSeconds > 0) {
+      const timer = setTimeout(() => setPhase('countdown'), plainSeconds * 1000);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [resetKey, plainSeconds, countdownSeconds]);
+
+  const handoffFraction = totalSeconds > 0 ? countdownSeconds / totalSeconds : 0;
+
+  if (phase === 'countdown' && countdownSeconds > 0) {
+    return (
+      <RestRingSegment
+        resetKey={`${resetKey}-countdown`}
+        startFraction={0}
+        endFraction={1}
+        seconds={countdownSeconds}
+        red
+        blink={justFinished}
+        onComplete={() => setJustFinished(true)}
+      />
+    );
+  }
+
+  return (
+    <RestRingSegment
+      resetKey={`${resetKey}-plain`}
+      startFraction={1}
+      endFraction={countdownSeconds > 0 ? handoffFraction : 0}
+      seconds={countdownSeconds > 0 ? plainSeconds : totalSeconds}
+      blink={justFinished}
+      onComplete={countdownSeconds === 0 ? () => setJustFinished(true) : undefined}
+    />
   );
 }
 
@@ -70,6 +128,11 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
   const [finished, setFinished] = useState(findNextSupersetPosition(exercises, logsForDate) === null);
   const [resting, setResting] = useState(false);
   const [restRemaining, setRestRemaining] = useState(0);
+  // One-shot: true only for the exact (exerciseIndex, setIndex) that rest just handed off to,
+  // when its own pre-start countdown was already consumed out of the tail end of that rest
+  // period - see RestRing/DurationTimer's `autoStart`. Cleared immediately by DurationTimer's own
+  // onAutoStarted callback, so a later manual re-visit of the same set never re-triggers it.
+  const [autoStartFromRest, setAutoStartFromRest] = useState(false);
   // Live, upward-ticking total session time - counts from when this session screen was opened
   // (or last restarted), not a true cross-session "time spent on this workout ever" figure,
   // since nothing tracks that across separate app opens. Reset alongside every other piece of
@@ -150,12 +213,19 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
   useEffect(() => {
     if (!resting) return undefined;
     if (restRemaining <= 0) {
+      // `exercise` already points at the upcoming one throughout the resting state (see the
+      // restTotalSeconds capture comment above) - if it's duration-based, has a real countdown
+      // configured, and there was actual rest time for RestRing to have carved it out of, that
+      // countdown just finished as part of the rest sweep itself; the real timer should pick up
+      // right where it left off rather than asking for a second Start tap and a second countdown.
+      const upcomingCountdown = exercise?.unit === 'seconds' ? (exercise.preStartCountdownSeconds ?? 5) : 0;
+      setAutoStartFromRest(restTotalSeconds > 0 && upcomingCountdown > 0);
       setResting(false);
       return undefined;
     }
     const t = setTimeout(() => setRestRemaining((r) => r - 1), 1000);
     return () => clearTimeout(t);
-  }, [resting, restRemaining]);
+  }, [resting, restRemaining, exercise, restTotalSeconds]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -179,6 +249,7 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
     setSetIndex(0);
     setFinished(false);
     setResting(false);
+    setAutoStartFromRest(false);
     setSessionStartedAt(Date.now());
     setElapsedSeconds(0);
     setRingAnimKey((k) => k + 1);
@@ -189,6 +260,7 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
     setSetIndex(0);
     setFinished(false);
     setResting(false);
+    setAutoStartFromRest(false);
   };
 
   // Round-robins within a linked superset group (every member's set N before any member's set
@@ -330,7 +402,11 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
         <div className="workout-rest-screen">
           <span className="workout-rest-label">Rest</span>
           <div className="workout-rest-ring-wrap">
-            <RestRing totalSeconds={restTotalSeconds} resetKey={restAnimKey} />
+            <RestRing
+              totalSeconds={restTotalSeconds}
+              resetKey={restAnimKey}
+              preStartCountdownSeconds={exercise?.unit === 'seconds' ? exercise.preStartCountdownSeconds ?? 5 : 0}
+            />
             <span className="workout-rest-countdown">{restRemaining}s</span>
           </div>
           {/* markDone() already advances exerciseIndex/setIndex to the upcoming position before
@@ -341,7 +417,16 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
           <span className="workout-rest-next">
             Up next: <strong>{exercise.name}</strong> · Set {setIndex + 1} of {totalSets}
           </span>
-          <button type="button" className="workout-skip-rest-btn" onClick={() => setResting(false)}>
+          <button
+            type="button"
+            className="workout-skip-rest-btn"
+            onClick={() => {
+              // Skipping rest cuts the countdown short too - it never actually finished, so the
+              // real timer shouldn't auto-start as if it had (see autoStartFromRest above).
+              setAutoStartFromRest(false);
+              setResting(false);
+            }}
+          >
             Skip rest
           </button>
         </div>
@@ -374,6 +459,9 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
               key={`${exerciseIndex}-${setIndex}`}
               targetSeconds={Number(exercise.targetDurationSeconds) || 0}
               initialSeconds={loggedSet?.durationSeconds ?? null}
+              preStartCountdownSeconds={autoStartFromRest ? 0 : exercise.preStartCountdownSeconds ?? 5}
+              autoStart={autoStartFromRest}
+              onAutoStarted={() => setAutoStartFromRest(false)}
               onLog={markDoneWithDuration}
             />
           ) : (

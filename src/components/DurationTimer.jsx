@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { formatHms } from '../utils/tasks';
+import { playBeep } from '../utils/beep';
 
 export const RING_RADIUS = 80;
 export const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
@@ -25,6 +26,9 @@ export function MomentumRing({
   children,
   animateSeconds,
   animateKey = 0,
+  // Red instead of the normal accent fill - used for DurationTimer's pre-start countdown, so it
+  // reads as a distinct "get ready" moment rather than real progress.
+  danger = false,
 }) {
   const [animatedIn, setAnimatedIn] = useState(false);
 
@@ -58,7 +62,13 @@ export function MomentumRing({
       <span key={`pulse-${pulseKey}`} className="workout-ring-pulse" />
       <svg className="workout-ring-svg" viewBox="0 0 180 180">
         <circle className="workout-ring-track" cx="90" cy="90" r={RING_RADIUS} />
-        <circle className="workout-ring-fill" cx="90" cy="90" r={RING_RADIUS} style={ringStyle} />
+        <circle
+          className={`workout-ring-fill ${danger ? 'danger' : ''}`}
+          cx="90"
+          cy="90"
+          r={RING_RADIUS}
+          style={ringStyle}
+        />
       </svg>
       <span key={`center-${pulseKey}`} className="workout-ring-center">
         {children}
@@ -83,13 +93,38 @@ export function MomentumRing({
  * The ring fills smoothly (see MomentumRing's animateSeconds) for the entire running phase -
  * once elapsed reaches the target, the CSS transition has already finished on its own (same real
  * clock), so the ring simply stays full through overtime with no extra logic needed.
+ *
+ * `preStartCountdownSeconds` (default 5, 0 disables it) inserts a "get ready" lead-in before the
+ * real timer starts: tapping Start moves to a `countdown` phase first, showing a red arc growing
+ * clockwise from the top - the *same* animateSeconds fill mechanic the running ring already uses,
+ * just red and counting a fixed short window down to zero - and only once that completes does the
+ * real running phase (elapsed reset to 0, the actual clock) begin. A beep fires once, exactly when
+ * `elapsed` first reaches `targetSeconds` (the moment overtime begins), independent of the
+ * pre-start countdown.
+ *
+ * `autoStart` skips the idle "Ready/Start" screen entirely and begins the running phase the
+ * instant this mounts, with no countdown of its own - used by WorkoutSessionView when a duration
+ * exercise's countdown was already carved out of the tail end of the preceding rest period (see
+ * RestRing), so the real timer should pick up exactly where that countdown left off rather than
+ * asking for a second Start tap and a second countdown. `onAutoStarted` fires once, right after,
+ * so the parent can clear its own one-shot flag (this only ever applies to the exact position
+ * that just came out of a rest countdown, never a later manual re-visit of the same set).
  */
-export function DurationTimer({ targetSeconds, initialSeconds, onLog }) {
-  const [phase, setPhase] = useState('idle'); // 'idle' | 'running' | 'stopped'
+export function DurationTimer({
+  targetSeconds,
+  initialSeconds,
+  preStartCountdownSeconds = 5,
+  autoStart = false,
+  onAutoStarted,
+  onLog,
+}) {
+  const [phase, setPhase] = useState('idle'); // 'idle' | 'countdown' | 'running' | 'stopped'
   const [elapsed, setElapsed] = useState(0);
+  const [countdownRemaining, setCountdownRemaining] = useState(0);
   const [editing, setEditing] = useState(false);
   const [customValue, setCustomValue] = useState('');
   const [runId, setRunId] = useState(0);
+  const beepedRef = useRef(false);
 
   useEffect(() => {
     if (phase !== 'running') return undefined;
@@ -97,18 +132,59 @@ export function DurationTimer({ targetSeconds, initialSeconds, onLog }) {
     return () => clearInterval(t);
   }, [phase]);
 
+  // The pre-start lead-in's own numeric countdown (5, 4, 3, ...) - deliberately a separate,
+  // once-a-second JS tick decoupled from the ring's own smooth CSS sweep, the same relationship
+  // RestRing's remaining-seconds label already has with its own ring.
+  useEffect(() => {
+    if (phase !== 'countdown') return undefined;
+    if (countdownRemaining <= 0) {
+      setElapsed(0);
+      beepedRef.current = false;
+      setPhase('running');
+      return undefined;
+    }
+    const t = setTimeout(() => setCountdownRemaining((n) => n - 1), 1000);
+    return () => clearTimeout(t);
+  }, [phase, countdownRemaining]);
+
   const hasTarget = targetSeconds > 0;
   const overtime = hasTarget ? Math.max(0, elapsed - targetSeconds) : 0;
   const inOvertime = hasTarget && elapsed >= targetSeconds;
   const remaining = hasTarget ? Math.max(0, targetSeconds - elapsed) : elapsed;
-  const fraction = phase === 'idle' ? 0 : hasTarget ? Math.min(1, elapsed / targetSeconds) : 0;
+  const fraction = phase === 'running' && hasTarget ? Math.min(1, elapsed / targetSeconds) : 0;
 
-  const start = () => {
-    setElapsed(0);
+  // Fires exactly once, right as the target is first reached - not on every tick throughout
+  // overtime (inOvertime stays true the whole time).
+  useEffect(() => {
+    if (phase === 'running' && hasTarget && elapsed === targetSeconds && !beepedRef.current) {
+      beepedRef.current = true;
+      playBeep();
+    }
+  }, [phase, elapsed, hasTarget, targetSeconds]);
+
+  const start = (skipCountdown = false) => {
     setEditing(false);
-    setPhase('running');
     setRunId((n) => n + 1);
+    if (!skipCountdown && preStartCountdownSeconds > 0) {
+      setCountdownRemaining(preStartCountdownSeconds);
+      setPhase('countdown');
+    } else {
+      setElapsed(0);
+      beepedRef.current = false;
+      setPhase('running');
+    }
   };
+
+  // Mount-only, matching the "parent remounts via key" contract every other piece of this
+  // component's state already relies on - autoStart is a one-shot instruction for this exact
+  // mount, not something that should re-fire on a later re-render.
+  useEffect(() => {
+    if (autoStart) {
+      start(true);
+      onAutoStarted?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const stop = () => {
     setPhase('stopped');
@@ -157,7 +233,7 @@ export function DurationTimer({ targetSeconds, initialSeconds, onLog }) {
                 <button type="button" className="workout-duration-btn ghost" onClick={() => setEditing(true)}>
                   Edit custom time
                 </button>
-                <button type="button" className="workout-duration-btn ghost" onClick={start}>
+                <button type="button" className="workout-duration-btn ghost" onClick={() => start()}>
                   Start again
                 </button>
               </div>
@@ -173,26 +249,42 @@ export function DurationTimer({ targetSeconds, initialSeconds, onLog }) {
       <MomentumRing
         fraction={fraction}
         interactive={false}
-        hint="Duration timer"
-        animateSeconds={phase === 'running' && hasTarget ? targetSeconds : undefined}
+        hint={phase === 'countdown' ? 'Get ready' : 'Duration timer'}
+        animateSeconds={
+          phase === 'running' && hasTarget ? targetSeconds : phase === 'countdown' ? preStartCountdownSeconds : undefined
+        }
         animateKey={runId}
+        danger={phase === 'countdown'}
       >
-        <span className={`workout-ring-num ${inOvertime ? 'overtime' : ''}`}>
-          {phase === 'idle'
-            ? formatHms(initialSeconds ?? targetSeconds ?? 0)
-            : inOvertime
-              ? `+${formatHms(overtime)}`
-              : formatHms(remaining)}
-        </span>
-        <span className="workout-ring-hint">
-          {phase === 'idle' ? 'Ready' : inOvertime ? 'Overtime' : hasTarget ? 'Remaining' : 'Elapsed'}
-        </span>
+        {phase === 'countdown' ? (
+          <>
+            <span className="workout-ring-num countdown">{countdownRemaining}</span>
+            <span className="workout-ring-hint">Get ready</span>
+          </>
+        ) : (
+          <>
+            <span className={`workout-ring-num ${inOvertime ? 'overtime' : ''}`}>
+              {phase === 'idle'
+                ? formatHms(initialSeconds ?? targetSeconds ?? 0)
+                : inOvertime
+                  ? `+${formatHms(overtime)}`
+                  : formatHms(remaining)}
+            </span>
+            <span className="workout-ring-hint">
+              {phase === 'idle' ? 'Ready' : inOvertime ? 'Overtime' : hasTarget ? 'Remaining' : 'Elapsed'}
+            </span>
+          </>
+        )}
       </MomentumRing>
       {hasTarget && <div className="workout-duration-target">Target: {formatHms(targetSeconds)}</div>}
       <div className="workout-duration-timer">
         {phase === 'idle' ? (
-          <button type="button" className="workout-duration-btn primary" onClick={start}>
+          <button type="button" className="workout-duration-btn primary" onClick={() => start()}>
             Start
+          </button>
+        ) : phase === 'countdown' ? (
+          <button type="button" className="workout-duration-btn stop" onClick={() => setPhase('idle')}>
+            Cancel
           </button>
         ) : (
           <button type="button" className="workout-duration-btn stop" onClick={stop}>

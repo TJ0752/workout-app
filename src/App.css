@@ -2383,6 +2383,11 @@
   transition: stroke-dashoffset 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+/* DurationTimer's pre-start "get ready" countdown - a distinct red sweep, not real progress. */
+.workout-ring-fill.danger {
+  stroke: var(--bad);
+}
+
 .workout-ring-pulse {
   position: absolute;
   inset: 0;
@@ -2407,6 +2412,11 @@
   font-weight: 800;
   color: var(--text);
   line-height: 1;
+}
+
+.workout-ring-num.countdown {
+  color: var(--bad);
+  font-size: 3.2rem;
 }
 
 .workout-ring-of {
@@ -2588,6 +2598,12 @@
   stroke: var(--accent);
   stroke-width: 10;
   stroke-linecap: round;
+}
+
+/* The final seconds of rest, carved out as a "get ready" pre-start countdown for the upcoming
+   duration exercise - see RestRing in WorkoutSessionView.jsx. */
+.workout-rest-ring-fill.workout-rest-ring-countdown {
+  stroke: var(--bad);
 }
 
 .workout-rest-ring-blink {

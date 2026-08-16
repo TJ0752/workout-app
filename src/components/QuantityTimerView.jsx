@@ -20,7 +20,12 @@ export default function QuantityTimerView({ task, onLog, onClose }) {
         </button>
       </div>
       <div className="workout-set-panel">
-        <DurationTimer targetSeconds={Number(task.target) || 0} initialSeconds={null} onLog={onLog} />
+        <DurationTimer
+          targetSeconds={Number(task.target) || 0}
+          initialSeconds={null}
+          preStartCountdownSeconds={task.preStartCountdownSeconds ?? 5}
+          onLog={onLog}
+        />
       </div>
     </div>
   );

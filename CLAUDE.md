@@ -1634,6 +1634,87 @@ chrome around it, since `DurationTimer` never touched those fields to begin with
   `DurationTimer` changes described in "Live overtime timer for duration-based workout exercises"
   above — this feature shares the identical component, not a parallel implementation.
 
+### Pre-start countdown and target-reached beep (`DurationTimer.jsx`/`.kt`, `WorkoutSessionView.jsx`/`.kt`)
+
+Every use of `DurationTimer` — quantity-as-timer tasks and workout duration exercises alike, since
+both share the identical component — gained two related additions, each individually configurable
+per task/exercise in `RoutineForm` (a `preStartCountdownSeconds` field, default 5, 0 disables it;
+**not** a global app setting, a deliberate product decision so different tasks/exercises can want
+different lead-ins or none at all):
+
+- **A beep at the target moment.** Fires exactly once, the instant `elapsed` first reaches
+  `targetSeconds` (the same tick that flips the display into overtime) — not on every tick
+  throughout overtime. Web: a short synthesized tone via the Web Audio API (`utils/beep.js`,
+  `OscillatorNode` + a `GainNode` envelope, no bundled audio asset). Native: Android's built-in
+  `ToneGenerator` (`playBeep()` in `WorkoutSessionScreen.kt`, `TONE_PROP_BEEP`). Both are
+  deliberately best-effort — wrapped in try/catch, silently no-op on failure — since a missed beep
+  shouldn't break the timer itself; the ring/number already communicate the same moment.
+- **A "get ready" pre-start countdown before the real timer begins.** Tapping Start doesn't
+  immediately begin timing — it enters a `countdown` phase first: a red arc (`--bad`/`AppPalette.Bad`,
+  the same warm-terracotta token the design system already reserves for "something needs
+  attention," reused here rather than introducing a new color) grows clockwise from the ring's top,
+  using the *exact same* `animateSeconds` full-sweep mechanic the running phase's own fill already
+  uses (`MomentumRing`'s existing 0→1 linear tween, just red and for a short fixed window) — not a
+  new animation concept. A large countdown number (5, 4, 3, ...) ticks down once a second in the
+  ring's center, decoupled from the ring's own smooth sweep, the same relationship every other
+  ring/countdown-label pair in this app already has (`RestRing`'s own `restRemaining`). Only once
+  the countdown reaches zero does the real running phase begin (elapsed resets to 0, the beep
+  tracking resets). A "Cancel" button (in place of Stop) returns to idle without starting anything.
+  A real bug caught by testing this on web, not by inspection: `onClick={start}` on the Start/"Start
+  again" buttons implicitly passes the click event as `start`'s first argument once `start` gained
+  an optional `skipCountdown` parameter — since any object is truthy, `!skipCountdown` was always
+  `false`, silently skipping the countdown on *every* tap. Fixed by wrapping every call site in an
+  explicit `() => start()` (`() -> Unit` lambda on the Kotlin side, proactively avoided there once
+  the JS bug was found) — a `::start` function reference can't be assigned to a `() -> Unit`-typed
+  Compose `onClick` once the referenced function's own signature changes to take a parameter,
+  which is what led to writing every native call site as an explicit lambda from the start.
+- **For a workout duration exercise, the countdown is carved out of the *tail end* of the
+  exercise's own preceding rest period, not added as extra time on top** — a direct product
+  requirement. `RestRing` (`WorkoutSessionView.jsx`'s function of the same name, and the
+  `RestRing`/`RestRingSegment` pair on native) takes the upcoming exercise's own
+  `preStartCountdownSeconds` and splits the rest duration into two sequential segments: for the
+  first `restSeconds - preStartCountdownSeconds` seconds, the ring behaves exactly as it always
+  has (gold, depleting from full toward the fraction remaining at the handoff point); then it
+  switches to a **fresh** red sweep growing from empty back to full over the final
+  `preStartCountdownSeconds` seconds — deliberately *not* a continuation of wherever the gold
+  depletion left off, a brand-new lap starting near-empty, matching the same "grows from just past
+  the top" visual the countdown has everywhere else. If the configured countdown is longer than
+  the rest period itself, the whole rest period becomes the countdown. Disabled entirely
+  (`preStartCountdownSeconds = 0`) reduces to the exact original single-phase depletion, byte for
+  byte — confirmed by the fact that the old and new code paths produce identical animation
+  parameters when the countdown length is 0.
+  - **When rest ends with a countdown that was actually carved out of it, the real timer
+    auto-starts** — the countdown already ran once during the rest sweep, so requiring a second
+    Start tap plus a second countdown would double up on both. `WorkoutSessionView.jsx`/
+    `WorkoutSessionScreen.kt` track a one-shot `autoStartFromRest` flag, set the instant rest's own
+    countdown reaches zero (only when `restTotalSeconds > 0` and the upcoming exercise is
+    duration-based with a real countdown configured — i.e., only when a countdown genuinely *was*
+    carved out), and cleared immediately by `DurationTimer`'s own `onAutoStarted` callback so a
+    later manual re-visit of the same set never re-triggers it. `DurationTimer` gained a matching
+    `autoStart` prop that skips the idle "Ready/Start" screen and begins the running phase (with
+    `preStartCountdownSeconds` forced to 0 for that one call) the instant it mounts. Explicitly
+    reset to `false` on Restart, on manually jumping to a different exercise via the nav chips, and
+    on Skip rest (a skipped countdown never actually finished, so the real timer shouldn't
+    auto-start as if it had) — mirrors the care `restTotalSeconds`'s own capture comment already
+    documents for the same "don't let a later state accidentally reuse this moment's value" class
+    of bug.
+  - **The very first set of a session (no preceding rest at all) still gets its own countdown** —
+    `RestRing`'s carve-out only ever applies when rest genuinely happens first; a duration
+    exercise's first set falls through to `DurationTimer`'s own default (non-auto-started)
+    countdown path exactly like the quantity-timer case, with no special-casing needed since
+    `autoStartFromRest` simply never got set to `true` in that case.
+- **Data model**: `preStartCountdownSeconds` on a quantity-timer task is a real, migrated column
+  (`DB_VERSION = 13`, `tasks`/`task_versions`, nullable — `NULL` reads back as the default 5 at
+  `storage.js`'s `rowToTask`, matching every pre-existing task that predates this field) since task
+  fields are explicit typed SQL columns, not a flexible blob; the identical field on a workout
+  exercise needs no migration at all, since `exercises` already lives inside the task's JSON blob
+  (same precedent as `focusArea`/`supersetGroupId`). Both flow through to native via the exact same
+  JSON payload/parsing path every other exercise/task field already uses (`parseExercises` in
+  `WorkoutSessionActivity.kt` for exercises; the quantity-timer's own `pureTimer` payload for the
+  task-level field) — no new bridge plumbing needed for either. `aiImport.js`'s schema/prompt and
+  `convertExercise`/`convertTask`/`resolveSupersetGroups` were updated for both fields per this
+  codebase's standing rule to keep the AI-import schema in lockstep with real config options.
+
 ### Fitness Stats (`src/components/DashboardView.jsx`, `src/utils/workouts.js`)
 
 Unlike the workout session screen above, this is **not** native — it's a second sub-tab

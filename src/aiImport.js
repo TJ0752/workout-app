@@ -43,6 +43,7 @@ Output ONLY a single raw JSON object (no markdown fences, no commentary before o
           "unit": "reps",
           "quickAdd": [5, 10],
           "autoUpdateTarget": false,
+          "preStartCountdownSeconds": "5 - timer mode only, a \\"get ready\\" lead-in before the timer starts, ending with a beep; 0 disables it",
 
           "exercises": [
             {
@@ -55,7 +56,8 @@ Output ONLY a single raw JSON object (no markdown fences, no commentary before o
               "restSeconds": 60,
               "supersetGroup": "optional string label, e.g. \\"A\\" - see Rules below",
               "category": "one of: ${EXERCISE_CATEGORIES.map((c) => c.id).join(', ')} — or omit to auto-infer from type/unit",
-              "focusArea": "optional string, e.g. \\"Hamstrings\\" or \\"Balance\\" - a body part/area this exercise targets"
+              "focusArea": "optional string, e.g. \\"Hamstrings\\" or \\"Balance\\" - a body part/area this exercise targets",
+              "preStartCountdownSeconds": "5 - seconds-unit exercises only, a \\"get ready\\" lead-in before the timer starts, carved out of the tail end of any preceding rest; 0 disables it"
             }
           ]
         }
@@ -142,6 +144,10 @@ function convertExercise(raw, label, index, notes) {
     else notes.push(`${exLabel}: "category" ignored (must be one of ${[...VALID_EXERCISE_CATEGORY_IDS].join(', ')}) - left to auto-infer.`);
   }
   const focusArea = typeof raw.focusArea === 'string' && raw.focusArea.trim() ? raw.focusArea.trim() : null;
+  const preStartCountdownSeconds =
+    unit === 'seconds' && Number.isFinite(raw.preStartCountdownSeconds) && raw.preStartCountdownSeconds >= 0
+      ? Math.round(raw.preStartCountdownSeconds)
+      : 5;
 
   return {
     id: generateId(),
@@ -156,6 +162,7 @@ function convertExercise(raw, label, index, notes) {
     supersetGroup,
     categoryOverride,
     focusArea,
+    preStartCountdownSeconds,
   };
 }
 
@@ -202,6 +209,7 @@ function resolveSupersetGroups(exercises, label, notes) {
     supersetGroupId: ex.supersetGroupId,
     categoryOverride: ex.categoryOverride,
     focusArea: ex.focusArea,
+    preStartCountdownSeconds: ex.preStartCountdownSeconds,
   }));
 }
 
@@ -245,6 +253,7 @@ function convertTask(raw, routineLabel, index, isSimple, routineTitle, routineDe
   let quickAdd = null;
   let quantityMode = 'number';
   let autoUpdateTarget = false;
+  let preStartCountdownSeconds = 5;
   let exercises = [];
 
   if (completionType === 'quantity') {
@@ -262,6 +271,10 @@ function convertTask(raw, routineLabel, index, isSimple, routineTitle, routineDe
       quickAdd = rawQuickAdd && rawQuickAdd.length ? rawQuickAdd : null;
     } else {
       autoUpdateTarget = Boolean(raw.autoUpdateTarget);
+      preStartCountdownSeconds =
+        Number.isFinite(raw.preStartCountdownSeconds) && raw.preStartCountdownSeconds >= 0
+          ? Math.round(raw.preStartCountdownSeconds)
+          : 5;
     }
   } else if (completionType === 'workout') {
     const rawExercises = Array.isArray(raw.exercises) ? raw.exercises : [];
@@ -286,6 +299,7 @@ function convertTask(raw, routineLabel, index, isSimple, routineTitle, routineDe
     quickAdd,
     quantityMode,
     autoUpdateTarget,
+    preStartCountdownSeconds,
     exercises,
     active: true,
     createdAt: new Date().toISOString(),

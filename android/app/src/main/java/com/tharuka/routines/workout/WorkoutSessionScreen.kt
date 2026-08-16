@@ -2,6 +2,8 @@
 
 package com.tharuka.routines.workout
 
+import android.media.AudioManager
+import android.media.ToneGenerator
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
@@ -170,6 +172,12 @@ fun WorkoutSessionScreen(
     // rest duration whenever the two differ. Mirrors WorkoutSessionView.jsx's identical fix.
     var restTotalSeconds by remember { mutableStateOf(0) }
     var restAnimKey by remember { mutableStateOf(0) }
+    // One-shot: true only for the exact set rest just handed off to, when its own pre-start
+    // countdown was already consumed out of the tail end of that rest period - see
+    // RestRing/DurationTimer's `autoStart`. Cleared by DurationTimer's own onAutoStarted callback,
+    // so a later manual re-visit of the same set never re-triggers it. Mirrors
+    // WorkoutSessionView.jsx's identical autoStartFromRest exactly.
+    var autoStartFromRest by remember { mutableStateOf(false) }
 
     // Live, upward-ticking total session time - mirrors WorkoutSessionView.jsx's identical
     // sessionStartedAt/elapsedSeconds pair exactly, including the "counts from when this screen
@@ -205,6 +213,15 @@ fun WorkoutSessionScreen(
             delay(1000)
             restRemaining -= 1
             if (restRemaining <= 0) {
+                // exerciseIndex was already reassigned to the upcoming exercise before resting
+                // was set true (see logSetValues below) - if it's duration-based, has a real
+                // countdown configured, and there was actual rest time for RestRing to have
+                // carved it out of, that countdown just finished as part of the rest sweep
+                // itself; the real timer should pick up right where it left off rather than
+                // asking for a second Start tap and a second countdown.
+                val upcoming = exercises.getOrNull(exerciseIndex)
+                val upcomingCountdown = if (upcoming?.unit == "seconds") (upcoming.preStartCountdownSeconds ?: 5) else 0
+                autoStartFromRest = restTotalSeconds > 0 && upcomingCountdown > 0
                 resting = false
                 onRestEnd()
             }
@@ -223,6 +240,7 @@ fun WorkoutSessionScreen(
         setIndex = 0
         finished = false
         resting = false
+        autoStartFromRest = false
         sessionStartedAt = System.currentTimeMillis()
         elapsedSeconds = 0
         notifyProgressUpdate()
@@ -291,6 +309,7 @@ fun WorkoutSessionScreen(
         setIndex = 0
         finished = false
         resting = false
+        autoStartFromRest = false
         notifyProgressUpdate()
     }
 
@@ -483,6 +502,7 @@ fun WorkoutSessionScreen(
                         totalSeconds = restTotalSeconds,
                         resetKey = restAnimKey,
                         remainingLabel = "${restRemaining}s",
+                        preStartCountdownSeconds = if (isDuration) (exercise.preStartCountdownSeconds ?: 5) else 0,
                         modifier = Modifier.padding(vertical = 12.dp),
                     )
                     // markDone() already advances exerciseIndex/setIndex to the upcoming position
@@ -497,7 +517,13 @@ fun WorkoutSessionScreen(
                         modifier = Modifier.padding(bottom = 12.dp),
                     )
                     Button(
-                        onClick = { resting = false; onRestEnd() },
+                        onClick = {
+                            // Skipping rest cuts the countdown short too - it never actually
+                            // finished, so the real timer shouldn't auto-start as if it had.
+                            autoStartFromRest = false
+                            resting = false
+                            onRestEnd()
+                        },
                         shape = RoundedCornerShape(999.dp),
                         modifier = Modifier.height(52.dp),
                     ) {
@@ -548,6 +574,9 @@ fun WorkoutSessionScreen(
                             DurationTimer(
                                 targetSeconds = exercise.targetDurationSeconds ?: 0,
                                 initialSeconds = loggedSet?.durationSeconds,
+                                preStartCountdownSeconds = if (autoStartFromRest) 0 else (exercise.preStartCountdownSeconds ?: 5),
+                                autoStart = autoStartFromRest,
+                                onAutoStarted = { autoStartFromRest = false },
                                 onLog = ::markDoneWithDuration,
                             )
                         }
@@ -684,27 +713,50 @@ fun WorkoutSessionScreen(
  * blinks back to where it started" signal from the original request. `resetKey` (not
  * `totalSeconds`) is the LaunchedEffect key so that two back-to-back rests with an identical
  * duration still restart the animation - see WorkoutSessionView.jsx's RestRing for the same
- * reasoning. */
+ * reasoning.
+ *
+ * `preStartCountdownSeconds` (0 disables this, matching the original behavior byte for byte)
+ * carves a "get ready" countdown for the *upcoming* duration exercise out of the tail end of this
+ * same rest period, instead of adding extra time on top: for the first `totalSeconds -
+ * preStartCountdownSeconds` seconds this depletes exactly as before (1 -> the fraction remaining
+ * at the handoff point), then switches to a fresh red sweep growing from empty back to full over
+ * the final `preStartCountdownSeconds` seconds - not a continuation of wherever the plain phase
+ * left off, a brand new lap - ending fully lit exactly as rest (and this countdown) end together.
+ */
 @Composable
 private fun RestRing(
     totalSeconds: Int,
     resetKey: Int,
     remainingLabel: String,
+    preStartCountdownSeconds: Int = 0,
     modifier: Modifier = Modifier,
 ) {
+    val countdownSeconds = preStartCountdownSeconds.coerceIn(0, totalSeconds)
+    val plainSeconds = totalSeconds - countdownSeconds
     val fraction = remember { Animatable(1f) }
     val blinkAlpha = remember { Animatable(1f) }
-    LaunchedEffect(resetKey) {
+    var inCountdownPhase by remember { mutableStateOf(false) }
+
+    LaunchedEffect(resetKey, totalSeconds, countdownSeconds) {
         blinkAlpha.snapTo(1f)
+        inCountdownPhase = false
         fraction.snapTo(1f)
+        if (plainSeconds > 0) {
+            val handoffFraction = if (totalSeconds > 0) countdownSeconds.toFloat() / totalSeconds.toFloat() else 0f
+            fraction.animateTo(handoffFraction, animationSpec = tween(plainSeconds * 1000, easing = LinearEasing))
+        }
+        if (countdownSeconds > 0) {
+            inCountdownPhase = true
+            fraction.snapTo(0f)
+            fraction.animateTo(1f, animationSpec = tween(countdownSeconds * 1000, easing = LinearEasing))
+        }
         if (totalSeconds > 0) {
-            fraction.animateTo(0f, animationSpec = tween(totalSeconds * 1000, easing = LinearEasing))
             blinkAlpha.animateTo(0.15f, animationSpec = tween(240))
             blinkAlpha.animateTo(1f, animationSpec = tween(360))
         }
     }
 
-    val ringColor = MaterialTheme.colorScheme.primary
+    val ringColor = if (inCountdownPhase) AppPalette.Bad else MaterialTheme.colorScheme.primary
     val trackColor = MaterialTheme.colorScheme.outlineVariant
     val numberColor = MaterialTheme.colorScheme.onBackground
 
@@ -738,6 +790,22 @@ private fun RestRing(
     }
 }
 
+/** A short, synthesized "ding" via Android's built-in ToneGenerator - no bundled audio asset
+ * needed, the native mirror of utils/beep.js's identical Web Audio API approach. Best-effort:
+ * silently no-ops on any failure, since a missed beep shouldn't break the timer itself. Meant to
+ * be called from inside a LaunchedEffect coroutine (suspend, so it can release the ToneGenerator
+ * shortly after starting the tone instead of leaking it). */
+private suspend fun playBeep() {
+    try {
+        val toneGen = ToneGenerator(AudioManager.STREAM_MUSIC, ToneGenerator.MAX_VOLUME)
+        toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 300)
+        delay(400)
+        toneGen.release()
+    } catch (e: Exception) {
+        // Best-effort only - see this function's own doc comment.
+    }
+}
+
 /**
  * A live, auto-continuing timer for a duration-based set - the native counterpart of
  * WorkoutSessionView.jsx's DurationTimer. Counts down from the exercise's target duration, shown
@@ -749,23 +817,57 @@ private fun RestRing(
  * discards this attempt with nothing logged, for a mis-timed or aborted set). The caller wraps
  * this in `key(exerciseIndex, setIndex) { ... }` so its own phase/elapsed state never needs
  * resetting by hand when the user moves to a different set.
+ *
+ * `preStartCountdownSeconds` (default 5, 0 disables it) inserts a "get ready" lead-in before the
+ * real timer starts: tapping Start moves to a `countdown` phase first, a red arc growing clockwise
+ * from the top - the same animateSeconds fill mechanic the running ring already uses, just red -
+ * and only once that completes does the real running phase begin. A beep fires once, exactly when
+ * `elapsed` first reaches `targetSeconds`.
+ *
+ * `autoStart` skips the idle "Ready/Start" screen and begins the running phase the instant this
+ * composes, with no countdown of its own - used by WorkoutSessionScreen when this set's countdown
+ * was already carved out of the tail end of the preceding rest period (see RestRing), so the real
+ * timer picks up exactly where that countdown left off instead of asking for a second Start tap
+ * and a second countdown. `onAutoStarted` fires once, right after, so the caller can clear its own
+ * one-shot flag.
  */
 @Composable
 fun DurationTimer(
     targetSeconds: Int,
     initialSeconds: Int?,
+    preStartCountdownSeconds: Int = 5,
+    autoStart: Boolean = false,
+    onAutoStarted: (() -> Unit)? = null,
     onLog: (Int) -> Unit,
 ) {
-    var phase by remember { mutableStateOf("idle") } // "idle" | "running" | "stopped"
+    var phase by remember { mutableStateOf("idle") } // "idle" | "countdown" | "running" | "stopped"
     var elapsed by remember { mutableStateOf(0) }
+    var countdownRemaining by remember { mutableStateOf(0) }
     var editing by remember { mutableStateOf(false) }
     var customValue by remember { mutableStateOf("") }
     var runId by remember { mutableStateOf(0) }
+    var beeped by remember { mutableStateOf(false) }
 
     LaunchedEffect(phase, elapsed) {
         if (phase == "running") {
             delay(1000)
             elapsed += 1
+        }
+    }
+
+    // The pre-start lead-in's own numeric countdown (5, 4, 3, ...) - a separate, once-a-second
+    // tick decoupled from the ring's own smooth animation, the same relationship RestRing's own
+    // remaining-seconds label already has with its ring.
+    LaunchedEffect(phase, countdownRemaining) {
+        if (phase == "countdown") {
+            if (countdownRemaining <= 0) {
+                elapsed = 0
+                beeped = false
+                phase = "running"
+            } else {
+                delay(1000)
+                countdownRemaining -= 1
+            }
         }
     }
 
@@ -778,13 +880,37 @@ fun DurationTimer(
     // past a full circle. Only used as the static fallback fraction (idle/stopped) now - the
     // running phase drives the ring via MomentumRing's own animateSeconds/animateKey instead, a
     // single continuous linear sweep instead of a spring catch-up every second.
-    val fraction = if (phase != "idle" && hasTarget) (elapsed.toFloat() / targetSeconds.toFloat()).coerceAtMost(1f) else 0f
+    val fraction = if (phase == "running" && hasTarget) (elapsed.toFloat() / targetSeconds.toFloat()).coerceAtMost(1f) else 0f
 
-    fun start() {
-        elapsed = 0
+    // Fires exactly once, right as the target is first reached - not on every tick throughout
+    // overtime (inOvertime stays true the whole time).
+    LaunchedEffect(phase, elapsed, hasTarget, targetSeconds) {
+        if (phase == "running" && hasTarget && elapsed == targetSeconds && !beeped) {
+            beeped = true
+            playBeep()
+        }
+    }
+
+    fun start(skipCountdown: Boolean = false) {
         editing = false
-        phase = "running"
         runId += 1
+        if (!skipCountdown && preStartCountdownSeconds > 0) {
+            countdownRemaining = preStartCountdownSeconds
+            phase = "countdown"
+        } else {
+            elapsed = 0
+            beeped = false
+            phase = "running"
+        }
+    }
+
+    // Mount-only, matching the "caller remounts via key()" contract every other piece of this
+    // composable's state already relies on.
+    LaunchedEffect(Unit) {
+        if (autoStart) {
+            start(true)
+            onAutoStarted?.invoke()
+        }
     }
 
     fun stop() {
@@ -863,7 +989,7 @@ fun DurationTimer(
                         TextButton(onClick = { editing = true }, modifier = Modifier.weight(1f)) {
                             Text("Edit custom time", color = AppPalette.TextSoft)
                         }
-                        TextButton(onClick = ::start, modifier = Modifier.weight(1f)) {
+                        TextButton(onClick = { start() }, modifier = Modifier.weight(1f)) {
                             Text("Start again", color = AppPalette.TextSoft)
                         }
                     }
@@ -881,31 +1007,41 @@ fun DurationTimer(
             modifier = Modifier.fillMaxWidth().height(230.dp),
             fraction = fraction,
             interactive = false,
-            animateSeconds = if (phase == "running" && hasTarget) targetSeconds else null,
+            animateSeconds = when {
+                phase == "running" && hasTarget -> targetSeconds
+                phase == "countdown" -> preStartCountdownSeconds
+                else -> null
+            },
             animateKey = runId,
+            danger = phase == "countdown",
         ) {
-            Text(
-                text = when {
-                    phase == "idle" -> formatHms(initialSeconds ?: targetSeconds)
-                    inOvertime -> "+${formatHms(overtime)}"
-                    else -> formatHms(remaining)
-                },
-                fontSize = 48.sp,
-                fontWeight = FontWeight.ExtraBold,
-                // Reached (or exceeded) the target duration - the same "achievement" hue as
-                // streaks/PRs, since exceeding a target reads as a small win, not a warning.
-                color = if (inOvertime) AppPalette.GoldInk else MaterialTheme.colorScheme.onBackground,
-            )
-            Text(
-                when {
-                    phase == "idle" -> "Ready"
-                    inOvertime -> "Overtime"
-                    hasTarget -> "Remaining"
-                    else -> "Elapsed"
-                },
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (phase == "countdown") {
+                Text(countdownRemaining.toString(), fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = AppPalette.Bad)
+                Text("Get ready", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Text(
+                    text = when {
+                        phase == "idle" -> formatHms(initialSeconds ?: targetSeconds)
+                        inOvertime -> "+${formatHms(overtime)}"
+                        else -> formatHms(remaining)
+                    },
+                    fontSize = 48.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    // Reached (or exceeded) the target duration - the same "achievement" hue as
+                    // streaks/PRs, since exceeding a target reads as a small win, not a warning.
+                    color = if (inOvertime) AppPalette.GoldInk else MaterialTheme.colorScheme.onBackground,
+                )
+                Text(
+                    when {
+                        phase == "idle" -> "Ready"
+                        inOvertime -> "Overtime"
+                        hasTarget -> "Remaining"
+                        else -> "Elapsed"
+                    },
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         if (hasTarget) {
             Text(
@@ -917,16 +1053,29 @@ fun DurationTimer(
             )
         }
         Button(
-            onClick = if (phase == "idle") ::start else ::stop,
+            onClick = {
+                when (phase) {
+                    "idle" -> start()
+                    "countdown" -> phase = "idle"
+                    else -> stop()
+                }
+            },
             shape = RoundedCornerShape(999.dp),
             modifier = Modifier.height(52.dp).padding(top = 10.dp),
-            colors = if (phase == "running") {
+            colors = if (phase == "running" || phase == "countdown") {
                 ButtonDefaults.buttonColors(containerColor = AppPalette.Bad.copy(alpha = 0.15f), contentColor = AppPalette.Bad)
             } else {
                 ButtonDefaults.buttonColors()
             },
         ) {
-            Text(if (phase == "idle") "Start" else "Stop", fontWeight = FontWeight.Bold)
+            Text(
+                when (phase) {
+                    "idle" -> "Start"
+                    "countdown" -> "Cancel"
+                    else -> "Stop"
+                },
+                fontWeight = FontWeight.Bold,
+            )
         }
     }
 }
@@ -953,6 +1102,10 @@ private fun MomentumRing(
     // countdown ring should have.
     animateSeconds: Int? = null,
     animateKey: Int = 0,
+    // Red instead of the normal primary fill - used for DurationTimer's pre-start countdown, so
+    // it reads as a distinct "get ready" moment rather than real progress (see AppPalette.Bad,
+    // the same token the web version's `--bad` reuses for the same reason).
+    danger: Boolean = false,
     centerContent: @Composable () -> Unit,
 ) {
     val targetFraction = fraction.coerceIn(0f, 1f)
@@ -978,7 +1131,7 @@ private fun MomentumRing(
     val pulseScale = remember { Animatable(1f) }
     val scope = rememberCoroutineScope()
 
-    val ringColor = MaterialTheme.colorScheme.primary
+    val ringColor = if (danger) AppPalette.Bad else MaterialTheme.colorScheme.primary
     val trackColor = MaterialTheme.colorScheme.outlineVariant
 
     // BoxWithConstraints, not a fixed .size(230.dp) - the column that hosts this ring passes
