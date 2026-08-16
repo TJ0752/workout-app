@@ -7,7 +7,7 @@ export const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
 /**
  * The dominant, full-screen tap target for logging a set - the same circle shown whenever a
- * task/exercise is actively being worked. Two fill modes:
+ * task/exercise is actively being worked. Three fill modes:
  * - Plain `fraction` (0-1): fills in step by step as `fraction` grows (a spring-like transition
  *   already defined on `.workout-ring-fill`) - used for the reps-tap flow (interactive) and
  *   DurationTimer's own idle/stopped states (static).
@@ -16,6 +16,17 @@ export const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
  *   own depleting sweep, just filling instead - decoupled from React re-renders entirely, so it
  *   reads as continuous motion rather than the once-a-second steps a JS-driven `fraction` update
  *   would produce. Used by DurationTimer while actively running.
+ * - `countdownMaxDegrees` (+ `countdownSeconds`): a capped-length arc anchored at the top (12
+ *   o'clock), shrinking back into it - not a full lap. Used by DurationTimer's pre-start "get
+ *   ready" countdown: the arc's clockwise (top) end never moves, only its anticlockwise (far) end
+ *   retreats toward the top as the countdown ticks down, at the *same* seconds-to-degrees scale
+ *   the running phase's own fill uses (`countdownMaxDegrees = countdownSeconds/targetSeconds *
+ *   360`) - so the countdown reads as "the leading edge of where the real timer is about to
+ *   start filling from," not an unrelated second animation. See the dasharray/dashoffset
+ *   derivation below `offsetFor`-style reasoning: unlike the plain growing-from-top fill (which
+ *   only ever needs to move `dashoffset`), pinning the *end* of a shrinking arc at a fixed point
+ *   means both the dash length and its offset must animate together, since the visible segment's
+ *   near edge is the one moving while its far edge stays put.
  */
 export function MomentumRing({
   fraction,
@@ -26,11 +37,14 @@ export function MomentumRing({
   children,
   animateSeconds,
   animateKey = 0,
+  countdownMaxDegrees,
+  countdownSeconds = 0,
   // Red instead of the normal accent fill - used for DurationTimer's pre-start countdown, so it
   // reads as a distinct "get ready" moment rather than real progress.
   danger = false,
 }) {
   const [animatedIn, setAnimatedIn] = useState(false);
+  const [countdownAnimatedIn, setCountdownAnimatedIn] = useState(false);
 
   useEffect(() => {
     if (animateSeconds == null) return undefined;
@@ -39,17 +53,41 @@ export function MomentumRing({
     return () => cancelAnimationFrame(raf);
   }, [animateSeconds, animateKey]);
 
-  const ringStyle =
-    animateSeconds != null
-      ? {
-          strokeDasharray: RING_CIRCUMFERENCE,
-          strokeDashoffset: animatedIn ? 0 : RING_CIRCUMFERENCE,
-          transition: animatedIn ? `stroke-dashoffset ${animateSeconds}s linear` : 'none',
-        }
-      : {
-          strokeDasharray: RING_CIRCUMFERENCE,
-          strokeDashoffset: RING_CIRCUMFERENCE - Math.max(0, Math.min(1, fraction)) * RING_CIRCUMFERENCE,
-        };
+  useEffect(() => {
+    if (countdownMaxDegrees == null) return undefined;
+    setCountdownAnimatedIn(false);
+    const raf = requestAnimationFrame(() => setCountdownAnimatedIn(true));
+    return () => cancelAnimationFrame(raf);
+  }, [countdownMaxDegrees, countdownSeconds, animateKey]);
+
+  let ringStyle;
+  if (countdownMaxDegrees != null) {
+    // Arc length (in px along the circumference) representing the countdown window, at the same
+    // degrees-per-second scale the running fill uses - capped at a full circle. `currentLength`
+    // shrinks from that down to 0 as the countdown elapses; the arc's END stays pinned at the top
+    // (offset always resolves so the dash's tail sits exactly at path-start) while its length
+    // (and therefore its anticlockwise-most point) retreats toward the top.
+    const maxLength = (Math.max(0, Math.min(360, countdownMaxDegrees)) / 360) * RING_CIRCUMFERENCE;
+    const currentLength = countdownAnimatedIn ? 0 : maxLength;
+    ringStyle = {
+      strokeDasharray: `${currentLength} ${RING_CIRCUMFERENCE - currentLength}`,
+      strokeDashoffset: currentLength - RING_CIRCUMFERENCE,
+      transition: countdownAnimatedIn
+        ? `stroke-dasharray ${countdownSeconds}s linear, stroke-dashoffset ${countdownSeconds}s linear`
+        : 'none',
+    };
+  } else if (animateSeconds != null) {
+    ringStyle = {
+      strokeDasharray: RING_CIRCUMFERENCE,
+      strokeDashoffset: animatedIn ? 0 : RING_CIRCUMFERENCE,
+      transition: animatedIn ? `stroke-dashoffset ${animateSeconds}s linear` : 'none',
+    };
+  } else {
+    ringStyle = {
+      strokeDasharray: RING_CIRCUMFERENCE,
+      strokeDashoffset: RING_CIRCUMFERENCE - Math.max(0, Math.min(1, fraction)) * RING_CIRCUMFERENCE,
+    };
+  }
 
   return (
     <button
@@ -95,12 +133,14 @@ export function MomentumRing({
  * clock), so the ring simply stays full through overtime with no extra logic needed.
  *
  * `preStartCountdownSeconds` (default 5, 0 disables it) inserts a "get ready" lead-in before the
- * real timer starts: tapping Start moves to a `countdown` phase first, showing a red arc growing
- * clockwise from the top - the *same* animateSeconds fill mechanic the running ring already uses,
- * just red and counting a fixed short window down to zero - and only once that completes does the
- * real running phase (elapsed reset to 0, the actual clock) begin. A beep fires once, exactly when
- * `elapsed` first reaches `targetSeconds` (the moment overtime begins), independent of the
- * pre-start countdown.
+ * real timer starts: tapping Start moves to a `countdown` phase first, showing a red arc anchored
+ * at the top and shrinking back into it (MomentumRing's `countdownMaxDegrees`) rather than a full
+ * lap - capped to the same seconds-to-degrees scale the running fill itself uses
+ * (`preStartCountdownSeconds/targetSeconds * 360`), so the countdown reads as "the leading edge
+ * of where the real fill is about to start from," not an unrelated second animation - and only
+ * once it reaches the top does the real running phase (elapsed reset to 0, the actual clock)
+ * begin. A beep fires once, exactly when `elapsed` first reaches `targetSeconds` (the moment
+ * overtime begins), independent of the pre-start countdown.
  *
  * `autoStart` skips the idle "Ready/Start" screen entirely and begins the running phase the
  * instant this mounts, with no countdown of its own - used by WorkoutSessionView when a duration
@@ -141,6 +181,11 @@ export function DurationTimer({
       setElapsed(0);
       beepedRef.current = false;
       setPhase('running');
+      // The running phase's ring restarts its own fill animation off `animateSeconds` changing
+      // value (countdown's -> target's), which normally already forces a restart - bumping
+      // `runId` too is a second, independent guarantee that holds even if the two seconds values
+      // happen to coincide, so the ring never inherits an already-finished countdown animation.
+      setRunId((n) => n + 1);
       return undefined;
     }
     const t = setTimeout(() => setCountdownRemaining((n) => n - 1), 1000);
@@ -151,7 +196,15 @@ export function DurationTimer({
   const overtime = hasTarget ? Math.max(0, elapsed - targetSeconds) : 0;
   const inOvertime = hasTarget && elapsed >= targetSeconds;
   const remaining = hasTarget ? Math.max(0, targetSeconds - elapsed) : elapsed;
-  const fraction = phase === 'running' && hasTarget ? Math.min(1, elapsed / targetSeconds) : 0;
+  // Also true while 'stopped' (the review screen) so its ring shows the real elapsed/target
+  // ratio instead of always rendering empty - only 'countdown' (which uses its own
+  // countdownMaxDegrees arc, not this fraction at all) and 'idle' fall back to 0.
+  const fraction = (phase === 'running' || phase === 'stopped') && hasTarget ? Math.min(1, elapsed / targetSeconds) : 0;
+  // Same seconds-to-degrees scale the running fill itself uses (360deg == targetSeconds) - caps
+  // at a full lap for the degenerate case where the countdown is configured longer than the
+  // target itself. Falls back to a full circle if there's no real target at all (shouldn't
+  // normally happen - both call sites always have a target - but keeps the arc well-defined).
+  const countdownMaxDegrees = hasTarget ? Math.min(360, (preStartCountdownSeconds / targetSeconds) * 360) : 360;
 
   // Fires exactly once, right as the target is first reached - not on every tick throughout
   // overtime (inOvertime stays true the whole time).
@@ -250,10 +303,10 @@ export function DurationTimer({
         fraction={fraction}
         interactive={false}
         hint={phase === 'countdown' ? 'Get ready' : 'Duration timer'}
-        animateSeconds={
-          phase === 'running' && hasTarget ? targetSeconds : phase === 'countdown' ? preStartCountdownSeconds : undefined
-        }
+        animateSeconds={phase === 'running' && hasTarget ? targetSeconds : undefined}
         animateKey={runId}
+        countdownMaxDegrees={phase === 'countdown' ? countdownMaxDegrees : undefined}
+        countdownSeconds={preStartCountdownSeconds}
         danger={phase === 'countdown'}
       >
         {phase === 'countdown' ? (

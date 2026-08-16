@@ -819,10 +819,11 @@ private suspend fun playBeep() {
  * resetting by hand when the user moves to a different set.
  *
  * `preStartCountdownSeconds` (default 5, 0 disables it) inserts a "get ready" lead-in before the
- * real timer starts: tapping Start moves to a `countdown` phase first, a red arc growing clockwise
- * from the top - the same animateSeconds fill mechanic the running ring already uses, just red -
- * and only once that completes does the real running phase begin. A beep fires once, exactly when
- * `elapsed` first reaches `targetSeconds`.
+ * real timer starts: tapping Start moves to a `countdown` phase first, a red arc anchored at the
+ * top and shrinking back into it (MomentumRing's `countdownMaxDegrees`) - capped to the same
+ * seconds-to-degrees scale the running fill itself uses, not a full lap - and only once it
+ * reaches the top does the real running phase begin. A beep fires once, exactly when `elapsed`
+ * first reaches `targetSeconds`.
  *
  * `autoStart` skips the idle "Ready/Start" screen and begins the running phase the instant this
  * composes, with no countdown of its own - used by WorkoutSessionScreen when this set's countdown
@@ -864,6 +865,11 @@ fun DurationTimer(
                 elapsed = 0
                 beeped = false
                 phase = "running"
+                // See MomentumRing's animateSeconds LaunchedEffect comment - a second, independent
+                // guarantee that the running phase's ring restarts its own fill animation, even if
+                // targetSeconds happens to equal preStartCountdownSeconds (which alone would leave
+                // animateSeconds unchanged across this transition).
+                runId += 1
             } else {
                 delay(1000)
                 countdownRemaining -= 1
@@ -877,10 +883,25 @@ fun DurationTimer(
     val remaining = if (hasTarget) maxOf(0, targetSeconds - elapsed) else elapsed
     // Fills up toward 1 as elapsed approaches the target (mirroring how the same ring fills as
     // sets complete elsewhere), then just stays full through overtime rather than continuing
-    // past a full circle. Only used as the static fallback fraction (idle/stopped) now - the
-    // running phase drives the ring via MomentumRing's own animateSeconds/animateKey instead, a
-    // single continuous linear sweep instead of a spring catch-up every second.
-    val fraction = if (phase == "running" && hasTarget) (elapsed.toFloat() / targetSeconds.toFloat()).coerceAtMost(1f) else 0f
+    // past a full circle. Also true while "stopped" (the review screen) so its ring shows the
+    // real elapsed/target ratio instead of always rendering empty - only "countdown" (which uses
+    // its own countdownMaxDegrees arc, not this fraction at all) and "idle" fall back to 0. The
+    // running phase itself drives the ring via MomentumRing's own animateSeconds/animateKey
+    // instead, a single continuous linear sweep instead of a spring catch-up every second.
+    val fraction = if ((phase == "running" || phase == "stopped") && hasTarget) {
+        (elapsed.toFloat() / targetSeconds.toFloat()).coerceAtMost(1f)
+    } else {
+        0f
+    }
+    // Same seconds-to-degrees scale the running fill itself uses (360deg == targetSeconds) -
+    // capped at a full lap for the degenerate case where the countdown is configured longer than
+    // the target itself. Falls back to a full circle if there's no real target at all (shouldn't
+    // normally happen - both call sites always have a target).
+    val countdownMaxDegrees = if (hasTarget) {
+        minOf(360f, preStartCountdownSeconds.toFloat() / targetSeconds.toFloat() * 360f)
+    } else {
+        360f
+    }
 
     // Fires exactly once, right as the target is first reached - not on every tick throughout
     // overtime (inOvertime stays true the whole time).
@@ -1007,12 +1028,10 @@ fun DurationTimer(
             modifier = Modifier.fillMaxWidth().height(230.dp),
             fraction = fraction,
             interactive = false,
-            animateSeconds = when {
-                phase == "running" && hasTarget -> targetSeconds
-                phase == "countdown" -> preStartCountdownSeconds
-                else -> null
-            },
+            animateSeconds = if (phase == "running" && hasTarget) targetSeconds else null,
             animateKey = runId,
+            countdownMaxDegrees = if (phase == "countdown") countdownMaxDegrees else null,
+            countdownSeconds = preStartCountdownSeconds,
             danger = phase == "countdown",
         ) {
             if (phase == "countdown") {
@@ -1102,6 +1121,14 @@ private fun MomentumRing(
     // countdown ring should have.
     animateSeconds: Int? = null,
     animateKey: Int = 0,
+    // A capped-length arc anchored at the top (12 o'clock), shrinking back into it - not a full
+    // lap - used by DurationTimer's pre-start "get ready" countdown. `countdownMaxDegrees` is at
+    // the *same* seconds-to-degrees scale the running fill itself uses
+    // (targetSeconds/360deg), so the countdown reads as "the leading edge of where the real
+    // timer is about to start filling from." The arc's clockwise (top) end never moves; only its
+    // anticlockwise (far) end retreats toward the top as `countdownSeconds` elapses.
+    countdownMaxDegrees: Float? = null,
+    countdownSeconds: Int = 0,
     // Red instead of the normal primary fill - used for DurationTimer's pre-start countdown, so
     // it reads as a distinct "get ready" moment rather than real progress (see AppPalette.Bad,
     // the same token the web version's `--bad` reuses for the same reason).
@@ -1111,7 +1138,13 @@ private fun MomentumRing(
     val targetFraction = fraction.coerceIn(0f, 1f)
     val animatedFraction = remember { Animatable(targetFraction) }
     if (animateSeconds != null) {
-        LaunchedEffect(animateKey) {
+        // Keyed on animateSeconds too, not just animateKey - a real bug found live: when the
+        // countdown phase hands off to the running phase, animateSeconds changes value (the
+        // countdown's own seconds -> the target's), but the caller doesn't necessarily bump
+        // animateKey at that exact instant. Keying only on animateKey left the OLD (already-
+        // completed) countdown animation's final value in place instead of starting the running
+        // phase's own fill - the ring looked completely frozen from the moment running began.
+        LaunchedEffect(animateKey, animateSeconds) {
             animatedFraction.snapTo(0f)
             if (animateSeconds > 0) {
                 animatedFraction.animateTo(1f, animationSpec = tween(animateSeconds * 1000, easing = LinearEasing))
@@ -1123,6 +1156,18 @@ private fun MomentumRing(
                 targetFraction,
                 animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
             )
+        }
+    }
+
+    val countdownDegrees = remember { Animatable(countdownMaxDegrees ?: 0f) }
+    if (countdownMaxDegrees != null) {
+        LaunchedEffect(animateKey, countdownMaxDegrees, countdownSeconds) {
+            countdownDegrees.snapTo(countdownMaxDegrees)
+            if (countdownSeconds > 0) {
+                countdownDegrees.animateTo(0f, animationSpec = tween(countdownSeconds * 1000, easing = LinearEasing))
+            } else {
+                countdownDegrees.snapTo(0f)
+            }
         }
     }
 
@@ -1203,15 +1248,31 @@ private fun MomentumRing(
                     size = arcSize,
                     style = Stroke(width = stroke, cap = StrokeCap.Round),
                 )
-                drawArc(
-                    color = ringColor,
-                    startAngle = -90f,
-                    sweepAngle = 360f * animatedFraction.value.coerceIn(0f, 1f),
-                    useCenter = false,
-                    topLeft = arcTopLeft,
-                    size = arcSize,
-                    style = Stroke(width = stroke, cap = StrokeCap.Round),
-                )
+                if (countdownMaxDegrees != null) {
+                    // Anchored at the top: sweepAngle shrinks toward 0 while startAngle retreats
+                    // to keep the arc's clockwise (top) end fixed at -90f the whole time - the
+                    // anticlockwise (far) end is the only one that moves, toward the top.
+                    val deg = countdownDegrees.value.coerceIn(0f, 360f)
+                    drawArc(
+                        color = ringColor,
+                        startAngle = -90f - deg,
+                        sweepAngle = deg,
+                        useCenter = false,
+                        topLeft = arcTopLeft,
+                        size = arcSize,
+                        style = Stroke(width = stroke, cap = StrokeCap.Round),
+                    )
+                } else {
+                    drawArc(
+                        color = ringColor,
+                        startAngle = -90f,
+                        sweepAngle = 360f * animatedFraction.value.coerceIn(0f, 1f),
+                        useCenter = false,
+                        topLeft = arcTopLeft,
+                        size = arcSize,
+                        style = Stroke(width = stroke, cap = StrokeCap.Round),
+                    )
+                }
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 centerContent()

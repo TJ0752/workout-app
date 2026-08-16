@@ -1652,22 +1652,52 @@ different lead-ins or none at all):
 - **A "get ready" pre-start countdown before the real timer begins.** Tapping Start doesn't
   immediately begin timing — it enters a `countdown` phase first: a red arc (`--bad`/`AppPalette.Bad`,
   the same warm-terracotta token the design system already reserves for "something needs
-  attention," reused here rather than introducing a new color) grows clockwise from the ring's top,
-  using the *exact same* `animateSeconds` full-sweep mechanic the running phase's own fill already
-  uses (`MomentumRing`'s existing 0→1 linear tween, just red and for a short fixed window) — not a
-  new animation concept. A large countdown number (5, 4, 3, ...) ticks down once a second in the
-  ring's center, decoupled from the ring's own smooth sweep, the same relationship every other
-  ring/countdown-label pair in this app already has (`RestRing`'s own `restRemaining`). Only once
-  the countdown reaches zero does the real running phase begin (elapsed resets to 0, the beep
-  tracking resets). A "Cancel" button (in place of Stop) returns to idle without starting anything.
-  A real bug caught by testing this on web, not by inspection: `onClick={start}` on the Start/"Start
-  again" buttons implicitly passes the click event as `start`'s first argument once `start` gained
-  an optional `skipCountdown` parameter — since any object is truthy, `!skipCountdown` was always
-  `false`, silently skipping the countdown on *every* tap. Fixed by wrapping every call site in an
-  explicit `() => start()` (`() -> Unit` lambda on the Kotlin side, proactively avoided there once
-  the JS bug was found) — a `::start` function reference can't be assigned to a `() -> Unit`-typed
-  Compose `onClick` once the referenced function's own signature changes to take a parameter,
-  which is what led to writing every native call site as an explicit lambda from the start.
+  attention," reused here rather than introducing a new color) **anchored at the ring's top and
+  shrinking back into it**, not a full separate lap — `MomentumRing`'s `countdownMaxDegrees` prop
+  caps the arc's length to the *same* seconds-to-degrees scale the running phase's own fill uses
+  (`preStartCountdownSeconds/targetSeconds * 360`, capped at 360°), so the countdown visually reads
+  as "the leading edge of where the real fill is about to start from." The arc's clockwise (top)
+  end never moves; only its anticlockwise (far) end retreats toward the top as the countdown
+  elapses, disappearing exactly at the top the instant the real timer begins — web via an animated
+  `stroke-dasharray`/`stroke-dashoffset` pair (both are affine functions of the same shrinking arc
+  length, so a single linear CSS transition on both properties together produces the retreat;
+  see `MomentumRing`'s `countdownMaxDegrees` branch), native via a second `Animatable`
+  (`countdownDegrees`, tweened from `countdownMaxDegrees` to 0) drawn as `drawArc(startAngle = -90f
+  - deg, sweepAngle = deg)` — keeping the arc's end pinned at `-90°` (top) while `deg` shrinks is
+  what keeps the far end retreating rather than the whole arc sliding. A large countdown number (5,
+  4, 3, ...) ticks down once a second in the ring's center, decoupled from the ring's own smooth
+  sweep, the same relationship every other ring/countdown-label pair in this app already has
+  (`RestRing`'s own `restRemaining`). Only once the countdown reaches zero does the real running
+  phase begin (elapsed resets to 0, the beep tracking resets). A "Cancel" button (in place of Stop)
+  returns to idle without starting anything.
+  - **This wasn't the original design.** A first pass reused `animateSeconds` unchanged for the
+    countdown — a full 0→1 sweep growing clockwise from empty to a complete lap, the same mechanic
+    the running phase's fill uses, just red. Explicitly rejected by the user once tried on-device:
+    not the requested visual, and it broke the review ("stopped") screen's own ring fill as a side
+    effect (see below) — replaced with the anchored-at-top shrinking arc described above.
+  - **Two real regressions from that first pass, both caught by direct user testing, not CI.** (1)
+    The review screen's ring went blank: the `fraction` calculation was narrowed to
+    `phase === 'running'` only, so the `'stopped'` phase — which reuses the same `fraction` for its
+    own static ring — always computed 0. Fixed by including `'stopped'` in that condition (`phase
+    === 'running' || phase === 'stopped'`) on both platforms. (2) The running phase's ring appeared
+    completely frozen from the moment the countdown handed off to it. Root cause was **native
+    only**, and different from the web bug: `MomentumRing`'s fill-animation `LaunchedEffect` was
+    keyed on `animateKey` alone, not on `animateSeconds` itself — so when `animateSeconds` changed
+    value at the countdown→running transition (the countdown's own seconds → the target's) without
+    a matching bump to `animateKey`, Compose never restarted the effect, leaving the ring showing
+    wherever the already-completed countdown animation had left off (fully lit). Fixed by keying
+    the `LaunchedEffect` on `(animateKey, animateSeconds)` together; both platforms additionally
+    bump their own `runId`/`animateKey` at the internal countdown→running transition itself (not
+    just when Start is first tapped) as a second, independent guarantee that holds even in the
+    degenerate case where `preStartCountdownSeconds` and `targetSeconds` coincidentally match.
+  - A real bug caught by testing this on web, not by inspection: `onClick={start}` on the Start/"Start
+    again" buttons implicitly passes the click event as `start`'s first argument once `start` gained
+    an optional `skipCountdown` parameter — since any object is truthy, `!skipCountdown` was always
+    `false`, silently skipping the countdown on *every* tap. Fixed by wrapping every call site in an
+    explicit `() => start()` (`() -> Unit` lambda on the Kotlin side, proactively avoided there once
+    the JS bug was found) — a `::start` function reference can't be assigned to a `() -> Unit`-typed
+    Compose `onClick` once the referenced function's own signature changes to take a parameter,
+    which is what led to writing every native call site as an explicit lambda from the start.
 - **For a workout duration exercise, the countdown is carved out of the *tail end* of the
   exercise's own preceding rest period, not added as extra time on top** — a direct product
   requirement. `RestRing` (`WorkoutSessionView.jsx`'s function of the same name, and the
