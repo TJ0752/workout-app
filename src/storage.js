@@ -24,6 +24,12 @@ function rowToTask(row) {
     quantityMode: row.quantity_mode || 'number',
     autoUpdateTarget: Boolean(row.auto_update_target),
     preStartCountdownSeconds: row.pre_start_countdown_seconds ?? 5,
+    // NOT NULL DEFAULT 1 at the schema level, but read defensively (== null, not a plain
+    // fallback) matching this codebase's standing caution about a migration's ALTER TABLE
+    // silently not applying despite PRAGMA user_version reporting success (see db.js's
+    // ensureQuantityModeColumns/ensureEndToneEnabledColumn) - undefined/null still reads as
+    // enabled, the same default the beep had before this toggle existed.
+    endToneEnabled: row.end_tone_enabled == null ? true : Boolean(row.end_tone_enabled),
     exercises: row.exercises ? JSON.parse(row.exercises) : [],
     active: Boolean(row.active),
     createdAt: row.created_at,
@@ -86,8 +92,8 @@ async function insertRoutineVersion(db, routineId, fields, effectiveFrom, change
 async function insertTaskVersion(db, taskId, routineId, fields, effectiveFrom, changeType, changedFields) {
   await db.run(
     `INSERT INTO task_versions
-       (id, task_id, routine_id, effective_from, effective_to, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, quantity_mode, auto_update_target, pre_start_countdown_seconds, exercises, active, change_type, changed_fields)
-     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, task_id, routine_id, effective_from, effective_to, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, quantity_mode, auto_update_target, pre_start_countdown_seconds, end_tone_enabled, exercises, active, change_type, changed_fields)
+     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       generateId(),
       taskId,
@@ -105,6 +111,7 @@ async function insertTaskVersion(db, taskId, routineId, fields, effectiveFrom, c
       fields.quantity_mode,
       fields.auto_update_target,
       fields.pre_start_countdown_seconds ?? null,
+      fields.end_tone_enabled,
       fields.exercises,
       fields.active,
       changeType,
@@ -141,6 +148,10 @@ function taskFieldsOf(task) {
     quantity_mode: isQuantity ? task.quantityMode || 'number' : 'number',
     auto_update_target: isQuantity && task.autoUpdateTarget ? 1 : 0,
     pre_start_countdown_seconds: isQuantity && task.quantityMode === 'timer' ? (task.preStartCountdownSeconds ?? 5) : null,
+    // Unlike pre_start_countdown_seconds, not gated to timer mode only - there's no "not
+    // applicable" state distinct from enabled for a plain on/off, so this is simply always
+    // whatever the task's own flag says (default true).
+    end_tone_enabled: task.endToneEnabled === false ? 0 : 1,
     exercises: JSON.stringify(isWorkout ? task.exercises || [] : []),
     active: task.active ? 1 : 0,
   };
@@ -524,8 +535,8 @@ export async function upsertTask(task) {
 
   if (!existing) {
     await db.run(
-      `INSERT INTO tasks (id, routine_id, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, quantity_mode, auto_update_target, pre_start_countdown_seconds, exercises, active, deleted, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+      `INSERT INTO tasks (id, routine_id, title, time, window_start, reminder_times, days, completion_type, target, unit, quick_add, quantity_mode, auto_update_target, pre_start_countdown_seconds, end_tone_enabled, exercises, active, deleted, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
       [
         task.id,
         task.routineId,
@@ -541,6 +552,7 @@ export async function upsertTask(task) {
         fields.quantity_mode,
         fields.auto_update_target,
         fields.pre_start_countdown_seconds,
+        fields.end_tone_enabled,
         fields.exercises,
         fields.active,
         task.createdAt || now,
@@ -551,7 +563,7 @@ export async function upsertTask(task) {
     const changed = diffRowFields(existing, fields);
     if (changed.length > 0) {
       await db.run(
-        `UPDATE tasks SET title=?, time=?, window_start=?, reminder_times=?, days=?, completion_type=?, target=?, unit=?, quick_add=?, quantity_mode=?, auto_update_target=?, pre_start_countdown_seconds=?, exercises=?, active=? WHERE id=?`,
+        `UPDATE tasks SET title=?, time=?, window_start=?, reminder_times=?, days=?, completion_type=?, target=?, unit=?, quick_add=?, quantity_mode=?, auto_update_target=?, pre_start_countdown_seconds=?, end_tone_enabled=?, exercises=?, active=? WHERE id=?`,
         [
           fields.title,
           fields.time,
@@ -565,6 +577,7 @@ export async function upsertTask(task) {
           fields.quantity_mode,
           fields.auto_update_target,
           fields.pre_start_countdown_seconds,
+          fields.end_tone_enabled,
           fields.exercises,
           fields.active,
           task.id,

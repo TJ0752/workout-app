@@ -140,7 +140,9 @@ export function MomentumRing({
  * of where the real fill is about to start from," not an unrelated second animation - and only
  * once it reaches the top does the real running phase (elapsed reset to 0, the actual clock)
  * begin. A beep fires once, exactly when `elapsed` first reaches `targetSeconds` (the moment
- * overtime begins), independent of the pre-start countdown.
+ * overtime begins), independent of the pre-start countdown - gated by `endToneEnabled` (default
+ * true, a per-task/exercise setting, not global), so it can be silenced without touching the
+ * countdown itself.
  *
  * `autoStart` skips the idle "Ready/Start" screen entirely and begins the running phase the
  * instant this mounts, with no countdown of its own - used by WorkoutSessionView when a duration
@@ -154,6 +156,7 @@ export function DurationTimer({
   targetSeconds,
   initialSeconds,
   preStartCountdownSeconds = 5,
+  endToneEnabled = true,
   autoStart = false,
   onAutoStarted,
   onLog,
@@ -207,13 +210,15 @@ export function DurationTimer({
   const countdownMaxDegrees = hasTarget ? Math.min(360, (preStartCountdownSeconds / targetSeconds) * 360) : 360;
 
   // Fires exactly once, right as the target is first reached - not on every tick throughout
-  // overtime (inOvertime stays true the whole time).
+  // overtime (inOvertime stays true the whole time). beepedRef still latches even when the tone
+  // is disabled, so flipping the setting mid-run can't retroactively fire a beep for a moment
+  // that's already passed.
   useEffect(() => {
     if (phase === 'running' && hasTarget && elapsed === targetSeconds && !beepedRef.current) {
       beepedRef.current = true;
-      playBeep();
+      if (endToneEnabled) playBeep();
     }
-  }, [phase, elapsed, hasTarget, targetSeconds]);
+  }, [phase, elapsed, hasTarget, targetSeconds, endToneEnabled]);
 
   const start = (skipCountdown = false) => {
     setEditing(false);

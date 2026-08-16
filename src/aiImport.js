@@ -44,6 +44,7 @@ Output ONLY a single raw JSON object (no markdown fences, no commentary before o
           "quickAdd": [5, 10],
           "autoUpdateTarget": false,
           "preStartCountdownSeconds": "5 - timer mode only, a \\"get ready\\" lead-in before the timer starts, ending with a beep; 0 disables it",
+          "endToneEnabled": "true - timer mode only, whether the target-reached tone plays at all",
 
           "exercises": [
             {
@@ -57,7 +58,8 @@ Output ONLY a single raw JSON object (no markdown fences, no commentary before o
               "supersetGroup": "optional string label, e.g. \\"A\\" - see Rules below",
               "category": "one of: ${EXERCISE_CATEGORIES.map((c) => c.id).join(', ')} — or omit to auto-infer from type/unit",
               "focusArea": "optional string, e.g. \\"Hamstrings\\" or \\"Balance\\" - a body part/area this exercise targets",
-              "preStartCountdownSeconds": "5 - seconds-unit exercises only, a \\"get ready\\" lead-in before the timer starts, carved out of the tail end of any preceding rest; 0 disables it"
+              "preStartCountdownSeconds": "5 - seconds-unit exercises only, a \\"get ready\\" lead-in before the timer starts, carved out of the tail end of any preceding rest; 0 disables it",
+              "endToneEnabled": "true - seconds-unit exercises only, whether the target-reached tone plays at all"
             }
           ]
         }
@@ -148,6 +150,7 @@ function convertExercise(raw, label, index, notes) {
     unit === 'seconds' && Number.isFinite(raw.preStartCountdownSeconds) && raw.preStartCountdownSeconds >= 0
       ? Math.round(raw.preStartCountdownSeconds)
       : 5;
+  const endToneEnabled = unit === 'seconds' ? raw.endToneEnabled !== false : true;
 
   return {
     id: generateId(),
@@ -163,6 +166,7 @@ function convertExercise(raw, label, index, notes) {
     categoryOverride,
     focusArea,
     preStartCountdownSeconds,
+    endToneEnabled,
   };
 }
 
@@ -210,6 +214,7 @@ function resolveSupersetGroups(exercises, label, notes) {
     categoryOverride: ex.categoryOverride,
     focusArea: ex.focusArea,
     preStartCountdownSeconds: ex.preStartCountdownSeconds,
+    endToneEnabled: ex.endToneEnabled,
   }));
 }
 
@@ -254,6 +259,7 @@ function convertTask(raw, routineLabel, index, isSimple, routineTitle, routineDe
   let quantityMode = 'number';
   let autoUpdateTarget = false;
   let preStartCountdownSeconds = 5;
+  let endToneEnabled = true;
   let exercises = [];
 
   if (completionType === 'quantity') {
@@ -275,6 +281,7 @@ function convertTask(raw, routineLabel, index, isSimple, routineTitle, routineDe
         Number.isFinite(raw.preStartCountdownSeconds) && raw.preStartCountdownSeconds >= 0
           ? Math.round(raw.preStartCountdownSeconds)
           : 5;
+      endToneEnabled = raw.endToneEnabled !== false;
     }
   } else if (completionType === 'workout') {
     const rawExercises = Array.isArray(raw.exercises) ? raw.exercises : [];
@@ -300,6 +307,7 @@ function convertTask(raw, routineLabel, index, isSimple, routineTitle, routineDe
     quantityMode,
     autoUpdateTarget,
     preStartCountdownSeconds,
+    endToneEnabled,
     exercises,
     active: true,
     createdAt: new Date().toISOString(),

@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 
 const DB_NAME = 'routines';
-const DB_VERSION = 13;
+const DB_VERSION = 14;
 
 const sqlite = new SQLiteConnection(CapacitorSQLite);
 let dbInstance = null;
@@ -332,6 +332,23 @@ const MIGRATIONS = [
       `ALTER TABLE task_versions ADD COLUMN pre_start_countdown_seconds INTEGER;`,
     ],
   },
+  {
+    // Per-task on/off for the target-reached beep DurationTimer plays (see beep.js/playBeep) -
+    // per-task rather than a single app-wide switch, mirroring pre_start_countdown_seconds' own
+    // per-task scope directly above it (a direct product decision - "for all timer related
+    // activities" turned out to mean "every timer gets this control," not "one global switch").
+    // NOT NULL DEFAULT 1 (not nullable-with-fallback like pre_start_countdown_seconds) since
+    // there's no meaningful "not applicable" state distinct from enabled - ADD COLUMN ... DEFAULT
+    // 1 backfills every existing row to enabled, matching the beep's pre-existing unconditional
+    // behavior before this toggle existed. The identical field on a workout duration exercise
+    // (task.exercises[].endToneEnabled) needs no migration at all, same reasoning as
+    // preStartCountdownSeconds - exercises already live inside the task's JSON blob.
+    toVersion: 14,
+    statements: [
+      `ALTER TABLE tasks ADD COLUMN end_tone_enabled INTEGER NOT NULL DEFAULT 1;`,
+      `ALTER TABLE task_versions ADD COLUMN end_tone_enabled INTEGER NOT NULL DEFAULT 1;`,
+    ],
+  },
 ];
 
 /**
@@ -428,6 +445,15 @@ async function ensurePreStartCountdownColumn(db) {
   await db.run(`ALTER TABLE task_versions ADD COLUMN pre_start_countdown_seconds INTEGER;`);
 }
 
+/** Same self-heal template again, for the toVersion:14 end_tone_enabled column. */
+async function ensureEndToneEnabledColumn(db) {
+  const info = await db.query(`PRAGMA table_info(tasks);`);
+  const hasColumn = (info.values || []).some((col) => col.name === 'end_tone_enabled');
+  if (hasColumn) return;
+  await db.run(`ALTER TABLE tasks ADD COLUMN end_tone_enabled INTEGER NOT NULL DEFAULT 1;`);
+  await db.run(`ALTER TABLE task_versions ADD COLUMN end_tone_enabled INTEGER NOT NULL DEFAULT 1;`);
+}
+
 async function openDatabase() {
   const isWeb = Capacitor.getPlatform() === 'web';
   if (isWeb) {
@@ -448,6 +474,7 @@ async function openDatabase() {
   await ensureExerciseCategoryColumn(db);
   await ensureTaskRescheduleNullable(db);
   await ensurePreStartCountdownColumn(db);
+  await ensureEndToneEnabledColumn(db);
   return db;
 }
 

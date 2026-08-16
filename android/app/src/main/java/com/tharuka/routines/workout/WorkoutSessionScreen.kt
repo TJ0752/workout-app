@@ -575,6 +575,7 @@ fun WorkoutSessionScreen(
                                 targetSeconds = exercise.targetDurationSeconds ?: 0,
                                 initialSeconds = loggedSet?.durationSeconds,
                                 preStartCountdownSeconds = if (autoStartFromRest) 0 else (exercise.preStartCountdownSeconds ?: 5),
+                                endToneEnabled = exercise.endToneEnabled,
                                 autoStart = autoStartFromRest,
                                 onAutoStarted = { autoStartFromRest = false },
                                 onLog = ::markDoneWithDuration,
@@ -837,6 +838,7 @@ fun DurationTimer(
     targetSeconds: Int,
     initialSeconds: Int?,
     preStartCountdownSeconds: Int = 5,
+    endToneEnabled: Boolean = true,
     autoStart: Boolean = false,
     onAutoStarted: (() -> Unit)? = null,
     onLog: (Int) -> Unit,
@@ -904,11 +906,13 @@ fun DurationTimer(
     }
 
     // Fires exactly once, right as the target is first reached - not on every tick throughout
-    // overtime (inOvertime stays true the whole time).
-    LaunchedEffect(phase, elapsed, hasTarget, targetSeconds) {
+    // overtime (inOvertime stays true the whole time). `beeped` still latches even when the tone
+    // is disabled, so flipping the setting mid-run can't retroactively fire a beep for a moment
+    // that's already passed.
+    LaunchedEffect(phase, elapsed, hasTarget, targetSeconds, endToneEnabled) {
         if (phase == "running" && hasTarget && elapsed == targetSeconds && !beeped) {
             beeped = true
-            playBeep()
+            if (endToneEnabled) playBeep()
         }
     }
 

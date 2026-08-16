@@ -460,6 +460,7 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
               targetSeconds={Number(exercise.targetDurationSeconds) || 0}
               initialSeconds={loggedSet?.durationSeconds ?? null}
               preStartCountdownSeconds={autoStartFromRest ? 0 : exercise.preStartCountdownSeconds ?? 5}
+              endToneEnabled={exercise.endToneEnabled !== false}
               autoStart={autoStartFromRest}
               onAutoStarted={() => setAutoStartFromRest(false)}
               onLog={markDoneWithDuration}

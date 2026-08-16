@@ -68,6 +68,7 @@ class WorkoutSessionActivity : ComponentActivity() {
             val targetSeconds = payload?.optIntOrNull("targetSeconds") ?: 0
             val initialSeconds = payload?.optIntOrNull("initialSeconds")
             val preStartCountdownSeconds = payload?.optIntOrNull("preStartCountdownSeconds") ?: 5
+            val endToneEnabled = payload?.optBoolean("endToneEnabled", true) ?: true
             setContent {
                 MaterialTheme(colorScheme = WorkoutColorScheme) {
                     Surface {
@@ -76,6 +77,7 @@ class WorkoutSessionActivity : ComponentActivity() {
                             targetSeconds = targetSeconds,
                             initialSeconds = initialSeconds,
                             preStartCountdownSeconds = preStartCountdownSeconds,
+                            endToneEnabled = endToneEnabled,
                             onLog = { seconds ->
                                 val event = JSObject()
                                 event.put("taskId", taskId)
@@ -214,6 +216,7 @@ class WorkoutSessionActivity : ComponentActivity() {
                     exerciseId = obj.optStringOrNull("exerciseId"),
                     supersetGroupId = obj.optStringOrNull("supersetGroupId"),
                     preStartCountdownSeconds = obj.optIntOrNull("preStartCountdownSeconds"),
+                    endToneEnabled = obj.optBoolean("endToneEnabled", true),
                 )
             )
         }

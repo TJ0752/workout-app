@@ -24,6 +24,7 @@ export default function QuantityTimerView({ task, onLog, onClose }) {
           targetSeconds={Number(task.target) || 0}
           initialSeconds={null}
           preStartCountdownSeconds={task.preStartCountdownSeconds ?? 5}
+          endToneEnabled={task.endToneEnabled !== false}
           onLog={onLog}
         />
       </div>

@@ -35,6 +35,7 @@ fun QuantityTimerScreen(
     targetSeconds: Int,
     initialSeconds: Int?,
     preStartCountdownSeconds: Int = 5,
+    endToneEnabled: Boolean = true,
     onLog: (Int) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -59,6 +60,7 @@ fun QuantityTimerScreen(
                 targetSeconds = targetSeconds,
                 initialSeconds = initialSeconds,
                 preStartCountdownSeconds = preStartCountdownSeconds,
+                endToneEnabled = endToneEnabled,
                 onLog = onLog,
             )
         }

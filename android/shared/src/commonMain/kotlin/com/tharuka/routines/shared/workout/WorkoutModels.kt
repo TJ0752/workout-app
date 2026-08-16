@@ -28,7 +28,11 @@ data class Exercise(
     // RestRing/DurationTimer in WorkoutSessionScreen.kt). Null defaults to 5 at the call site
     // (matching the JS side's own `?? 5` fallback), 0 disables it. Trailing, with a default, for
     // the same WorkoutLogicTest positional-constructor reason as the fields above.
-    val preStartCountdownSeconds: Int? = null
+    val preStartCountdownSeconds: Int? = null,
+    // Whether the target-reached tone plays for this exercise's duration timer - default true,
+    // matching the tone's own unconditional behavior before this toggle existed. Trailing, with a
+    // default, for the same WorkoutLogicTest positional-constructor reason as the fields above.
+    val endToneEnabled: Boolean = true
 )
 
 /** One task's exercises + full log history - the flattened shape getLastUsedWeight scans across

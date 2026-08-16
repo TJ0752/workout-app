@@ -1745,6 +1745,42 @@ different lead-ins or none at all):
   `convertExercise`/`convertTask`/`resolveSupersetGroups` were updated for both fields per this
   codebase's standing rule to keep the AI-import schema in lockstep with real config options.
 
+**End-of-timer tone toggle, per task/exercise.** `DurationTimer`'s target-reached beep (see above)
+is gated by a new `endToneEnabled` field, default `true` — a direct product decision: "toggle on
+and off an end of timer tone for all timer related activities" turned out to mean *every* timer
+gets its own control, not one app-wide switch, mirroring `preStartCountdownSeconds`' own per-task/
+per-exercise scope rather than living in Settings. Voice announcements (start/end spoken aloud, a
+"maybe" raised in the same request) were deliberately **not** built in this pass — scoped down to
+just the tone toggle first, per explicit user choice, since it's the smaller, immediately-testable
+piece; TTS (Web Speech API on web, Android `TextToSpeech` natively) is a real, larger follow-up if
+wanted later, not an oversight.
+- **Data model**: `endToneEnabled` on a quantity-timer task is a real, migrated column
+  (`DB_VERSION = 14`, `tasks`/`task_versions`) — unlike `preStartCountdownSeconds`, `NOT NULL
+  DEFAULT 1` rather than nullable-with-fallback, since there's no meaningful "not applicable"
+  state distinct from enabled; `ALTER TABLE ... ADD COLUMN ... DEFAULT 1` backfills every
+  pre-existing row to enabled, matching the beep's own unconditional behavior before this toggle
+  existed. `storage.js`'s `rowToTask` still reads it defensively (`== null` treated as enabled,
+  not a plain trust of the NOT NULL constraint) per this codebase's standing caution about a
+  migration's `ALTER TABLE` silently not applying despite `PRAGMA user_version` reporting success
+  (`ensureEndToneEnabledColumn` is the matching self-heal function, same template as
+  `ensurePreStartCountdownColumn` and friends). The identical field on a workout duration exercise
+  (`task.exercises[].endToneEnabled`) needs no migration at all, same reasoning as
+  `preStartCountdownSeconds` — exercises already live inside the task's JSON blob.
+- **`playBeep()`'s own latch (`beepedRef`/`beeped`) still fires even when the tone is disabled** —
+  only the actual `playBeep()` call is skipped — so flipping the setting mid-run can't
+  retroactively sound a beep for a target-reached moment that's already passed.
+- Flows through to native via the exact same JSON payload/parsing path every other exercise/task
+  field already uses (`parseExercises` in `WorkoutSessionActivity.kt` for exercises; the
+  quantity-timer's own `pureTimer` payload for the task-level field). `aiImport.js`'s schema/
+  prompt and `convertExercise`/`convertTask`/`resolveSupersetGroups` were updated to match, per
+  this codebase's standing rule to keep the AI-import schema in lockstep with real config options.
+- Verified via a Playwright round-trip: a fresh timer task defaults to the tone checked; unchecking
+  it and saving, then reopening the routine's edit form, confirms the unchecked state survived a
+  full save/reload round-trip (a real DB write, not just local component state). Running a
+  tone-enabled timer to its target constructs a real `AudioContext` (confirmed via a spy installed
+  on `window.AudioContext` before the page loads, since headless Chromium has no audio device to
+  actually listen to); running a tone-disabled timer to its target constructs none.
+
 ### Fitness Stats (`src/components/DashboardView.jsx`, `src/utils/workouts.js`)
 
 Unlike the workout session screen above, this is **not** native — it's a second sub-tab

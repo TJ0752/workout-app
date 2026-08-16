@@ -71,6 +71,7 @@ export async function startNativeQuantityTimer(task, dateKey) {
     targetSeconds: task.target || 0,
     initialSeconds: null,
     preStartCountdownSeconds: task.preStartCountdownSeconds ?? 5,
+    endToneEnabled: task.endToneEnabled !== false,
   });
 }
 

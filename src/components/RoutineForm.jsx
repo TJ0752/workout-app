@@ -36,6 +36,9 @@ function makeTask(days) {
     // before the real timer starts, ending with a beep at the target moment. 5s default, 0
     // disables it entirely. See DurationTimer.jsx.
     preStartCountdownSeconds: 5,
+    // Whether the target-reached beep plays at all for this task - on by default, matching the
+    // beep's own unconditional behavior before this toggle existed.
+    endToneEnabled: true,
     exercises: [],
     active: true,
     createdAt: new Date().toISOString(),
@@ -57,6 +60,9 @@ function makeExercise() {
     // this exercise is preceded by rest, the countdown is carved out of the *tail end* of that
     // rest period rather than adding extra time - see RestRing in WorkoutSessionView.jsx.
     preStartCountdownSeconds: 5,
+    // Whether the target-reached beep plays at all for this exercise's duration timer - on by
+    // default, matching the beep's own unconditional behavior before this toggle existed.
+    endToneEnabled: true,
     // Contiguous exercises sharing this id form a superset - see utils/supersets.js. null/absent
     // means "not part of a superset," identical to how every exercise behaved before this field
     // existed, so no backfill was needed for pre-existing data.
@@ -516,6 +522,16 @@ function ExerciseListEditor({ task, onChange, exerciseNames }) {
           </label>
         </div>
       )}
+      {ex.unit === 'seconds' && (
+        <label className="checkbox-field">
+          <input
+            type="checkbox"
+            checked={ex.endToneEnabled !== false}
+            onChange={(e) => updateExercise(ex.id, { endToneEnabled: e.target.checked })}
+          />
+          Play end-of-timer tone
+        </label>
+      )}
       <div className="inline-fields">
         {linkedToNext ? (
           <p className="superset-rest-note">No rest - moves straight into the next superset exercise.</p>
@@ -754,6 +770,18 @@ function TaskFields({ task, onChange, showTitle, exerciseNames }) {
               <p className="field-hint">
                 A "get ready" lead-in shown before the timer actually starts running, so you're
                 not caught off guard. Ends with a beep exactly when the real countdown begins.
+              </p>
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={task.endToneEnabled !== false}
+                  onChange={(e) => onChange({ ...task, endToneEnabled: e.target.checked })}
+                />
+                Play end-of-timer tone
+              </label>
+              <p className="field-hint">
+                A short tone when the target duration is reached. Turn off if you'd rather rely on
+                the ring/notification alone.
               </p>
             </>
           ) : (
