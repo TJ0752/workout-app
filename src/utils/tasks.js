@@ -32,6 +32,25 @@ export function formatHms(totalSeconds) {
   return hours > 0 ? `${sign}${hours}:${mm}:${ss}` : `${sign}${mm}:${ss}`;
 }
 
+/** Spoken-word duration for voice announcements ("2 minutes", "1 minute 30 seconds", "45
+ * seconds") - deliberately plain digits + unit words rather than a clock-style "1:30" reading,
+ * since TTS engines pronounce that reliably while a colon-formatted string's pronunciation is
+ * engine-dependent. Omits any zero-valued unit (a whole-minute duration says "2 minutes", not "2
+ * minutes 0 seconds"), except seconds are always shown for a sub-minute duration ("0 seconds"
+ * never actually occurs in practice - only called with elapsed >= 1). Mirrored in Kotlin by
+ * WorkoutSessionScreen.kt's formatSpokenDuration. */
+export function formatSpokenDuration(totalSeconds) {
+  const s = Math.max(0, Math.round(totalSeconds || 0));
+  const hours = Math.floor(s / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  const seconds = s % 60;
+  const parts = [];
+  if (hours > 0) parts.push(`${hours} hour${hours === 1 ? '' : 's'}`);
+  if (minutes > 0) parts.push(`${minutes} minute${minutes === 1 ? '' : 's'}`);
+  if (seconds > 0 || parts.length === 0) parts.push(`${seconds} second${seconds === 1 ? '' : 's'}`);
+  return parts.join(' ');
+}
+
 /** Combines the separate hours/minutes/seconds parts typed into an HH:MM:SS setup input into the
  * single total-seconds value that's actually persisted (task.target / exercise's
  * targetDurationSeconds stay plain seconds either way, so this input style needed no

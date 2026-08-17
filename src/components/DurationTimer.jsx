@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { formatHms } from '../utils/tasks';
+import { formatHms, formatSpokenDuration } from '../utils/tasks';
 import { playBeep } from '../utils/beep';
+import { speak } from '../utils/speech';
 
 export const RING_RADIUS = 80;
 export const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
@@ -151,12 +152,19 @@ export function MomentumRing({
  * asking for a second Start tap and a second countdown. `onAutoStarted` fires once, right after,
  * so the parent can clear its own one-shot flag (this only ever applies to the exact position
  * that just came out of a rest countdown, never a later manual re-visit of the same set).
+ *
+ * `voiceAnnouncementsEnabled` (default true, a separate per-task/exercise setting from
+ * `endToneEnabled`) speaks "Start" the moment the real timer begins, "3"/"2"/"1" on the
+ * countdown's final ticks, the target duration reached (replacing the tone at that exact moment -
+ * hearing both read as cluttered), a repeat announcement every `targetSeconds/2` seconds further
+ * into overtime, and "Timer stopped" when the user taps Stop. See utils/speech.js.
  */
 export function DurationTimer({
   targetSeconds,
   initialSeconds,
   preStartCountdownSeconds = 5,
   endToneEnabled = true,
+  voiceAnnouncementsEnabled = true,
   autoStart = false,
   onAutoStarted,
   onLog,
@@ -168,6 +176,12 @@ export function DurationTimer({
   const [customValue, setCustomValue] = useState('');
   const [runId, setRunId] = useState(0);
   const beepedRef = useRef(false);
+  // The next overtime threshold (in seconds) due a repeat voice announcement - null until a run
+  // actually starts. Set to targetSeconds + one half-target interval in start() (not
+  // targetSeconds itself, which the target-reached effect below already announces on its own),
+  // then advanced by one interval each time it fires, so the two announcement mechanisms never
+  // both speak for the same instant.
+  const nextVoiceAnnounceAtRef = useRef(null);
 
   useEffect(() => {
     if (phase !== 'running') return undefined;
@@ -191,9 +205,23 @@ export function DurationTimer({
       setRunId((n) => n + 1);
       return undefined;
     }
+    // Only the final 3 ticks get spoken, regardless of how long the configured countdown is -
+    // "5... 4..." reading aloud this far ahead of the real start would be noise, not a cue.
+    if (voiceAnnouncementsEnabled && countdownRemaining <= 3) {
+      speak(String(countdownRemaining));
+    }
     const t = setTimeout(() => setCountdownRemaining((n) => n - 1), 1000);
     return () => clearTimeout(t);
-  }, [phase, countdownRemaining]);
+  }, [phase, countdownRemaining, voiceAnnouncementsEnabled]);
+
+  // Speaks "Start" the instant the real timer begins running - whether that's from this
+  // component's own countdown finishing, a skipped countdown, or `autoStart` mounting straight
+  // into 'running' (in which case this fires right after the rest period's own "3, 2, 1" tail,
+  // since the two are sequential, not overlapping - see WorkoutSessionView.jsx).
+  useEffect(() => {
+    if (phase === 'running' && voiceAnnouncementsEnabled) speak('Start');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
 
   const hasTarget = targetSeconds > 0;
   const overtime = hasTarget ? Math.max(0, elapsed - targetSeconds) : 0;
@@ -210,19 +238,43 @@ export function DurationTimer({
   const countdownMaxDegrees = hasTarget ? Math.min(360, (preStartCountdownSeconds / targetSeconds) * 360) : 360;
 
   // Fires exactly once, right as the target is first reached - not on every tick throughout
-  // overtime (inOvertime stays true the whole time). beepedRef still latches even when the tone
-  // is disabled, so flipping the setting mid-run can't retroactively fire a beep for a moment
-  // that's already passed.
+  // overtime (inOvertime stays true the whole time). beepedRef still latches even when both the
+  // tone and voice are disabled, so flipping a setting mid-run can't retroactively fire anything
+  // for a moment that's already passed. Voice replaces the tone at this exact instant (hearing
+  // both back to back read as cluttered) but the two toggles are otherwise fully independent -
+  // voice's own repeat overtime announcements below have no tone equivalent at all.
   useEffect(() => {
     if (phase === 'running' && hasTarget && elapsed === targetSeconds && !beepedRef.current) {
       beepedRef.current = true;
-      if (endToneEnabled) playBeep();
+      if (voiceAnnouncementsEnabled) {
+        speak(`${formatSpokenDuration(targetSeconds)} reached`);
+      } else if (endToneEnabled) {
+        playBeep();
+      }
     }
-  }, [phase, elapsed, hasTarget, targetSeconds, endToneEnabled]);
+  }, [phase, elapsed, hasTarget, targetSeconds, endToneEnabled, voiceAnnouncementsEnabled]);
+
+  // Repeats the "reached" announcement every half-target seconds further into overtime (a target
+  // of 2:00 announces again at 3:00, 4:00, ...) - a `while` loop rather than a plain `if` so a
+  // dropped/delayed tick (the tab backgrounded for a moment, etc.) can't silently skip a
+  // threshold; each iteration both speaks and advances the ref before checking again.
+  useEffect(() => {
+    if (phase !== 'running' || !hasTarget || !voiceAnnouncementsEnabled) return;
+    const intervalSeconds = Math.max(1, Math.round(targetSeconds / 2));
+    while (nextVoiceAnnounceAtRef.current != null && elapsed >= nextVoiceAnnounceAtRef.current) {
+      speak(`${formatSpokenDuration(nextVoiceAnnounceAtRef.current)} reached`);
+      nextVoiceAnnounceAtRef.current += intervalSeconds;
+    }
+  }, [phase, elapsed, hasTarget, targetSeconds, voiceAnnouncementsEnabled]);
 
   const start = (skipCountdown = false) => {
     setEditing(false);
     setRunId((n) => n + 1);
+    // The first repeat announcement lands one half-target interval *past* the target itself -
+    // the target-reached effect above already owns that exact moment, so this deliberately skips
+    // it to avoid both effects speaking for the same instant.
+    const intervalSeconds = hasTarget ? Math.max(1, Math.round(targetSeconds / 2)) : null;
+    nextVoiceAnnounceAtRef.current = hasTarget ? targetSeconds + intervalSeconds : null;
     if (!skipCountdown && preStartCountdownSeconds > 0) {
       setCountdownRemaining(preStartCountdownSeconds);
       setPhase('countdown');
@@ -245,6 +297,7 @@ export function DurationTimer({
   }, []);
 
   const stop = () => {
+    if (voiceAnnouncementsEnabled) speak('Timer stopped');
     setPhase('stopped');
     setEditing(false);
     setCustomValue(String(elapsed));

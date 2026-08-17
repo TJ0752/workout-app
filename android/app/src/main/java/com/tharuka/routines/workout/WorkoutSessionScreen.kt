@@ -208,8 +208,36 @@ fun WorkoutSessionScreen(
 
     LaunchedEffect(Unit) { notifyProgressUpdate() }
 
+    // Announces the upcoming exercise once, right as rest begins - not partway through or
+    // deferred, specifically so it's already been said (or is already in progress) by the time a
+    // user could physically tap "Skip rest", satisfying "even if skipped it should read it out"
+    // without any extra skip-specific handling. Gated on the *upcoming* exercise's own
+    // voiceAnnouncementsEnabled (already reassigned by the time resting starts - see the comment
+    // below), not the one that was just finished, since this is a heads-up for what's about to
+    // run. Mirrors WorkoutSessionView.jsx's identical resting-keyed effect.
+    LaunchedEffect(resting) {
+        if (resting) {
+            val upcoming = exercises.getOrNull(exerciseIndex)
+            if (upcoming?.voiceAnnouncementsEnabled != false) {
+                SpeechHelper.speak("Next: ${upcoming?.name ?: "next exercise"}")
+            }
+        }
+    }
+
     LaunchedEffect(resting, restRemaining) {
         if (resting && restRemaining > 0) {
+            // The rest period's own last-3-seconds spoken countdown - sourced from this same
+            // restRemaining tick rather than a second parallel ticker, so it can't drift out of
+            // sync with the visible number. This is what actually delivers "give a 3, 2, 1 to
+            // start" for every rest-ending transition, not just a duration exercise's own
+            // carved-out countdown: when the upcoming exercise IS duration-based with its own
+            // preStartCountdownSeconds carved from this same rest tail, DurationTimer mounts via
+            // autoStart with its own countdown skipped entirely (see below), so this is the only
+            // spoken 3-2-1 for that transition too - never both.
+            val upcoming = exercises.getOrNull(exerciseIndex)
+            if (restRemaining <= 3 && upcoming?.voiceAnnouncementsEnabled != false) {
+                SpeechHelper.speak(restRemaining.toString())
+            }
             delay(1000)
             restRemaining -= 1
             if (restRemaining <= 0) {
@@ -219,8 +247,8 @@ fun WorkoutSessionScreen(
                 // carved it out of, that countdown just finished as part of the rest sweep
                 // itself; the real timer should pick up right where it left off rather than
                 // asking for a second Start tap and a second countdown.
-                val upcoming = exercises.getOrNull(exerciseIndex)
-                val upcomingCountdown = if (upcoming?.unit == "seconds") (upcoming.preStartCountdownSeconds ?: 5) else 0
+                val upcomingNext = exercises.getOrNull(exerciseIndex)
+                val upcomingCountdown = if (upcomingNext?.unit == "seconds") (upcomingNext.preStartCountdownSeconds ?: 5) else 0
                 autoStartFromRest = restTotalSeconds > 0 && upcomingCountdown > 0
                 resting = false
                 onRestEnd()
@@ -576,6 +604,7 @@ fun WorkoutSessionScreen(
                                 initialSeconds = loggedSet?.durationSeconds,
                                 preStartCountdownSeconds = if (autoStartFromRest) 0 else (exercise.preStartCountdownSeconds ?: 5),
                                 endToneEnabled = exercise.endToneEnabled,
+                                voiceAnnouncementsEnabled = exercise.voiceAnnouncementsEnabled,
                                 autoStart = autoStartFromRest,
                                 onAutoStarted = { autoStartFromRest = false },
                                 onLog = ::markDoneWithDuration,
@@ -832,6 +861,12 @@ private suspend fun playBeep() {
  * timer picks up exactly where that countdown left off instead of asking for a second Start tap
  * and a second countdown. `onAutoStarted` fires once, right after, so the caller can clear its own
  * one-shot flag.
+ *
+ * `voiceAnnouncementsEnabled` (default true, a separate per-task/exercise setting from
+ * `endToneEnabled`) speaks "Start" the moment the real timer begins, "3"/"2"/"1" on the
+ * countdown's final ticks, the target duration reached (replacing the tone at that exact moment -
+ * hearing both read as cluttered), a repeat announcement every `targetSeconds/2` seconds further
+ * into overtime, and "Timer stopped" when the user taps Stop. See SpeechHelper.kt.
  */
 @Composable
 fun DurationTimer(
@@ -839,6 +874,7 @@ fun DurationTimer(
     initialSeconds: Int?,
     preStartCountdownSeconds: Int = 5,
     endToneEnabled: Boolean = true,
+    voiceAnnouncementsEnabled: Boolean = true,
     autoStart: Boolean = false,
     onAutoStarted: (() -> Unit)? = null,
     onLog: (Int) -> Unit,
@@ -850,6 +886,12 @@ fun DurationTimer(
     var customValue by remember { mutableStateOf("") }
     var runId by remember { mutableStateOf(0) }
     var beeped by remember { mutableStateOf(false) }
+    // The next overtime threshold (in seconds) due a repeat voice announcement - null until a run
+    // actually starts. Set to targetSeconds + one half-target interval in start() (not
+    // targetSeconds itself, which the target-reached effect below already announces on its own),
+    // then advanced by one interval each time it fires, so the two announcement mechanisms never
+    // both speak for the same instant.
+    var nextVoiceAnnounceAt by remember { mutableStateOf<Int?>(null) }
 
     LaunchedEffect(phase, elapsed) {
         if (phase == "running") {
@@ -873,10 +915,25 @@ fun DurationTimer(
                 // animateSeconds unchanged across this transition).
                 runId += 1
             } else {
+                // Only the final 3 ticks get spoken, regardless of how long the configured
+                // countdown is - "5... 4..." reading aloud this far ahead of the real start would
+                // be noise, not a cue.
+                if (voiceAnnouncementsEnabled && countdownRemaining <= 3) {
+                    SpeechHelper.speak(countdownRemaining.toString())
+                }
                 delay(1000)
                 countdownRemaining -= 1
             }
         }
+    }
+
+    // Speaks "Start" the instant the real timer begins running - whether that's from this
+    // composable's own countdown finishing, a skipped countdown, or `autoStart` composing
+    // straight into "running" (in which case this fires right after the rest period's own
+    // "3, 2, 1" tail, since the two are sequential, not overlapping - see WorkoutSessionScreen's
+    // own rest LaunchedEffect above).
+    LaunchedEffect(phase) {
+        if (phase == "running" && voiceAnnouncementsEnabled) SpeechHelper.speak("Start")
     }
 
     val hasTarget = targetSeconds > 0
@@ -906,19 +963,45 @@ fun DurationTimer(
     }
 
     // Fires exactly once, right as the target is first reached - not on every tick throughout
-    // overtime (inOvertime stays true the whole time). `beeped` still latches even when the tone
-    // is disabled, so flipping the setting mid-run can't retroactively fire a beep for a moment
-    // that's already passed.
-    LaunchedEffect(phase, elapsed, hasTarget, targetSeconds, endToneEnabled) {
+    // overtime (inOvertime stays true the whole time). `beeped` still latches even when both the
+    // tone and voice are disabled, so flipping a setting mid-run can't retroactively fire
+    // anything for a moment that's already passed. Voice replaces the tone at this exact instant
+    // (hearing both back to back read as cluttered) but the two toggles are otherwise fully
+    // independent - voice's own repeat overtime announcements below have no tone equivalent at
+    // all.
+    LaunchedEffect(phase, elapsed, hasTarget, targetSeconds, endToneEnabled, voiceAnnouncementsEnabled) {
         if (phase == "running" && hasTarget && elapsed == targetSeconds && !beeped) {
             beeped = true
-            if (endToneEnabled) playBeep()
+            if (voiceAnnouncementsEnabled) {
+                SpeechHelper.speak("${formatSpokenDuration(targetSeconds)} reached")
+            } else if (endToneEnabled) {
+                playBeep()
+            }
+        }
+    }
+
+    // Repeats the "reached" announcement every half-target seconds further into overtime (a
+    // target of 2:00 announces again at 3:00, 4:00, ...) - re-checked each tick rather than
+    // scheduled ahead of time, so a dropped/delayed tick can't silently skip a threshold.
+    LaunchedEffect(phase, elapsed, hasTarget, targetSeconds, voiceAnnouncementsEnabled) {
+        if (phase == "running" && hasTarget && voiceAnnouncementsEnabled) {
+            val intervalSeconds = maxOf(1, Math.round(targetSeconds / 2f))
+            var next = nextVoiceAnnounceAt
+            while (next != null && elapsed >= next) {
+                SpeechHelper.speak("${formatSpokenDuration(next)} reached")
+                next += intervalSeconds
+                nextVoiceAnnounceAt = next
+            }
         }
     }
 
     fun start(skipCountdown: Boolean = false) {
         editing = false
         runId += 1
+        // The first repeat announcement lands one half-target interval *past* the target itself -
+        // the target-reached effect above already owns that exact moment, so this deliberately
+        // skips it to avoid both effects speaking for the same instant.
+        nextVoiceAnnounceAt = if (hasTarget) targetSeconds + maxOf(1, Math.round(targetSeconds / 2f)) else null
         if (!skipCountdown && preStartCountdownSeconds > 0) {
             countdownRemaining = preStartCountdownSeconds
             phase = "countdown"
@@ -939,6 +1022,7 @@ fun DurationTimer(
     }
 
     fun stop() {
+        if (voiceAnnouncementsEnabled) SpeechHelper.speak("Timer stopped")
         phase = "stopped"
         editing = false
         customValue = elapsed.toString()
@@ -1388,4 +1472,20 @@ fun formatHms(totalSeconds: Int): String {
     val mm = if (hours > 0) minutes.toString().padStart(2, '0') else minutes.toString()
     val ss = seconds.toString().padStart(2, '0')
     return if (hours > 0) "$sign$hours:$mm:$ss" else "$sign$mm:$ss"
+}
+
+/** Spoken-word duration for voice announcements ("2 minutes", "1 minute 30 seconds", "45
+ * seconds") - mirrors src/utils/tasks.js's formatSpokenDuration exactly. Plain digits + unit
+ * words rather than a clock-style "1:30" reading, since TextToSpeech pronounces that reliably
+ * while a colon-formatted string's pronunciation is engine-dependent. */
+fun formatSpokenDuration(totalSeconds: Int): String {
+    val s = maxOf(0, totalSeconds)
+    val hours = s / 3600
+    val minutes = (s % 3600) / 60
+    val seconds = s % 60
+    val parts = mutableListOf<String>()
+    if (hours > 0) parts.add("$hours hour${if (hours == 1) "" else "s"}")
+    if (minutes > 0) parts.add("$minutes minute${if (minutes == 1) "" else "s"}")
+    if (seconds > 0 || parts.isEmpty()) parts.add("$seconds second${if (seconds == 1) "" else "s"}")
+    return parts.joinToString(" ")
 }

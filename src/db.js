@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 
 const DB_NAME = 'routines';
-const DB_VERSION = 14;
+const DB_VERSION = 15;
 
 const sqlite = new SQLiteConnection(CapacitorSQLite);
 let dbInstance = null;
@@ -349,6 +349,21 @@ const MIGRATIONS = [
       `ALTER TABLE task_versions ADD COLUMN end_tone_enabled INTEGER NOT NULL DEFAULT 1;`,
     ],
   },
+  {
+    // Spoken start/countdown/target-reached/end announcements for a timer-mode quantity task -
+    // a separate on/off from end_tone_enabled above (a direct product decision: tone and voice
+    // are independently useful, so someone can have either, both, or neither), same NOT NULL
+    // DEFAULT 1 shape and same reasoning ("no meaningful not-applicable state distinct from
+    // enabled"). The identical field on a workout duration exercise
+    // (task.exercises[].voiceAnnouncementsEnabled) needs no migration at all, same reasoning as
+    // end_tone_enabled/preStartCountdownSeconds - exercises already live inside the task's JSON
+    // blob.
+    toVersion: 15,
+    statements: [
+      `ALTER TABLE tasks ADD COLUMN voice_announcements_enabled INTEGER NOT NULL DEFAULT 1;`,
+      `ALTER TABLE task_versions ADD COLUMN voice_announcements_enabled INTEGER NOT NULL DEFAULT 1;`,
+    ],
+  },
 ];
 
 /**
@@ -454,6 +469,15 @@ async function ensureEndToneEnabledColumn(db) {
   await db.run(`ALTER TABLE task_versions ADD COLUMN end_tone_enabled INTEGER NOT NULL DEFAULT 1;`);
 }
 
+/** Same self-heal template again, for the toVersion:15 voice_announcements_enabled column. */
+async function ensureVoiceAnnouncementsColumn(db) {
+  const info = await db.query(`PRAGMA table_info(tasks);`);
+  const hasColumn = (info.values || []).some((col) => col.name === 'voice_announcements_enabled');
+  if (hasColumn) return;
+  await db.run(`ALTER TABLE tasks ADD COLUMN voice_announcements_enabled INTEGER NOT NULL DEFAULT 1;`);
+  await db.run(`ALTER TABLE task_versions ADD COLUMN voice_announcements_enabled INTEGER NOT NULL DEFAULT 1;`);
+}
+
 async function openDatabase() {
   const isWeb = Capacitor.getPlatform() === 'web';
   if (isWeb) {
@@ -475,6 +499,7 @@ async function openDatabase() {
   await ensureTaskRescheduleNullable(db);
   await ensurePreStartCountdownColumn(db);
   await ensureEndToneEnabledColumn(db);
+  await ensureVoiceAnnouncementsColumn(db);
   return db;
 }
 

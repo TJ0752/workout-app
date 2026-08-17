@@ -10,6 +10,7 @@ import {
 } from '../utils/supersets';
 import { MomentumRing, DurationTimer } from './DurationTimer';
 import { formatHms } from '../utils/tasks';
+import { speak } from '../utils/speech';
 
 /** "60" for a whole number, "62.5" otherwise. */
 function formatNumber(value) {
@@ -210,6 +211,20 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
   const currentWeightKg = weightKgText === '' ? null : Number(weightKgText);
   const isWeightRegression = lastUsedWeight != null && currentWeightKg != null && currentWeightKg < lastUsedWeight;
 
+  // Announces the upcoming exercise once, right as rest begins - not partway through or deferred,
+  // specifically so it's already been said (or is already in progress) by the time a user could
+  // physically tap "Skip rest", satisfying "even if skipped it should read it out" without any
+  // extra skip-specific handling. Gated on the *upcoming* exercise's own voiceAnnouncementsEnabled
+  // (already reassigned by the time resting starts - see the comment below), not the one that was
+  // just finished, since this is a heads-up for what's about to run.
+  useEffect(() => {
+    if (!resting) return;
+    if (exercise?.voiceAnnouncementsEnabled !== false) {
+      speak(`Next: ${exercise?.name || 'next exercise'}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resting]);
+
   useEffect(() => {
     if (!resting) return undefined;
     if (restRemaining <= 0) {
@@ -222,6 +237,16 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
       setAutoStartFromRest(restTotalSeconds > 0 && upcomingCountdown > 0);
       setResting(false);
       return undefined;
+    }
+    // The rest period's own last-3-seconds spoken countdown - deliberately sourced from this same
+    // restRemaining tick rather than a second parallel ticker, so it can't drift out of sync with
+    // the visible number. This is what actually delivers "give a 3, 2, 1 to start" for every
+    // rest-ending transition, not just a duration exercise's own carved-out countdown: when the
+    // upcoming exercise IS duration-based with its own preStartCountdownSeconds carved from this
+    // same rest tail, DurationTimer mounts via autoStart with its own countdown skipped entirely
+    // (see below), so this is the only spoken 3-2-1 for that transition too - never both.
+    if (restRemaining <= 3 && exercise?.voiceAnnouncementsEnabled !== false) {
+      speak(String(restRemaining));
     }
     const t = setTimeout(() => setRestRemaining((r) => r - 1), 1000);
     return () => clearTimeout(t);
@@ -461,6 +486,7 @@ export default function WorkoutSessionView({ task, workoutLogSources, dateKey, l
               initialSeconds={loggedSet?.durationSeconds ?? null}
               preStartCountdownSeconds={autoStartFromRest ? 0 : exercise.preStartCountdownSeconds ?? 5}
               endToneEnabled={exercise.endToneEnabled !== false}
+              voiceAnnouncementsEnabled={exercise.voiceAnnouncementsEnabled !== false}
               autoStart={autoStartFromRest}
               onAutoStarted={() => setAutoStartFromRest(false)}
               onLog={markDoneWithDuration}

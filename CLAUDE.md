@@ -1752,8 +1752,7 @@ gets its own control, not one app-wide switch, mirroring `preStartCountdownSecon
 per-exercise scope rather than living in Settings. Voice announcements (start/end spoken aloud, a
 "maybe" raised in the same request) were deliberately **not** built in this pass — scoped down to
 just the tone toggle first, per explicit user choice, since it's the smaller, immediately-testable
-piece; TTS (Web Speech API on web, Android `TextToSpeech` natively) is a real, larger follow-up if
-wanted later, not an oversight.
+piece. They landed in a later pass — see "Voice announcements" below.
 - **Data model**: `endToneEnabled` on a quantity-timer task is a real, migrated column
   (`DB_VERSION = 14`, `tasks`/`task_versions`) — unlike `preStartCountdownSeconds`, `NOT NULL
   DEFAULT 1` rather than nullable-with-fallback, since there's no meaningful "not applicable"
@@ -1780,6 +1779,107 @@ wanted later, not an oversight.
   tone-enabled timer to its target constructs a real `AudioContext` (confirmed via a spy installed
   on `window.AudioContext` before the page loads, since headless Chromium has no audio device to
   actually listen to); running a tone-disabled timer to its target constructs none.
+
+**Voice announcements** (`src/utils/speech.js`, native `SpeechHelper.kt`), a follow-up pass once
+the tone toggle above had shipped: spoken start/countdown/target-reached/end cues for every
+`DurationTimer` instance (quantity-as-timer tasks and workout duration exercises alike), plus two
+workout-only rest-period cues. A direct product request, with three decisions locked in via
+`AskUserQuestion` before implementation: a **separate** `voiceAnnouncementsEnabled` toggle from
+`endToneEnabled` (not one switch controlling both — someone might want tone only, voice only,
+both, or neither), voice **replaces** the tone at the target-reached moment rather than both
+firing (hearing a beep then a spoken phrase for the same instant read as cluttered), and the
+spoken "end" cue is a plain `"Timer stopped"` (not a read-back of the logged time, which would be
+a longer phrase than a moment meant to feel snappy warrants).
+
+- **Every `DurationTimer` gets**: "Start" spoken the instant the real countdown begins; "3", "2",
+  "1" spoken on the pre-start countdown's final ticks (a countdown shorter than 3s speaks
+  whichever numbers fit, matching the countdown ring's own graceful truncation); the target
+  duration reached, spoken via `formatSpokenDuration` (`"Two minutes reached"` — plain digits +
+  unit words, not a clock-style "2:00" reading, since TTS engines pronounce that reliably while a
+  colon-formatted string's pronunciation is engine-dependent); a repeat announcement every
+  `targetSeconds / 2` seconds further into overtime (a 2:00 target announces again at 3:00, 4:00,
+  ...); and `"Timer stopped"` when Stop is tapped.
+- **Voice replaces the tone, never both, at the exact target-reached instant** — the same
+  `beeped`/`beepedRef` latch from the tone feature above now branches: `voiceAnnouncementsEnabled`
+  speaks instead of calling `playBeep()`; only when voice is off does the existing
+  `endToneEnabled` tone fire, unchanged. The *repeat* overtime announcements have no tone
+  equivalent at all (the tone only ever fired once, at target) — those are gated on
+  `voiceAnnouncementsEnabled` alone, with no interaction with `endToneEnabled` whatsoever.
+- **The repeat-announcement threshold deliberately starts one interval *past* the target itself**,
+  not at the target — the target-reached effect already owns that exact moment (see above), so a
+  naive "every half-target seconds from zero" schedule would have the two mechanisms both fire for
+  the same instant. `start()` seeds `nextVoiceAnnounceAt` (a ref on web, plain state on native,
+  since Compose has no direct `useRef` equivalent and this file already uses `mutableStateOf` for
+  the same "bookkeeping, not for display" role elsewhere — e.g. `beeped`/`runId`) to
+  `targetSeconds + intervalSeconds`, then advances it by `intervalSeconds` each time it fires, in a
+  `while` loop (not a plain `if`) so a delayed/dropped tick can't silently skip a threshold.
+- **Timing precision ("snappy, exactly to the time"), the actual hard part of this feature.**
+  `utils/speech.js`'s `speak()` calls `speechSynthesis.cancel()` before every `speak()` call, and
+  native `SpeechHelper.kt` uses `TextToSpeech.QUEUE_FLUSH` (not `QUEUE_ADD`) — both are what let a
+  fresh "2" cut off a still-playing "3" rather than queuing up behind it, which is what would
+  actually happen by default: without this, a slightly-slow-to-finish utterance delays every
+  subsequent one by however long it took to finish, and a "3, 2, 1" countdown would read
+  increasingly behind real time instead of landing on its own second. Both wrappers bump the
+  speech rate above the 1.0 default (`1.15`) for the same "snappy" reason — the default rate reads
+  noticeably sluggish for a one-word cue meant to land inside a single second. Native additionally
+  pays the `TextToSpeech` engine's own init latency (confirmed 200-500ms for the engine to report
+  `SUCCESS`) up front: `SpeechHelper.init(context)` is called from
+  `WorkoutSessionActivity.onCreate()`, well before the first countdown tick could ever need it, and
+  the engine is kept alive as a same-process singleton (not reconstructed per utterance) for the
+  rest of the session — `SpeechHelper.shutdown()` releases it from `onDestroy()`, mirroring
+  `WorkoutTimerService`'s own start/stop lifecycle discipline (and `ToneGenerator`'s own
+  release-after-use in `playBeep()`) for the same "don't leak a native engine handle" reason.
+- **Workout rest periods get two additional cues, both gated on the *upcoming* exercise's own
+  `voiceAnnouncementsEnabled`** (already reassigned to the upcoming exercise by the time resting
+  starts — see the versioning/rest-period notes elsewhere in this doc — not the exercise that was
+  just finished, since these are a heads-up for what's about to run):
+  - **"Next: {exercise name}"**, spoken once, immediately when rest begins — not partway through,
+    not deferred. This is what actually satisfies "even if [rest is] skipped it should read it
+    out" with zero skip-specific handling: by the time a user could physically tap "Skip rest,"
+    the announcement has already started (or finished), so skipping never has a chance to
+    suppress it.
+  - **"3, 2, 1" on the last 3 seconds of rest**, regardless of whether the upcoming exercise is
+    duration- or reps-based — a genuinely new cue, since before this only a duration exercise with
+    its own carved-out `preStartCountdownSeconds` had any countdown at all at the end of rest.
+    Deliberately sourced from the *same* `restRemaining`/`restRemaining` tick that already drives
+    the visible `"{n}s"` countdown label (not a second, parallel ticker), so it can't drift out of
+    sync with the number on screen — matches this codebase's existing "reuse the same ticker,
+    never a second one" discipline for exactly this class of bug.
+  - **Never double-fires with a duration exercise's own carved-out countdown.** When the upcoming
+    exercise is duration-based and rest is long enough to carve `preStartCountdownSeconds` out of
+    its tail, `DurationTimer` mounts via `autoStart` with its *own* `preStartCountdownSeconds`
+    forced to `0` (pre-existing behavior, see "Live overtime timer" above) — meaning
+    `DurationTimer`'s own countdown-phase 3-2-1 speech never runs in that case at all. The rest
+    period's own 3-2-1 (above) is therefore the *only* spoken countdown for that transition,
+    regardless of which kind of exercise is coming up next — one mechanism, one voice, never two
+    competing for the same 3 seconds.
+  - `DurationTimer`'s own "Start" cue still fires normally when `autoStart` mounts it straight into
+    `running` — since the rest period's own countdown and `DurationTimer`'s "Start" are strictly
+    sequential (rest's "1" finishes, *then* `DurationTimer` mounts and immediately speaks "Start"),
+    `speak()`'s cancel-before-speak semantics mean the second utterance cleanly interrupts/follows
+    the first rather than overlapping it — no special-casing needed to suppress "Start" for the
+    auto-started case.
+- **Data model**: `voiceAnnouncementsEnabled` on a quantity-timer task is a real, migrated column
+  (`DB_VERSION = 15`), same `NOT NULL DEFAULT 1` shape and same self-heal-guard reasoning as
+  `endToneEnabled` immediately above (`ensureVoiceAnnouncementsColumn`). The identical field on a
+  workout exercise (`task.exercises[].voiceAnnouncementsEnabled`) needs no migration, same
+  reasoning as every other exercise-level setting — exercises already live inside the task's JSON
+  blob. Flows through to native via the same JSON payload/parsing path every other field already
+  uses; `aiImport.js`'s schema/prompt and `convertExercise`/`convertTask`/`resolveSupersetGroups`
+  were updated to match, per this codebase's standing rule.
+- **UI**: a second "Voice announcements" checkbox in `RoutineForm.jsx`, directly below "Play
+  end-of-timer tone," in both the quantity-timer task section and the duration-exercise section.
+- Verified via three Playwright round-trips, spying on `speechSynthesis.speak` (recording each
+  utterance's text and wall-clock timestamp) the same way the tone feature spied on
+  `AudioContext`: (1) a full countdown-to-overtime run confirms "3", "2", "1", "Start" each land
+  ~1000ms apart, the target-reached phrase lands exactly `targetSeconds × 1000`ms after "Start",
+  and a shorter target's first repeat announcement lands exactly one half-target interval later,
+  with the exact expected phrase text at each step; (2) disabling the toggle produces an entirely
+  empty speech log for the same run; (3) a two-exercise workout with a 5-second rest confirms
+  "Next: Squats" fires immediately at rest start, followed by "3", "2", "1" at the correct
+  restRemaining ticks. Native is CI-compile-checked only — the same caveat every other native-only
+  addition in this codebase carries until a real device/emulator pass proves it beyond
+  compile-correctness.
 
 ### Fitness Stats (`src/components/DashboardView.jsx`, `src/utils/workouts.js`)
 

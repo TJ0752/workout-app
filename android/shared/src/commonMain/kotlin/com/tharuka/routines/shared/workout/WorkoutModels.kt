@@ -32,7 +32,12 @@ data class Exercise(
     // Whether the target-reached tone plays for this exercise's duration timer - default true,
     // matching the tone's own unconditional behavior before this toggle existed. Trailing, with a
     // default, for the same WorkoutLogicTest positional-constructor reason as the fields above.
-    val endToneEnabled: Boolean = true
+    val endToneEnabled: Boolean = true,
+    // Whether spoken start/countdown/target-reached/end cues (and the rest period's own "next
+    // exercise"/3-2-1 announcements when this is the upcoming exercise) play at all - a separate
+    // on/off from endToneEnabled above, also default true. Trailing, with a default, for the same
+    // WorkoutLogicTest positional-constructor reason as the fields above.
+    val voiceAnnouncementsEnabled: Boolean = true
 )
 
 /** One task's exercises + full log history - the flattened shape getLastUsedWeight scans across

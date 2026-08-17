@@ -63,12 +63,17 @@ class WorkoutSessionActivity : ComponentActivity() {
         val pureTimer = payload?.optBoolean("pureTimer", false) ?: false
 
         startTimerServiceOncePermitted(taskTitle)
+        // Pays the TextToSpeech engine's own init latency (200-500ms) up front, well before the
+        // first countdown tick could ever need it - see SpeechHelper's own doc comment for why
+        // that matters for "exactly to the time" timing.
+        SpeechHelper.init(this)
 
         if (pureTimer) {
             val targetSeconds = payload?.optIntOrNull("targetSeconds") ?: 0
             val initialSeconds = payload?.optIntOrNull("initialSeconds")
             val preStartCountdownSeconds = payload?.optIntOrNull("preStartCountdownSeconds") ?: 5
             val endToneEnabled = payload?.optBoolean("endToneEnabled", true) ?: true
+            val voiceAnnouncementsEnabled = payload?.optBoolean("voiceAnnouncementsEnabled", true) ?: true
             setContent {
                 MaterialTheme(colorScheme = WorkoutColorScheme) {
                     Surface {
@@ -78,6 +83,7 @@ class WorkoutSessionActivity : ComponentActivity() {
                             initialSeconds = initialSeconds,
                             preStartCountdownSeconds = preStartCountdownSeconds,
                             endToneEnabled = endToneEnabled,
+                            voiceAnnouncementsEnabled = voiceAnnouncementsEnabled,
                             onLog = { seconds ->
                                 val event = JSObject()
                                 event.put("taskId", taskId)
@@ -196,6 +202,7 @@ class WorkoutSessionActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         WorkoutTimerService.stop(this)
+        SpeechHelper.shutdown()
     }
 
     private fun parseExercises(array: JSONArray?): List<Exercise> {
@@ -217,6 +224,7 @@ class WorkoutSessionActivity : ComponentActivity() {
                     supersetGroupId = obj.optStringOrNull("supersetGroupId"),
                     preStartCountdownSeconds = obj.optIntOrNull("preStartCountdownSeconds"),
                     endToneEnabled = obj.optBoolean("endToneEnabled", true),
+                    voiceAnnouncementsEnabled = obj.optBoolean("voiceAnnouncementsEnabled", true),
                 )
             )
         }

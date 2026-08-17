@@ -39,6 +39,10 @@ function makeTask(days) {
     // Whether the target-reached beep plays at all for this task - on by default, matching the
     // beep's own unconditional behavior before this toggle existed.
     endToneEnabled: true,
+    // Whether spoken start/countdown/target-reached/end cues play for this task - a separate
+    // on/off from endToneEnabled above (tone and voice are independently useful), also on by
+    // default. See DurationTimer.jsx/speech.js.
+    voiceAnnouncementsEnabled: true,
     exercises: [],
     active: true,
     createdAt: new Date().toISOString(),
@@ -63,6 +67,9 @@ function makeExercise() {
     // Whether the target-reached beep plays at all for this exercise's duration timer - on by
     // default, matching the beep's own unconditional behavior before this toggle existed.
     endToneEnabled: true,
+    // Whether spoken start/countdown/target-reached/end cues play for this exercise's duration
+    // timer - a separate on/off from endToneEnabled above, also on by default.
+    voiceAnnouncementsEnabled: true,
     // Contiguous exercises sharing this id form a superset - see utils/supersets.js. null/absent
     // means "not part of a superset," identical to how every exercise behaved before this field
     // existed, so no backfill was needed for pre-existing data.
@@ -523,14 +530,24 @@ function ExerciseListEditor({ task, onChange, exerciseNames }) {
         </div>
       )}
       {ex.unit === 'seconds' && (
-        <label className="checkbox-field">
-          <input
-            type="checkbox"
-            checked={ex.endToneEnabled !== false}
-            onChange={(e) => updateExercise(ex.id, { endToneEnabled: e.target.checked })}
-          />
-          Play end-of-timer tone
-        </label>
+        <>
+          <label className="checkbox-field">
+            <input
+              type="checkbox"
+              checked={ex.endToneEnabled !== false}
+              onChange={(e) => updateExercise(ex.id, { endToneEnabled: e.target.checked })}
+            />
+            Play end-of-timer tone
+          </label>
+          <label className="checkbox-field">
+            <input
+              type="checkbox"
+              checked={ex.voiceAnnouncementsEnabled !== false}
+              onChange={(e) => updateExercise(ex.id, { voiceAnnouncementsEnabled: e.target.checked })}
+            />
+            Voice announcements
+          </label>
+        </>
       )}
       <div className="inline-fields">
         {linkedToNext ? (
@@ -782,6 +799,18 @@ function TaskFields({ task, onChange, showTitle, exerciseNames }) {
               <p className="field-hint">
                 A short tone when the target duration is reached. Turn off if you'd rather rely on
                 the ring/notification alone.
+              </p>
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={task.voiceAnnouncementsEnabled !== false}
+                  onChange={(e) => onChange({ ...task, voiceAnnouncementsEnabled: e.target.checked })}
+                />
+                Voice announcements
+              </label>
+              <p className="field-hint">
+                Speaks "Start", a 3-2-1 countdown, and the target time reached (then again every
+                half-target while in overtime).
               </p>
             </>
           ) : (
