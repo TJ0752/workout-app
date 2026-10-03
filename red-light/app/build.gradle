@@ -1,0 +1,42 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace = "com.tharuka.redlight"
+    compileSdk = 36
+    defaultConfig {
+        applicationId "com.tharuka.redlight"
+        minSdk 24
+        targetSdk 36
+        versionCode project.hasProperty('appVersionCode') ? (project.appVersionCode as Integer) : 1
+        versionName project.hasProperty('appVersionName') ? project.appVersionName : "1.0"
+    }
+    signingConfigs {
+        debug {
+            // Reuse the main app's committed debug keystore so every CI build has the same
+            // signature and installs over the previous one in place.
+            storeFile rootProject.file('../android/debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+    kotlinOptions {
+        jvmTarget = "21"
+    }
+}
+
+kotlin {
+    jvmToolchain(21)
+}
