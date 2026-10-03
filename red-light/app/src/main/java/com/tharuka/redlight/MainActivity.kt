@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -29,8 +30,9 @@ import android.window.OnBackInvokedDispatcher
  * A red-only screen flashlight.
  *
  * - OFF: black screen with dim red controls; one tap on the big button turns the light on.
- * - ON: the whole screen is pure red, every touch on it is swallowed, and Back is blocked.
- *   The only things that respond are:
+ * - ON: the whole screen is pure red with no controls visible, every touch is swallowed, and
+ *   Back is blocked. The only gesture that responds is a double tap anywhere, which reveals
+ *   the controls for [CONTROLS_VISIBLE_MS]:
  *     - the OFF button, which needs a double tap (two taps within [DOUBLE_TAP_WINDOW_MS]);
  *     - the brightness slider, which stays locked until its lock button is held for
  *       [UNLOCK_HOLD_MS], and re-locks itself [RELOCK_AFTER_MS] after the last adjustment.
@@ -42,8 +44,9 @@ class MainActivity : Activity() {
         const val KEY_BRIGHTNESS = "brightness"
         const val MIN_BRIGHTNESS = 0.01f
         const val DOUBLE_TAP_WINDOW_MS = 400L
-        const val UNLOCK_HOLD_MS = 800L
-        const val RELOCK_AFTER_MS = 4000L
+        const val UNLOCK_HOLD_MS = 1500L
+        const val RELOCK_AFTER_MS = 3000L
+        const val CONTROLS_VISIBLE_MS = 5000L
 
         const val RED = 0xFFFF0000.toInt()
         const val DARK_RED = 0xFF5A0000.toInt()
@@ -60,9 +63,11 @@ class MainActivity : Activity() {
     private lateinit var lockButton: Button
     private lateinit var slider: SeekBar
     private lateinit var percentLabel: TextView
+    private lateinit var center: LinearLayout
 
     private var isOn = false
     private var unlocked = false
+    private var controlsVisible = true
     private var lastOffTap = 0L
     private var brightness = 1f
     private var backCallback: Any? = null
@@ -70,6 +75,7 @@ class MainActivity : Activity() {
     private val relock = Runnable { setUnlocked(false) }
     private val unlockAfterHold = Runnable { setUnlocked(true) }
     private val clearTapAgain = Runnable { if (isOn) hint.text = "Double-tap to turn off" }
+    private val hideControls = Runnable { if (isOn && !unlocked) setControlsVisible(false) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -95,9 +101,17 @@ class MainActivity : Activity() {
 
     @SuppressLint("ClickableViewAccessibility")
     private fun buildUi() {
+        // While on with controls hidden, a double tap anywhere brings them back.
+        val revealDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent) = true
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                if (isOn) setControlsVisible(true)
+                return true
+            }
+        })
         root = FrameLayout(this).apply {
             // Swallow every touch that lands on the background itself.
-            setOnTouchListener { _, _ -> true }
+            setOnTouchListener { _, e -> revealDetector.onTouchEvent(e); true }
             setOnApplyWindowInsetsListener { v, insets ->
                 val bottom: Int
                 val top: Int
@@ -128,7 +142,7 @@ class MainActivity : Activity() {
             textSize = 15f
             gravity = Gravity.CENTER
         }
-        val center = LinearLayout(this).apply {
+        center = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             addView(powerButton, LinearLayout.LayoutParams(dp(220), dp(220)))
@@ -145,6 +159,7 @@ class MainActivity : Activity() {
             isAllCaps = false
             stateListAnimator = null
             setOnTouchListener { _, e ->
+                bumpControlsTimer()
                 when (e.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         if (unlocked) setUnlocked(false)
@@ -167,6 +182,7 @@ class MainActivity : Activity() {
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
                     if (!fromUser) return
+                    bumpControlsTimer()
                     brightness = fromProgress(p)
                     applyBrightness()
                     updatePercent()
@@ -243,6 +259,7 @@ class MainActivity : Activity() {
             setOn(false)
         } else {
             lastOffTap = now
+            bumpControlsTimer()
             hint.text = "Tap again to turn off"
             handler.removeCallbacks(clearTapAgain)
             handler.postDelayed(clearTapAgain, DOUBLE_TAP_WINDOW_MS + 600)
@@ -258,6 +275,28 @@ class MainActivity : Activity() {
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         updateBackBlocking()
         render()
+        // Turning on starts with a pure red screen; turning off always shows the controls.
+        setControlsVisible(!on)
+    }
+
+    private fun setControlsVisible(visible: Boolean) {
+        controlsVisible = visible
+        val v = if (visible) View.VISIBLE else View.GONE
+        center.visibility = v
+        panel.visibility = v
+        if (visible) {
+            if (isOn) hint.text = "Double-tap to turn off"
+            bumpControlsTimer()
+        } else {
+            handler.removeCallbacks(hideControls)
+            lastOffTap = 0L
+        }
+    }
+
+    /** Restarts the auto-hide countdown; only matters while the light is on. */
+    private fun bumpControlsTimer() {
+        handler.removeCallbacks(hideControls)
+        if (isOn && controlsVisible) handler.postDelayed(hideControls, CONTROLS_VISIBLE_MS)
     }
 
     private fun setUnlocked(value: Boolean) {
@@ -266,6 +305,7 @@ class MainActivity : Activity() {
         handler.removeCallbacks(unlockAfterHold)
         if (value) scheduleRelock()
         renderLock()
+        bumpControlsTimer()
     }
 
     private fun scheduleRelock() {
